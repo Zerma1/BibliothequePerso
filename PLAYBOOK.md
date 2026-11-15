@@ -116,11 +116,12 @@ ecrans / widgets  →  etat  →  services  →  donnees, sources  →  modeles
 
 | Classe | Champs principaux |
 |--------|-------------------|
-| `Source` | `id`, `nom`, `urlBase`, `typeSource` (`madara`, `mangaThemesia`, `generique`), `langueParDefaut` (code ISO 639-1), `configurationSelecteurs` (JSON, uniquement pour le type générique), `estActive` |
-| `Titre` | `id`, `idSource`, `urlTitre`, `nom`, `typeTitre` (`manga`, `manhwa`, `manhua`, `roman`, `livre`, `autre`), `urlCouverture`, `resume`, `auteur`, `statut`, `dateDerniereVerification`, `nombreChapitresNonLus` |
+| `Source` | `id`, `nom`, `urlBase`, `typeSource` (`mangaDex`, `madara`, `mangaThemesia`, `generique`), `langueParDefaut` (code ISO 639-1), `configurationSelecteurs` (JSON, uniquement pour le type générique), `estActive` |
+| `Titre` | `id`, `idSource`, `urlTitre`, `nom`, `typeTitre` (`manga`, `manhwa`, `manhua`, `roman`, `livre`, `autre`), `urlCouverture`, `resume`, `auteur`, `statut`, `titresAlternatifs` (liste de `TitreAlternatif`), `dateDerniereVerification`, `nombreChapitresNonLus` |
+| `TitreAlternatif` | `id`, `idTitre`, `nom`, `langue` (code ISO 639-1, peut être vide) |
 | `Chapitre` | `id`, `idTitre`, `urlChapitre`, `nom`, `numero` (double), `langue` (code ISO 639-1), `datePublication`, `estLu`, `estTelecharge` |
 | `ListeLecture` | `id`, `nom`, `estSysteme` (true pour Favoris et Suivis), `ordre` |
-| `Categorie` | `id`, `nom` (normalisé : minuscules, sans espaces autour) |
+| `Categorie` | `id`, `nom` (normalisé : minuscules, sans espaces autour). Deux sites qui donnent le même genre partagent la même catégorie. |
 
 ### Tables SQLite
 
@@ -131,6 +132,8 @@ titres(id, id_source → sources, url_titre UNIQUE, nom, type_titre, url_couvert
        auteur, statut, date_derniere_verification)
 chapitres(id, id_titre → titres ON DELETE CASCADE, url_chapitre UNIQUE, nom, numero, langue,
           date_publication, est_lu, est_telecharge, date_detection)
+titres_alternatifs(id, id_titre → titres ON DELETE CASCADE, nom, langue,
+                   UNIQUE(id_titre, nom))
 listes(id, nom UNIQUE, est_systeme, ordre)
 titres_listes(id_titre, id_liste)            -- relation plusieurs-à-plusieurs
 categories(id, nom UNIQUE)
@@ -142,6 +145,9 @@ titres_categories(id_titre, id_categorie)    -- relation plusieurs-à-plusieurs
 - Toute évolution du schéma passe par une **migration versionnée** dans
   `lib/donnees/migrations.dart`. On ne modifie jamais une migration déjà livrée.
 - Les listes « Favoris » et « Suivis » sont créées par la migration 1, avec `est_systeme = 1`.
+- La recherche dans la bibliothèque porte sur `titres.nom` **et** sur `titres_alternatifs.nom`
+  (insensible à la casse) : chercher « Death's Daughter » retrouve un titre enregistré sous son
+  nom japonais.
 
 ### Fichiers hors-ligne : une archive `.zip` par chapitre (idée du client)
 
@@ -191,13 +197,33 @@ abstract class SourceSite {
 ```
 
 ### Ajout d'un site par URL
-`DetecteurTypeSite` télécharge la page d'accueil, puis :
+`DetecteurTypeSite` regarde d'abord le domaine, puis télécharge la page d'accueil :
+0. Si le domaine est `mangadex.org`, le type est `mangaDex` (voir ci-dessous), sans analyser le
+   HTML.
 1. Si l'on trouve des marqueurs Madara (classes `wp-manga`, chemin `/manga/`, script
    `madara`), le type est `madara`.
 2. Si l'on trouve des marqueurs MangaThemesia (`ts_reader`, classe `bixbox`), le type est
    `mangaThemesia`.
 3. Sinon, le type est `generique` : le client renseigne les sélecteurs CSS dans un formulaire
    (titre, couverture, liste des chapitres, images d'un chapitre, catégories).
+
+### Cas particulier : MangaDex (`SourceMangaDex`)
+Les pages de MangaDex sont construites en JavaScript : le HTML téléchargé ne contient pas les
+données. `SourceMangaDex` utilise donc l'**API publique officielle** `https://api.mangadex.org`
+(réponses JSON lues avec `dart:convert`), toujours via `ClientHttpPoli`.
+
+- L'identifiant d'un titre est l'UUID présent dans l'URL
+  `https://mangadex.org/title/<uuid>/<nom-lisible>` ; celui d'un chapitre, l'UUID de
+  `https://mangadex.org/chapter/<uuid>`.
+- Le titre principal, les titres alternatifs, les tags (catégories), la couverture et les
+  chapitres par langue viennent de l'API.
+- Les points d'accès exacts, les paramètres et les limites de requêtes sont **vérifiés dans la
+  documentation officielle** (`https://api.mangadex.org/docs/`) avant d'être codés, puis cités en
+  commentaire. Aucun point d'accès n'est écrit de mémoire.
+- Les tests utilisent des **réponses JSON enregistrées** dans `test/sources/exemples_json/`.
+- Titre de référence pour les tests : *Shinigami ni Sodaterareta Shoujo wa Shikkoku no Tsurugi
+  wo Mune ni Idaku* (`12e28a8a-cbfe-4e12-bab8-b6fb0b9a59b4`), avec 6 titres alternatifs et les
+  tags Gore, Action, Comedy, Survival, Magic, Military, Fantasy, Supernatural, Adaptation.
 
 Pour ajouter un nouveau type de thème, on crée une nouvelle classe qui implémente `SourceSite`
 et on l'enregistre dans `FabriqueSources`. **On ne modifie pas les adaptateurs existants pour
@@ -274,11 +300,11 @@ délais de `ClientHttpPoli` et ne contourne aucune protection d'accès (connexio
 |-------|---------|--------|
 | 0 | Créer le projet Flutter (`flutter create`), ajouter les dépendances, cibles Windows, Linux et Android | integrateur-plateformes |
 | 1 | Modèles, base SQLite, migrations, dépôts | developpeur-donnees, testeur-qualite |
-| 2 | `ClientHttpPoli`, `DetecteurTypeSite`, adaptateur Madara | developpeur-sources, testeur-qualite |
+| 2 | `ClientHttpPoli`, `DetecteurTypeSite`, adaptateur MangaDex (site réel du client) | developpeur-sources, testeur-qualite |
 | 3 | Écrans Bibliothèque, Sources, Ajout de site, Titre | developpeur-interface |
 | 4 | Mises à jour (service et planification) | orchestrateur (services), integrateur-plateformes |
 | 5 | Téléchargement hors-ligne et lecteur | orchestrateur (services), developpeur-donnees, developpeur-interface |
-| 6 | Adaptateurs MangaThemesia et générique CSS | developpeur-sources |
+| 6 | Adaptateurs Madara, MangaThemesia et générique CSS | developpeur-sources |
 | 7 | Compilation et livraison (.exe, Linux, .apk) | integrateur-plateformes |
 
 Chaque étape se termine par une relecture (`relecteur-code`) et une validation du client.
