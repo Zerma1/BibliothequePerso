@@ -20,8 +20,8 @@ void main() {
     await base.close();
   });
 
-  test('la version du schéma est 2 et correspond à la base ouverte', () async {
-    expect(versionSchema, 2);
+  test('la version du schéma est 3 et correspond à la base ouverte', () async {
+    expect(versionSchema, 3);
     expect(await base.getVersion(), versionSchema);
   });
 
@@ -124,7 +124,8 @@ void main() {
           fabrique: databaseFactoryFfi,
         );
         try {
-          expect(await version2.getVersion(), 2);
+          // Toutes les migrations suivantes sont appliquées.
+          expect(await version2.getVersion(), versionSchema);
           final chapitres = await version2.query('chapitres');
           expect(chapitres.single['nom'], 'Chapitre 1');
           expect(chapitres.single['est_lu'], 1);
@@ -152,6 +153,96 @@ void main() {
       }
     },
   );
+
+  test(
+    'la migration 2 → 3 conserve les données et ajoute parametres',
+    () async {
+      final dossier = await Directory.systemTemp.createTemp('migration3_test_');
+      final chemin = p.join(dossier.path, 'version2.db');
+      try {
+        final version2 = await databaseFactoryFfi.openDatabase(
+          chemin,
+          options: OpenDatabaseOptions(
+            version: 2,
+            onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+            // Migrations 1 et 2 seulement : installation d'avant l'écran
+            // Paramètres.
+            onCreate: (db, version) => appliquerMigrations(db, 0, 2),
+          ),
+        );
+        final idSource = await version2.insert('sources', <String, Object?>{
+          'nom': 'MangaDex',
+          'url_base': 'https://mangadex.org',
+          'type_source': 'mangaDex',
+        });
+        final idTitre = await version2.insert('titres', <String, Object?>{
+          'id_source': idSource,
+          'url_titre': 'https://mangadex.org/title/abc',
+          'nom': 'Titre existant',
+          'type_titre': 'manga',
+        });
+        final idChapitre = await version2.insert('chapitres', <String, Object?>{
+          'id_titre': idTitre,
+          'url_chapitre': 'https://mangadex.org/chapter/1',
+          'nom': 'Chapitre 1',
+          'numero': 1.0,
+        });
+        await version2.insert('telechargements', <String, Object?>{
+          'id_chapitre': idChapitre,
+          'statut': 'echec',
+          'message_erreur': 'Erreur 403',
+          'date_ajout': 1,
+          'date_maj': 2,
+        });
+        expect(await version2.getVersion(), 2);
+        await version2.close();
+
+        final version3 = await ouvrirBaseDeDonnees(
+          chemin: chemin,
+          fabrique: databaseFactoryFfi,
+        );
+        try {
+          expect(await version3.getVersion(), 3);
+          expect(
+            (await version3.query('titres')).single['nom'],
+            'Titre existant',
+          );
+          final telechargement = (await version3.query('telechargements'))
+              .single;
+          expect(telechargement['statut'], 'echec');
+          expect(telechargement['message_erreur'], 'Erreur 403');
+          expect(await version3.query('listes'), hasLength(2));
+          // La nouvelle table est vide (pas de valeur par défaut en base) et
+          // utilisable.
+          expect(await version3.query('parametres'), isEmpty);
+          await version3.insert('parametres', <String, Object?>{
+            'cle': 'cle_test',
+            'valeur': '1',
+          });
+          expect((await version3.query('parametres')).single['valeur'], '1');
+        } finally {
+          await version3.close();
+        }
+      } finally {
+        await dossier.delete(recursive: true);
+      }
+    },
+  );
+
+  test('parametres : la clé est unique et la valeur obligatoire', () async {
+    await base.insert('parametres', <String, Object?>{
+      'cle': 'a',
+      'valeur': 'x',
+    });
+    await expectLater(
+      base.insert('parametres', <String, Object?>{'cle': 'a', 'valeur': 'y'}),
+      throwsA(isA<DatabaseException>()),
+    );
+    await expectLater(
+      base.insert('parametres', <String, Object?>{'cle': 'b', 'valeur': null}),
+      throwsA(isA<DatabaseException>()),
+    );
+  });
 
   test('un titre ne peut pas référencer une source inexistante', () async {
     await expectLater(

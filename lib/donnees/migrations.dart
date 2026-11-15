@@ -18,7 +18,11 @@ typedef Migration = Future<void> Function(DatabaseExecutor executeur);
 
 /// Liste ordonnée des migrations : l'élément d'indice `i` est la migration
 /// `i + 1`.
-const List<Migration> migrations = <Migration>[_migration1, _migration2];
+const List<Migration> migrations = <Migration>[
+  _migration1,
+  _migration2,
+  _migration3,
+];
 
 /// Version actuelle du schéma (nombre de migrations).
 int get versionSchema => migrations.length;
@@ -224,4 +228,21 @@ Future<void> _migration2(DatabaseExecutor executeur) async {
   for (final instruction in instructions) {
     await executeur.execute(instruction);
   }
+}
+
+/// Migration 3 : réglages de l'application (écran Paramètres).
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration3(DatabaseExecutor executeur) async {
+  // Table clé-valeur : la clé est la clé primaire (un réglage = une ligne,
+  // et son index sert à toute lecture). Toutes les valeurs sont stockées en
+  // texte, converties par DepotParametres ; NOT NULL car un réglage absent
+  // est représenté par l'absence de ligne, pas par NULL. Pas de ligne
+  // initiale : les valeurs par défaut sont définies par la couche services.
+  await executeur.execute('''
+    CREATE TABLE parametres (
+      cle TEXT NOT NULL PRIMARY KEY,
+      valeur TEXT NOT NULL
+    )
+    ''');
 }
