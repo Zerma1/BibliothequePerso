@@ -1,0 +1,283 @@
+# Playbook du projet « Bibliothèque perso »
+
+Ce document est **la référence de logique de code** du projet. Tout agent (IA ou humain) qui
+écrit du code doit le lire avant de commencer. En cas de conflit entre ce playbook et une
+habitude personnelle, **le playbook gagne**. Pour le modifier, il faut passer par l'orchestrateur
+et obtenir la validation du client.
+
+Documents liés :
+- [CONVENTIONS_NOMMAGE.md](CONVENTIONS_NOMMAGE.md) : règles de nommage détaillées
+- [README.md](README.md) : présentation et installation
+- `.claude/agents/` : fiches des agents spécialisés
+
+---
+
+## 1. Objectif produit
+
+Une application unique (Windows, Linux, Android) qui regroupe les livres, mangas, manhwas,
+etc. que le client lit sur **plusieurs sites différents** :
+
+1. **Ajouter des sites** à partir d'une simple URL `http://` ou `https://`.
+2. **Ajouter des titres** depuis ces sites et enregistrer leur fiche : couverture, résumé,
+   auteur, statut, catégories et liste des chapitres.
+3. **Ranger les titres dans des listes** : « Favoris » et « Suivis » existent par défaut et ne
+   peuvent pas être supprimées ; le client peut créer d'autres listes.
+4. **Trier et filtrer par catégorie**, en reprenant les genres affichés sur les sites.
+5. **Rechercher les mises à jour** de chaque titre et signaler les nouveaux chapitres.
+6. **Télécharger les chapitres** (images ou texte) pour les lire hors-ligne dans l'application.
+
+---
+
+## 2. Rôles
+
+| Rôle | Qui | Responsabilité |
+|------|-----|----------------|
+| Client | L'utilisateur | Exprime les besoins, valide les livrables, arbitre les choix produit. |
+| Orchestrateur | Claude (session principale) | Découpe le travail, délègue aux agents, intègre, garantit la cohérence, rend compte au client. |
+| Agents spécialisés | `.claude/agents/*.md` | Exécutent une tâche **dans leur scope uniquement**. |
+
+**Créer un nouvel agent** : l'orchestrateur le propose au client en précisant son **but** et son
+**scope**. Il ne l'enregistre dans `.claude/agents/` qu'après validation.
+
+### Cycle d'une tâche
+1. Le client formule un besoin.
+2. L'orchestrateur le découpe en tâches, chacune attribuée à un seul agent.
+3. L'agent spécialiste réalise la tâche dans son scope.
+4. `testeur-qualite` lance `flutter analyze` et `flutter test`, puis ajoute ou complète les tests.
+5. `relecteur-code` vérifie la conformité au playbook.
+6. L'orchestrateur intègre et présente le résultat au client.
+
+Un agent qui doit modifier un fichier **hors de son scope** s'arrête et le signale à
+l'orchestrateur. Il ne fait pas la modification lui-même.
+
+**`lib/services/` et `test/services/` sont sous la responsabilité directe de l'orchestrateur.**
+Cette couche assemble les sources et les données ; elle doit donc rester cohérente avec les
+deux scopes. Les autres agents la lisent sans la modifier.
+
+---
+
+## 3. Pile technique
+
+| Besoin | Choix | Paquet pub.dev |
+|--------|-------|----------------|
+| Interface multiplateforme | Flutter (Dart) | SDK |
+| Requêtes HTTP | client HTTP officiel | `http` |
+| Analyse HTML | parseur DOM avec sélecteurs CSS | `html` |
+| Base de données | SQLite | `sqflite` (Android), `sqflite_common_ffi` (Windows, Linux) |
+| Dossiers de l'application | répertoires système | `path_provider`, `path` |
+| Archives des chapitres | fichiers `.zip` | `archive` |
+| Gestion d'état | ChangeNotifier | `provider` |
+| Tâche de fond Android | planification périodique | `workmanager` (Android uniquement) |
+| Ouvrir le site dans le navigateur | lien externe | `url_launcher` |
+
+**Règle anti-hallucination** : n'utiliser que des API réellement documentées sur pub.dev ou
+api.flutter.dev. En cas de doute, écrire une implémentation explicite ou signaler la limite
+dans un commentaire `// LIMITE :`. **Ne jamais inventer une méthode.**
+
+Pour ajouter un paquet, il faut l'accord de l'orchestrateur. C'est l'agent
+`integrateur-plateformes` qui modifie `pubspec.yaml`.
+
+---
+
+## 4. Architecture en couches
+
+```
+lib/
+├── main.dart            Point d'entrée : initialise la base et les fournisseurs (providers)
+├── modeles/             Classes de données pures (aucune dépendance Flutter ni réseau)
+├── donnees/             SQLite, dépôts (repositories), stockage des fichiers téléchargés
+├── sources/             Lecture des sites : interface commune + adaptateurs
+├── services/            Logique métier : mises à jour, file de téléchargement, ajout de site
+├── etat/                ChangeNotifier exposés à l'interface
+├── ecrans/              Pages complètes
+└── widgets/             Composants réutilisables
+test/                    Même arborescence que lib/
+```
+
+### Sens des dépendances (strict)
+
+```
+ecrans / widgets  →  etat  →  services  →  donnees, sources  →  modeles
+```
+
+- Une couche importe **uniquement les couches à sa droite**.
+- `ecrans` ne fait **jamais** d'appel HTTP ni de requête SQL directe.
+- `sources` ne touche **jamais** la base de données : elle renvoie des objets `modeles`.
+- `donnees` ne fait **jamais** d'appel réseau, sauf `StockageTelechargements`, qui écrit sur
+  disque des octets déjà récupérés par un service.
+- `modeles` ne dépend de rien, à part `dart:core`.
+
+---
+
+## 5. Modèle de données
+
+### Entités (`lib/modeles/`)
+
+| Classe | Champs principaux |
+|--------|-------------------|
+| `Source` | `id`, `nom`, `urlBase`, `typeSource` (`madara`, `mangaThemesia`, `generique`), `langueParDefaut` (code ISO 639-1), `configurationSelecteurs` (JSON, uniquement pour le type générique), `estActive` |
+| `Titre` | `id`, `idSource`, `urlTitre`, `nom`, `typeTitre` (`manga`, `manhwa`, `manhua`, `roman`, `livre`, `autre`), `urlCouverture`, `resume`, `auteur`, `statut`, `dateDerniereVerification`, `nombreChapitresNonLus` |
+| `Chapitre` | `id`, `idTitre`, `urlChapitre`, `nom`, `numero` (double), `langue` (code ISO 639-1), `datePublication`, `estLu`, `estTelecharge` |
+| `ListeLecture` | `id`, `nom`, `estSysteme` (true pour Favoris et Suivis), `ordre` |
+| `Categorie` | `id`, `nom` (normalisé : minuscules, sans espaces autour) |
+
+### Tables SQLite
+
+```
+sources(id, nom, url_base UNIQUE, type_source, langue_par_defaut, configuration_selecteurs,
+        est_active)
+titres(id, id_source → sources, url_titre UNIQUE, nom, type_titre, url_couverture, resume,
+       auteur, statut, date_derniere_verification)
+chapitres(id, id_titre → titres ON DELETE CASCADE, url_chapitre UNIQUE, nom, numero, langue,
+          date_publication, est_lu, est_telecharge, date_detection)
+listes(id, nom UNIQUE, est_systeme, ordre)
+titres_listes(id_titre, id_liste)            -- relation plusieurs-à-plusieurs
+categories(id, nom UNIQUE)
+titres_categories(id_titre, id_categorie)    -- relation plusieurs-à-plusieurs
+```
+
+- Les noms de colonnes sont en `snake_case`, alors que les champs Dart sont en `lowerCamelCase`.
+  La conversion se fait **uniquement** dans les méthodes `versMap()` et `depuisMap()` du modèle.
+- Toute évolution du schéma passe par une **migration versionnée** dans
+  `lib/donnees/migrations.dart`. On ne modifie jamais une migration déjà livrée.
+- Les listes « Favoris » et « Suivis » sont créées par la migration 1, avec `est_systeme = 1`.
+
+### Fichiers hors-ligne : une archive `.zip` par chapitre (idée du client)
+
+```
+<dossier racine>/<type>/<nom du titre>/ch<numero>.<langue>.zip
+    img1.jpg, img2.jpg, img3.webp, …   (pages d'un chapitre en images)
+    contenu.html                        (chapitre texte, pour les romans)
+```
+
+Exemple : `manga/One Punch Man/ch1.en.zip`, `manhwa/Solo Leveling/ch10.5.fr.zip`.
+
+- **`<dossier racine>`** se règle dans les paramètres. Par défaut :
+  `<dossier documents de l'app>/bibliotheque_perso/`.
+- **`<type>`** est la valeur de `Titre.typeTitre` : `manga`, `manhwa`, `manhua`, `roman`,
+  `livre` ou `autre`.
+- **`<nom du titre>`** est le nom nettoyé pour le système de fichiers : on retire les caractères
+  `< > : " / \ | ? *` et les points ou espaces en fin de nom. Si deux titres de sources
+  différentes donnent le même nom, on ajoute ` (<nom de la source>)`.
+- **`<numero>`** est le numéro du chapitre sans zéros inutiles (`1`, `10.5`). Dans l'application,
+  le tri se fait sur `Chapitre.numero` (un double), pas sur le nom du fichier.
+- **`<langue>`** est le code ISO 639-1 (`fr`, `en`…) de `Chapitre.langue`. Par défaut, c'est la
+  langue de la source.
+- Les images sont numérotées dans l'ordre de lecture (`img1`, `img2`…) et gardent leur
+  extension d'origine.
+- L'archive est créée **sans recompression** (mode *store*) : les images sont déjà compressées, ce
+  qui rend l'écriture et la lecture plus rapides. On utilise le paquet `archive`.
+- On écrit d'abord un fichier `.zip.part`, renommé en `.zip` une fois complet : une archive
+  interrompue n'est donc jamais prise pour un chapitre téléchargé.
+- Le lecteur lit les images **directement dans l'archive**, sans l'extraire sur le disque.
+
+`StockageTelechargements` est la seule classe qui construit ces chemins, crée les archives et les
+lit.
+
+---
+
+## 6. Moteur de sources (`lib/sources/`)
+
+### Interface commune
+
+```dart
+abstract class SourceSite {
+  Future<List<Titre>> rechercher(String requete);
+  Future<FicheTitre> recupererFiche(String urlTitre);       // fiche + catégories
+  Future<List<Chapitre>> recupererChapitres(String urlTitre);
+  Future<ContenuChapitre> recupererContenu(String urlChapitre); // URLs d'images ou texte
+}
+```
+
+### Ajout d'un site par URL
+`DetecteurTypeSite` télécharge la page d'accueil, puis :
+1. Si l'on trouve des marqueurs Madara (classes `wp-manga`, chemin `/manga/`, script
+   `madara`), le type est `madara`.
+2. Si l'on trouve des marqueurs MangaThemesia (`ts_reader`, classe `bixbox`), le type est
+   `mangaThemesia`.
+3. Sinon, le type est `generique` : le client renseigne les sélecteurs CSS dans un formulaire
+   (titre, couverture, liste des chapitres, images d'un chapitre, catégories).
+
+Pour ajouter un nouveau type de thème, on crée une nouvelle classe qui implémente `SourceSite`
+et on l'enregistre dans `FabriqueSources`. **On ne modifie pas les adaptateurs existants pour
+gérer un cas particulier.**
+
+### Règles réseau (obligatoires)
+- Toutes les requêtes passent par **`ClientHttpPoli`**, la seule classe autorisée à appeler
+  `package:http`. Elle s'occupe de :
+  - l'en-tête `User-Agent` d'un navigateur courant ;
+  - l'en-tête `Referer` pour les images, que beaucoup de sites exigent ;
+  - un délai minimal de **1 seconde entre deux requêtes vers un même domaine** ;
+  - un délai d'expiration de 20 secondes et 2 nouvelles tentatives au maximum.
+- Une erreur de lecture d'un site lève une `ErreurSource` (avec l'URL et la cause). Elle ne doit
+  **jamais** faire planter l'interface : le service l'attrape et l'enregistre.
+- Les URLs relatives sont toujours résolues avec `Uri.parse(urlBase).resolve(lien)`.
+
+### Tests des adaptateurs
+Chaque adaptateur est testé avec des **pages HTML enregistrées** dans
+`test/sources/exemples_html/`. Les tests ne font jamais d'appel réseau réel.
+
+---
+
+## 7. Services
+
+| Service | Rôle |
+|---------|------|
+| `ServiceAjoutSite` | Valide l'URL (`http`/`https`), détecte le type et enregistre la `Source`. |
+| `ServiceMisesAJour` | Pour chaque titre suivi, récupère les chapitres, insère les nouveaux et met à jour `date_derniere_verification`. Vérifie au maximum 3 sources en parallèle, et un seul titre à la fois par source. |
+| `ServiceTelechargement` | File d'attente persistante. Récupère le contenu, télécharge les images avec `ClientHttpPoli` et les écrit via `StockageTelechargements`. Peut reprendre après une interruption. |
+
+**Planification des mises à jour**
+- Android : `workmanager`, tâche périodique (intervalle réglable, 1 heure au minimum).
+- Windows et Linux : `Timer.periodic` tant que l'application est ouverte, plus une vérification
+  au démarrage.
+
+---
+
+## 8. Interface
+
+- Écrans : `EcranBibliotheque` (grille de couvertures, filtres par liste et par catégorie),
+  `EcranTitre` (fiche et chapitres), `EcranLecteur`, `EcranSources`, `EcranAjoutSite`,
+  `EcranRecherche`, `EcranTelechargements`, `EcranParametres`.
+- **Responsive** : une barre de navigation en bas sous 600 px de large, et un `NavigationRail`
+  au-delà.
+- Un widget ne contient pas de logique métier : il lit un `ChangeNotifier` de `lib/etat/` et
+  appelle ses méthodes.
+- Tout texte affiché est en français. Il est regroupé dans `lib/widgets/textes.dart` pour
+  faciliter une traduction future.
+
+---
+
+## 9. Qualité
+
+- `flutter analyze` doit renvoyer **0 erreur et 0 avertissement** avant toute livraison.
+- Toute classe publique a un commentaire de documentation `///`. Tout bloc non évident a un
+  commentaire `//` qui explique **pourquoi**, pas seulement **quoi**.
+- Pas de `print` : on utilise `debugPrint` ou le journal applicatif `Journal`.
+- Pas de `dynamic` implicite. On utilise `as` avec vérification sur les données venant du HTML
+  ou de SQLite.
+- Pas de valeur magique : les constantes vont dans `lib/modeles/constantes.dart`.
+
+---
+
+## 10. Usage responsable
+
+L'application est destinée à un **usage personnel**. Elle respecte la charge des sites grâce aux
+délais de `ClientHttpPoli` et ne contourne aucune protection d'accès (connexion, paywall, DRM).
+
+---
+
+## 11. Feuille de route
+
+| Étape | Contenu | Agents |
+|-------|---------|--------|
+| 0 | Créer le projet Flutter (`flutter create`), ajouter les dépendances, cibles Windows, Linux et Android | integrateur-plateformes |
+| 1 | Modèles, base SQLite, migrations, dépôts | developpeur-donnees, testeur-qualite |
+| 2 | `ClientHttpPoli`, `DetecteurTypeSite`, adaptateur Madara | developpeur-sources, testeur-qualite |
+| 3 | Écrans Bibliothèque, Sources, Ajout de site, Titre | developpeur-interface |
+| 4 | Mises à jour (service et planification) | orchestrateur (services), integrateur-plateformes |
+| 5 | Téléchargement hors-ligne et lecteur | orchestrateur (services), developpeur-donnees, developpeur-interface |
+| 6 | Adaptateurs MangaThemesia et générique CSS | developpeur-sources |
+| 7 | Compilation et livraison (.exe, Linux, .apk) | integrateur-plateformes |
+
+Chaque étape se termine par une relecture (`relecteur-code`) et une validation du client.

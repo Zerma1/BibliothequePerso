@@ -1,0 +1,21 @@
+# IntelliJ : on garde la configuration partageable, pas l'état personnel
+.idea/workspace.xml
+.idea/shelf/
+.idea/tasks.xml
+.idea/usage.statistics.xml
+out/
+
+# Claude Code : réglages locaux personnels
+.claude/settings.local.json
+
+# Flutter / Dart (complété par flutter create)
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml.bak
+
+# Système
+Thumbs.db
+desktop.ini
+.DS_Store
