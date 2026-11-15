@@ -253,4 +253,61 @@ void main() {
       expect(plan.idsATelecharger, isEmpty);
     });
   });
+
+  group("remplacement de l'anglais par le français", () {
+    test("garde l'anglais tant que le français n'est pas téléchargé", () {
+      final chapitres = <Chapitre>[
+        const Chapitre(
+          id: 1,
+          urlChapitre: 'en1',
+          nom: 'en',
+          numero: 1,
+          langue: 'en',
+          estTelecharge: true,
+        ),
+        const Chapitre(
+          id: 2,
+          urlChapitre: 'fr1',
+          nom: 'fr',
+          numero: 1,
+          langue: 'fr',
+        ),
+      ];
+      final plan = politique.calculer(
+        chapitres,
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(plan.idsATelecharger, <int>[2]);
+      expect(plan.idsASupprimer, isEmpty);
+    });
+
+    test("supprime l'anglais une fois le français téléchargé", () {
+      final chapitres = <Chapitre>[
+        const Chapitre(
+          id: 1,
+          urlChapitre: 'en1',
+          nom: 'en',
+          numero: 1,
+          langue: 'en',
+          estTelecharge: true,
+        ),
+        const Chapitre(
+          id: 2,
+          urlChapitre: 'fr1',
+          nom: 'fr',
+          numero: 1,
+          langue: 'fr',
+          estTelecharge: true,
+        ),
+      ];
+      final plan = politique.calculer(
+        chapitres,
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(plan.idsATelecharger, isEmpty);
+      expect(plan.idsASupprimer, <int>[1]);
+    });
+  });
 }

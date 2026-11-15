@@ -221,11 +221,22 @@ class PolitiqueTelechargement {
             !version.chapitre.estTelecharge)
           version.chapitre.id!,
     ];
+    // Numéros dont la version retenue est voulue mais pas encore sur
+    // l'appareil : une autre version déjà téléchargée de ce numéro (par
+    // exemple l'anglais, en attendant le français) est gardée jusqu'à ce que
+    // la version retenue soit téléchargée, pour ne jamais laisser de trou.
+    final numerosEnRemplacement = <double>{
+      for (final version in versions)
+        if (voulus.contains(version.chapitre.id) &&
+            !version.chapitre.estTelecharge)
+          version.chapitre.numero,
+    };
     final aSupprimer = <int>[
       for (final chapitre in chapitres)
         if (chapitre.id != null &&
             chapitre.estTelecharge &&
-            !voulus.contains(chapitre.id))
+            !voulus.contains(chapitre.id) &&
+            !numerosEnRemplacement.contains(chapitre.numero))
           chapitre.id!,
     ];
     return PlanTelechargement(
