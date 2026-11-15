@@ -64,8 +64,8 @@ limité à son scope :
 
 ## État actuel (2026-11-15)
 
-Étape 0 faite (projet Flutter créé, version 0.1.0+1) : prochaine étape = étape 1 de la feuille de route
-(modèles, base SQLite, dépôts). Dépôt Git avec les branches `main` et `dev`.
+Étapes 0 et 1 faites (projet Flutter, modèles, SQLite, dépôts ; 89 tests) : prochaine étape = étape 2
+(`ClientHttpPoli`, `DetecteurTypeSite`, `SourceMangaDex`). Dépôt Git avec les branches `main` et `dev`.
 
 ## Pièges connus
 

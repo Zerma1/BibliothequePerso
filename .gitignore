@@ -44,3 +44,6 @@ app.*.map.json
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# IntelliJ : bibliothèques générées avec des chemins propres à la machine
+.idea/libraries/Dart_Packages.xml
