@@ -31,6 +31,7 @@ limité à son scope :
 | `developpeur-interface` | `lib/ecrans/`, `lib/widgets/`, `lib/etat/` (+ tests) |
 | `testeur-qualite` | `test/` uniquement |
 | `relecteur-code` | lecture seule |
+| `analyste-erreurs` | `docs/JOURNAL_ERREURS.md` (diagnostic d'erreurs, lecture du reste) |
 
 - `lib/services/` et `test/services/` : écrits par `developpeur-services` (créé le 2026-11-15
   à la demande du client, pour que l'orchestrateur reste disponible). L'orchestrateur garde
@@ -72,12 +73,18 @@ du 2026-11-15. Dépôt Git avec les branches `main` et `dev`.
 
 ## Pièges connus
 
+Avant de déboguer une erreur, lire `docs/JOURNAL_ERREURS.md` (erreurs déjà rencontrées,
+cause et solution). Toute erreur inattendue ou récurrente est confiée à `analyste-erreurs`.
+
+
 - Flutter 3.50 : les widgets Material s'importent avec `package:material_ui/material_ui.dart`
   (et non `package:flutter/material.dart`).
 - `flutter build windows` exige le **mode développeur** de Windows (liens symboliques des
   plugins).
 - Les sous-agents ne voient pas toujours `D:\dev\flutter\bin` dans leur PATH : l'ajouter en
   tête de commande si `flutter` est introuvable.
+- Les chaînes Dart contenant une apostrophe s'écrivent entre guillemets doubles
+  (`"l'anglais"`) : voir E1 du journal des erreurs.
 - Le cache pub réel est `C:\Users\bapti\AppData\Local\Pub\Cache` (et non `D:\dev\pub-cache`
   comme l'indique le README). Le projet étant sur D:, le cache Kotlin incrémental plante entre
   les deux disques : d'où `kotlin.incremental=false` dans `android/gradle.properties`.
