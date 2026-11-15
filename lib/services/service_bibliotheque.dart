@@ -21,6 +21,7 @@ import '../modeles/titre.dart';
 import '../sources/client_http_poli.dart';
 import '../sources/constantes_sources.dart';
 import '../sources/fabrique_sources.dart';
+import '../sources/source_mangadex.dart';
 import 'erreur_service.dart';
 import 'service_ajout_site.dart';
 
@@ -66,6 +67,9 @@ class ServiceBibliotheque {
   final FabriqueSources _fabriqueSources;
   final ServiceAjoutSite _serviceAjoutSite;
   final ClientHttpPoli _client;
+
+  /// Nom donné à la source MangaDex quand elle est ajoutée automatiquement.
+  static const String nomSourceMangaDex = 'MangaDex';
 
   /// Couvertures déjà téléchargées pendant cette session, par URL.
   ///
@@ -133,14 +137,11 @@ class ServiceBibliotheque {
     List<int> idsListes = const <int>[],
   }) async {
     final source = await _trouverOuAjouterSource(urlTitre);
-    final resultat = await _enregistrerDepuisSource(source, urlTitre.trim());
-    final idTitre = resultat.titre.id;
-    if (idTitre != null) {
-      for (final idListe in idsListes) {
-        await _depotListes.ajouterTitre(idListe, idTitre);
-      }
-    }
-    return resultat;
+    return _enregistrerDepuisSource(
+      source,
+      urlTitre.trim(),
+      idsListes: idsListes,
+    );
   }
 
   /// Relit la fiche et les chapitres d'un titre déjà enregistré.
@@ -165,10 +166,10 @@ class ServiceBibliotheque {
       return existante;
     }
     final uri = Uri.parse(urlTitre.trim());
-    if (uri.host.toLowerCase().endsWith('mangadex.org')) {
+    if (SourceMangaDex.estHoteMangaDex(uri.host)) {
       // MangaDex est reconnu par son domaine sans téléchargement : on peut
       // l'ajouter sans demander d'étape supplémentaire au client.
-      return _serviceAjoutSite.ajouterSite(urlTitre, nom: 'MangaDex');
+      return _serviceAjoutSite.ajouterSite(urlTitre, nom: nomSourceMangaDex);
     }
     throw const ErreurService(
       'Ce site n\'est pas encore configuré : ajoutez-le d\'abord dans « Sources ».',
@@ -177,8 +178,9 @@ class ServiceBibliotheque {
 
   Future<ResultatAjoutTitre> _enregistrerDepuisSource(
     Source source,
-    String urlTitre,
-  ) async {
+    String urlTitre, {
+    List<int> idsListes = const <int>[],
+  }) async {
     final idSource = source.id;
     if (idSource == null) {
       throw ErreurService('Le site « ${source.nom} » n\'est pas enregistré.');
@@ -186,7 +188,14 @@ class ServiceBibliotheque {
     final adaptateur = _fabriqueSources.creer(source);
 
     // Réseau d'abord, base ensuite : si le site ne répond pas, rien n'est
-    // écrit à moitié.
+    // écrit. Côté base, les écritures se font dans l'ordre d'importance pour le
+    // client : le titre, puis ses listes (pour qu'un titre ajouté soit
+    // toujours visible dans Favoris / Suivis), puis les chapitres. La date de
+    // vérification n'est écrite qu'en dernier : si une étape échoue, la
+    // prochaine actualisation reprendra les chapitres manquants.
+    // LIMITE : ces écritures ne forment pas une seule transaction (les dépôts
+    // ouvrent chacun la leur) ; un échec au milieu laisse un titre sans
+    // chapitres, rattrapé à l'actualisation suivante.
     final fiche = await adaptateur.recupererFiche(urlTitre);
     final chapitres = await adaptateur.recupererChapitres(urlTitre);
 
@@ -195,6 +204,9 @@ class ServiceBibliotheque {
       categories: fiche.categories,
     );
     final idTitre = titre.id!;
+    for (final idListe in idsListes) {
+      await _depotListes.ajouterTitre(idListe, idTitre);
+    }
     final nouveaux = await _depotChapitres.enregistrerChapitres(
       chapitres
           .map((chapitre) => chapitre.copierAvec(idTitre: idTitre))
@@ -243,14 +255,20 @@ class ServiceBibliotheque {
   ///
   /// Passe par `ClientHttpPoli` (seul accès réseau autorisé) plutôt que par
   /// `Image.network`, pour respecter le délai par domaine. Les serveurs de
-  /// MangaDex exigent un User-Agent honnête.
-  Future<Uint8List> recupererCouverture(String urlCouverture) {
+  /// MangaDex exigent un User-Agent honnête. [referer] (en général l'URL de
+  /// base de la source) est envoyé car beaucoup de sites refusent les images
+  /// demandées sans lui (PLAYBOOK.md section 6).
+  Future<Uint8List> recupererCouverture(
+    String urlCouverture, {
+    String? referer,
+  }) {
     return _cacheCouvertures.putIfAbsent(urlCouverture, () async {
-      final uri = Uri.parse(urlCouverture);
-      final estMangaDex = uri.host.toLowerCase().endsWith('mangadex.org');
       try {
+        final uri = Uri.parse(urlCouverture);
+        final estMangaDex = SourceMangaDex.estHoteMangaDex(uri.host);
         return await _client.recupererOctets(
           uri,
+          referer: referer,
           userAgent: estMangaDex ? userAgentApplication : null,
         );
       } catch (_) {

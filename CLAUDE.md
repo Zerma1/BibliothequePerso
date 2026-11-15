@@ -64,8 +64,8 @@ limité à son scope :
 
 ## État actuel (2026-11-15)
 
-Étapes 0, 1 et 2 faites (projet Flutter, base SQLite, lecture de MangaDex ; 169 tests) : prochaine étape = étape 3
-(écrans Bibliothèque, Sources, Ajout de site, Titre). Dépôt Git avec les branches `main` et `dev`.
+Étapes 0 à 3 faites (base SQLite, lecture de MangaDex, services, écrans Bibliothèque / Sources / Titre ; 246 tests) : prochaine étape = étape 4
+(mises à jour périodiques). Dépôt Git avec les branches `main` et `dev`.
 
 ## Pièges connus
 
