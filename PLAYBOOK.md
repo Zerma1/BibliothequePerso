@@ -320,9 +320,11 @@ délais de `ClientHttpPoli` et ne contourne aucune protection d'accès (connexio
 | 2 | `ClientHttpPoli`, `DetecteurTypeSite`, adaptateur MangaDex (site réel du client) | developpeur-sources, testeur-qualite |
 | 3 | Écrans Bibliothèque, Sources, Ajout de site, Titre | developpeur-interface |
 | 4 | Mises à jour (service et planification) | orchestrateur (services), integrateur-plateformes |
-| 5 | Téléchargement hors-ligne et lecteur | orchestrateur (services), developpeur-donnees, developpeur-interface |
-| 6 | Adaptateurs Madara, MangaThemesia et générique CSS | developpeur-sources |
-| 7 | Compilation et livraison (.exe, Linux, .apk) | integrateur-plateformes |
+| 5 | Téléchargement hors-ligne, règles de conservation (favoris / suivis), lecteur, Paramètres, numéro de version | orchestrateur (services), developpeur-donnees, developpeur-interface |
+| 6 | **Retours du client (test du 2026-11-15)** : listes système « Planifié » (pas de notification de mise à jour) et « En attente » (aucun chapitre dans les langues du client, surveillance plus fréquente) ; onglet « Mises à jour » trié par dernière parution dans les langues du client ; filtre par catégories pensé pour de nombreuses catégories / tags ; filtre par niveau de contenu (sûr, suggestif, érotique, pornographique) ; export d'un rapport d'erreur lors d'un échec d'ajout de site | orchestrateur, developpeur-donnees, developpeur-sources, developpeur-interface |
+| 7 | Autres sites : adaptateurs Madara, MangaThemesia, générique CSS ; diagnostic de scan-manga.com et webtoons.com (signalés illisibles par le client) ; sites proposés par défaut | developpeur-sources |
+| 8 | **Plusieurs sources pour un même titre** (ex. un titre présent sur MangaDex et scan-manga) pour un meilleur suivi des mises à jour : évolution du modèle (titre ↔ sources) | orchestrateur, developpeur-donnees, developpeur-sources, developpeur-interface |
+| 9 | Compilation et livraison **simultanées** sur Android, Windows et Linux (intégration continue GitHub Actions, la version Linux ne pouvant pas se compiler sous Windows) | integrateur-plateformes |
 
 Chaque étape se termine par une relecture (`relecteur-code`) et une validation du client.
 

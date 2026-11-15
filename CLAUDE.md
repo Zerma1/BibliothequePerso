@@ -64,8 +64,8 @@ limité à son scope :
 
 ## État actuel (2026-11-15)
 
-Étapes 0 à 4 faites (base, MangaDex, écrans, mises à jour PC + tâche de fond Android ; 272 tests) : prochaine étape = étape 5
-(téléchargement hors-ligne et lecteur). Dépôt Git avec les branches `main` et `dev`.
+Étapes 0 à 4 faites, étape 5 en cours (services de téléchargement faits ; interface en cours). Feuille de route étendue (étapes 6 à 9) après les retours du client
+du 2026-11-15. Dépôt Git avec les branches `main` et `dev`.
 
 ## Pièges connus
 
