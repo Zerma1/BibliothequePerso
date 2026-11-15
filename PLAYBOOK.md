@@ -179,6 +179,19 @@ Exemple : `manga/One Punch Man/ch1.en.zip`, `manhwa/Solo Leveling/ch10.5.fr.zip`
   interrompue n'est donc jamais prise pour un chapitre téléchargé.
 - Le lecteur lit les images **directement dans l'archive**, sans l'extraire sur le disque.
 
+**Décisions du client (2026-11-15)** :
+- **Doublons** : si `ch<numero>.<langue>.zip` est déjà pris par un autre chapitre (deux groupes de
+  traduction, plusieurs oneshots), on ajoute un numéro : `ch1.fr.2.zip`, `ch1.fr.3.zip`… Le nom
+  réellement écrit est enregistré (`chapitres.nom_archive`) et sert ensuite à la lecture et à la
+  suppression. Les doublons sont affichés **en orange** et le client choisit lequel supprimer ;
+  les règles automatiques ne suppriment jamais un doublon. Les oneshots sont des chapitres
+  distincts.
+- **Suppression différée** : une suppression décidée par les règles de conservation n'est faite
+  qu'après **24 heures** (`chapitres.date_suppression_prevue`). Pendant ce délai le chapitre est
+  affiché **en rouge avec un compte à rebours**, et le client peut le garder ou le supprimer tout
+  de suite. Une suppression demandée par le client reste immédiate. Le chapitre ouvert dans le
+  lecteur n'est jamais supprimé.
+
 `StockageTelechargements` est la seule classe qui construit ces chemins, crée les archives et les
 lit.
 
