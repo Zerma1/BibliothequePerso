@@ -64,8 +64,8 @@ limité à son scope :
 
 ## État actuel (2026-11-15)
 
-Étapes 0 à 3 faites (base SQLite, lecture de MangaDex, services, écrans Bibliothèque / Sources / Titre ; 246 tests) : prochaine étape = étape 4
-(mises à jour périodiques). Dépôt Git avec les branches `main` et `dev`.
+Étapes 0 à 4 faites (base, MangaDex, écrans, mises à jour PC + tâche de fond Android ; 272 tests) : prochaine étape = étape 5
+(téléchargement hors-ligne et lecteur). Dépôt Git avec les branches `main` et `dev`.
 
 ## Pièges connus
 
@@ -75,3 +75,6 @@ limité à son scope :
   plugins).
 - Les sous-agents ne voient pas toujours `D:\dev\flutter\bin` dans leur PATH : l'ajouter en
   tête de commande si `flutter` est introuvable.
+- Le cache pub réel est `C:\Users\bapti\AppData\Local\Pub\Cache` (et non `D:\dev\pub-cache`
+  comme l'indique le README). Le projet étant sur D:, le cache Kotlin incrémental plante entre
+  les deux disques : d'où `kotlin.incremental=false` dans `android/gradle.properties`.

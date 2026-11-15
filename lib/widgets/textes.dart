@@ -126,9 +126,48 @@ abstract final class Textes {
       'Aucun titre ne correspond à ces filtres ou à cette recherche.';
 
   /// Libellé accessible du badge des chapitres non lus.
-  static String chapitresNonLus(int nombre) => nombre <= 1
-      ? '$nombre chapitre non lu'
-      : '$nombre chapitres non lus';
+  static String chapitresNonLus(int nombre) =>
+      nombre <= 1 ? '$nombre chapitre non lu' : '$nombre chapitres non lus';
+
+  // ---------------------------------------------------------- Mises à jour
+
+  /// Bouton de recherche des nouveaux chapitres des titres suivis.
+  static const String rechercherNouveauxChapitres =
+      'Rechercher les nouveaux chapitres';
+
+  /// Info-bulle du bouton pendant la recherche.
+  static const String rechercheNouveauxChapitresEnCours =
+      'Recherche des nouveaux chapitres…';
+
+  /// Bilan d'une recherche de nouveaux chapitres : « 3 nouveaux chapitres
+  /// pour 2 titres. 1 site n'a pas répondu. » ou « Aucun nouveau chapitre. ».
+  static String bilanMisesAJour({
+    required int nombreChapitres,
+    required int nombreTitres,
+    required int nombreSitesEnEchec,
+    int nombreAutresEchecs = 0,
+  }) {
+    final chapitres = nombreChapitres == 0
+        ? 'Aucun nouveau chapitre'
+        : '${nouveauxChapitres(nombreChapitres)} pour $nombreTitres '
+              '${nombreTitres <= 1 ? 'titre' : 'titres'}';
+    final phrases = <String>['$chapitres.'];
+    if (nombreSitesEnEchec > 0) {
+      phrases.add(
+        nombreSitesEnEchec == 1
+            ? "1 site n'a pas répondu."
+            : "$nombreSitesEnEchec sites n'ont pas répondu.",
+      );
+    }
+    if (nombreAutresEchecs > 0) {
+      phrases.add(
+        nombreAutresEchecs == 1
+            ? "1 titre n'a pas pu être vérifié."
+            : "$nombreAutresEchecs titres n'ont pas pu être vérifiés.",
+      );
+    }
+    return phrases.join(' ');
+  }
 
   // ------------------------------------------------- Dialogue ajout de titre
 
@@ -136,8 +175,7 @@ abstract final class Textes {
   static const String champUrlTitre = 'Adresse du titre';
 
   /// Exemple d'adresse de titre.
-  static const String aideUrlTitre =
-      'Exemple : https://mangadex.org/title/…';
+  static const String aideUrlTitre = 'Exemple : https://mangadex.org/title/…';
 
   /// Intitulé des cases à cocher des listes.
   static const String rangerDans = 'Ranger dans :';
@@ -281,8 +319,7 @@ abstract final class Textes {
   static const String listes = 'Listes';
 
   /// En-tête repliable des titres alternatifs.
-  static String titresAlternatifs(int nombre) =>
-      'Titres alternatifs ($nombre)';
+  static String titresAlternatifs(int nombre) => 'Titres alternatifs ($nombre)';
 
   /// En-tête de la liste des chapitres.
   static String enTeteChapitres(int nombre, int nonLus) =>

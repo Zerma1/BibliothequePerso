@@ -14,6 +14,7 @@ import 'package:bibliotheque_perso/donnees/depot_sources.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres.dart';
 import 'package:bibliotheque_perso/etat/etat_bibliotheque.dart';
 import 'package:bibliotheque_perso/etat/etat_couvertures.dart';
+import 'package:bibliotheque_perso/etat/etat_mises_a_jour.dart';
 import 'package:bibliotheque_perso/etat/etat_sources.dart';
 import 'package:bibliotheque_perso/main.dart';
 import 'package:bibliotheque_perso/modeles/categorie.dart';
@@ -24,6 +25,7 @@ import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
 import 'package:bibliotheque_perso/services/service_ajout_site.dart';
 import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
+import 'package:bibliotheque_perso/services/service_mises_a_jour.dart';
 import 'package:bibliotheque_perso/sources/detecteur_type_site.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/sources/fabrique_sources.dart';
@@ -262,8 +264,10 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
   }
 
   @override
-  Future<List<Titre>> rechercherSurSource(Source source, String requete) async =>
-      const <Titre>[];
+  Future<List<Titre>> rechercherSurSource(
+    Source source,
+    String requete,
+  ) async => const <Titre>[];
 
   @override
   Future<void> ajouterTitreALaListe(int idListe, int idTitre) async {
@@ -297,7 +301,9 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
     for (final entree in chapitresParTitre.entries) {
       entree.value.replaceRange(0, entree.value.length, <Chapitre>[
         for (final chapitre in entree.value)
-          chapitre.id == idChapitre ? chapitre.copierAvec(estLu: estLu) : chapitre,
+          chapitre.id == idChapitre
+              ? chapitre.copierAvec(estLu: estLu)
+              : chapitre,
       ]);
     }
   }
@@ -391,6 +397,57 @@ class FauxServiceAjoutSite implements ServiceAjoutSite {
   Future<Source?> trouverSourcePourUrl(String url) async => null;
 }
 
+/// Faux `ServiceMisesAJour` : renvoie un rapport préparé, sans base ni
+/// réseau. Il implémente l'interface du vrai service (le constructeur de
+/// celui-ci exige des dépôts branchés sur une base).
+class FauxServiceMisesAJour implements ServiceMisesAJour {
+  /// Résultats du prochain rapport.
+  List<ResultatVerificationTitre> resultats = <ResultatVerificationTitre>[];
+
+  /// Erreur globale levée par la vérification, si définie.
+  Object? erreur;
+
+  /// Si défini, la vérification attend qu'il soit complété.
+  Completer<void>? retenue;
+
+  /// Action exécutée pendant la vérification (simule l'enregistrement des
+  /// nouveaux chapitres dans la base).
+  void Function()? pendantVerification;
+
+  /// Nombre d'appels à [verifierTitresSuivis].
+  int nombreAppels = 0;
+
+  bool _estEnCours = false;
+
+  @override
+  bool get estEnCours => _estEnCours;
+
+  @override
+  Future<RapportMisesAJour> verifierTitresSuivis() async {
+    nombreAppels++;
+    _estEnCours = true;
+    try {
+      final attente = retenue;
+      if (attente != null) {
+        await attente.future;
+      }
+      final panne = erreur;
+      if (panne != null) {
+        throw panne;
+      }
+      pendantVerification?.call();
+      final date = DateTime.utc(2026, 11, 15, 12);
+      return RapportMisesAJour(
+        debut: date,
+        fin: date,
+        resultats: List<ResultatVerificationTitre>.of(resultats),
+      );
+    } finally {
+      _estEnCours = false;
+    }
+  }
+}
+
 // ------------------------------------------------------------- Vrais services
 
 /// Vrais services branchés sur une base SQLite en mémoire et sur un
@@ -470,9 +527,17 @@ Widget envelopper(
   Widget enfant, {
   required FauxServiceBibliotheque bibliotheque,
   FauxServiceAjoutSite? ajoutSite,
+  FauxServiceMisesAJour? misesAJour,
+  bool verifierMisesAJourAuDemarrage = false,
 }) {
   return MultiProvider(
     providers: [
+      ChangeNotifierProvider<EtatMisesAJour>(
+        create: (_) => EtatMisesAJour(
+          misesAJour ?? FauxServiceMisesAJour(),
+          verifierAuDemarrage: verifierMisesAJourAuDemarrage,
+        )..demarrer(),
+      ),
       Provider<EtatCouvertures>(create: (_) => EtatCouvertures(bibliotheque)),
       ChangeNotifierProvider<EtatBibliotheque>(
         create: (_) => EtatBibliotheque(bibliotheque)..charger(),

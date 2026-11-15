@@ -47,6 +47,10 @@ const double margeBasBoutonFlottant = 88;
 /// en Material 3) : le contenu ne saute pas quand elle apparaît.
 const double hauteurBarreProgression = 4;
 
+/// Épaisseur du petit indicateur de progression qui remplace une icône de
+/// bouton : plus fin que celui par défaut pour rester lisible à cette taille.
+const double epaisseurIndicateurBouton = 2;
+
 /// Taille des icônes des vues vide et erreur.
 const double tailleIconeEtat = 64;
 

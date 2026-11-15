@@ -45,12 +45,19 @@ void initialiserFabriqueBaseDeDonnees() {
 ///   [initialiserFabriqueBaseDeDonnees] est appelée et la fabrique globale
 ///   est utilisée. Les tests passent `databaseFactoryFfi` pour ne pas
 ///   modifier l'état global.
+/// - [annulerTransactionOuverte] : `false` depuis un isolat secondaire (tâche
+///   de fond Android). Sur Android, la connexion native est partagée par tout
+///   le processus : l'ouvrir depuis un autre isolat avec la valeur par défaut
+///   annulerait en mode debug une transaction en cours de l'application
+///   (documentation sqflite, « Isolates and hot restart »). `null` garde la
+///   valeur par défaut de sqflite.
 ///
 /// Avec le chemin par défaut, `WidgetsFlutterBinding.ensureInitialized()` doit
 /// avoir été appelé (exigence de `path_provider`).
 Future<Database> ouvrirBaseDeDonnees({
   String? chemin,
   DatabaseFactory? fabrique,
+  bool? annulerTransactionOuverte,
 }) async {
   if (fabrique == null) {
     initialiserFabriqueBaseDeDonnees();
@@ -73,6 +80,7 @@ Future<Database> ouvrirBaseDeDonnees({
       // Une base en mémoire ne doit pas être partagée entre deux ouvertures
       // (chaque test repart d'une base vide).
       singleInstance: !estEnMemoire,
+      rollbackActiveTransactionOnOpen: annulerTransactionOuverte,
     ),
   );
 }

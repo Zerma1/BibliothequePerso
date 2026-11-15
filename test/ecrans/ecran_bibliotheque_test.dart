@@ -6,6 +6,7 @@ import 'package:bibliotheque_perso/etat/constantes_etat.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
+import 'package:bibliotheque_perso/services/service_mises_a_jour.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/widgets/carte_titre.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
@@ -222,6 +223,152 @@ void main() {
       expect(service.listesParTitre[1], <int>{1, 2});
     },
   );
+
+  group('recherche des nouveaux chapitres', () {
+    late FauxServiceMisesAJour misesAJour;
+
+    setUp(() => misesAJour = FauxServiceMisesAJour());
+
+    Future<void> afficherAvecMisesAJour(
+      WidgetTester tester, {
+      bool auDemarrage = false,
+    }) async {
+      tester.view.physicalSize = const Size(1000, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        envelopper(
+          const EcranBibliotheque(),
+          bibliotheque: service,
+          misesAJour: misesAJour,
+          verifierMisesAJourAuDemarrage: auDemarrage,
+        ),
+      );
+    }
+
+    Finder bouton() => find.byTooltip(Textes.rechercherNouveauxChapitres);
+
+    testWidgets('indicateur et bouton désactivé pendant la vérification, '
+        'puis « Aucun nouveau chapitre »', (tester) async {
+      await afficherAvecMisesAJour(tester);
+      await tester.pump();
+      misesAJour.retenue = Completer<void>();
+
+      await tester.tap(bouton());
+      await tester.pump();
+
+      expect(bouton(), findsNothing);
+      final enCours = find.byTooltip(Textes.rechercheNouveauxChapitresEnCours);
+      expect(enCours, findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<IconButton>(
+              find.ancestor(of: enCours, matching: find.byType(IconButton)),
+            )
+            .onPressed,
+        isNull,
+      );
+
+      misesAJour.retenue!.complete();
+      await tester.pump();
+      await tester.pump();
+
+      expect(bouton(), findsOneWidget);
+      expect(find.text('Aucun nouveau chapitre.'), findsOneWidget);
+      expect(misesAJour.nombreAppels, 1);
+    });
+
+    testWidgets('nouveautés : bilan avec sites en échec et badge mis à jour', (
+      tester,
+    ) async {
+      final titre = service.ajouterTitreDeTest('Shinigami', idSource: 1);
+      final autre = service.ajouterTitreDeTest('Solo Leveling', idSource: 2);
+      misesAJour
+        ..pendantVerification = () {
+          // Le vrai service enregistre les chapitres en base : le faux les
+          // ajoute au faux service de la bibliothèque.
+          service.chapitresParTitre[titre.id!]!.addAll(_chapitres(2));
+        }
+        ..resultats = <ResultatVerificationTitre>[
+          ResultatVerificationTitre(titre: titre, nombreNouveauxChapitres: 2),
+          ResultatVerificationTitre(
+            titre: autre,
+            erreur: const ErreurSource('https://site2.test', 'Panne'),
+          ),
+        ];
+      await afficherAvecMisesAJour(tester);
+      await tester.pump();
+      expect(find.byType(Badge), findsNothing);
+
+      await tester.tap(bouton());
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.text(
+          '2 nouveaux chapitres pour 1 titre. 1 site n\'a pas répondu.',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.widgetWithText(CarteTitre, 'Shinigami'),
+          matching: find.text('2'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('une vérification automatique sans nouveauté reste '
+        'silencieuse', (tester) async {
+      await afficherAvecMisesAJour(tester, auDemarrage: true);
+      await tester.pump();
+      await tester.pump();
+
+      expect(misesAJour.nombreAppels, 1);
+      expect(find.byType(SnackBar), findsNothing);
+    });
+
+    testWidgets('une vérification automatique avec nouveautés recharge la '
+        'grille et l\'annonce', (tester) async {
+      final titre = service.ajouterTitreDeTest('Shinigami', idSource: 1);
+      misesAJour
+        ..pendantVerification = (() {
+          service.chapitresParTitre[titre.id!]!.addAll(_chapitres(3));
+        })
+        ..resultats = <ResultatVerificationTitre>[
+          ResultatVerificationTitre(titre: titre, nombreNouveauxChapitres: 3),
+        ];
+      await afficherAvecMisesAJour(tester, auDemarrage: true);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('3 nouveaux chapitres pour 1 titre.'), findsOneWidget);
+      expect(find.text('3'), findsOneWidget);
+    });
+
+    testWidgets('une panne générale affiche l\'erreur', (tester) async {
+      misesAJour.erreur = const ErreurSource('https://site.test', 'Panne');
+      await afficherAvecMisesAJour(tester);
+      await tester.pump();
+
+      await tester.tap(bouton());
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.textContaining(Textes.erreurSite), findsOneWidget);
+      expect(bouton(), findsOneWidget);
+    });
+  });
 
   testWidgets('un refus du service s\'affiche dans le dialogue', (
     tester,

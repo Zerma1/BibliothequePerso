@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../etat/etat_bibliotheque.dart';
+import '../etat/etat_mises_a_jour.dart';
 import '../modeles/titre.dart';
 import '../widgets/carte_titre.dart';
 import '../widgets/constantes_interface.dart';
@@ -32,10 +33,53 @@ class _EtatEcranBibliotheque extends State<EcranBibliotheque> {
     text: context.read<EtatBibliotheque>().recherche,
   );
 
+  /// Gardé pour se désabonner dans [dispose], où `context.read` n'est plus
+  /// sûr.
+  late final EtatMisesAJour _misesAJour;
+
+  @override
+  void initState() {
+    super.initState();
+    // L'écran reste monté (IndexedStack, routes empilées par-dessus) : il
+    // reçoit aussi les fins de vérifications automatiques.
+    _misesAJour = context.read<EtatMisesAJour>();
+    _misesAJour.finVerification.addListener(_surFinVerification);
+  }
+
   @override
   void dispose() {
+    _misesAJour.finVerification.removeListener(_surFinVerification);
     _recherche.dispose();
     super.dispose();
+  }
+
+  /// Fin d'une recherche de nouveaux chapitres : recharge la grille (badges
+  /// des non-lus) s'il y a des nouveautés, et affiche le bilan.
+  void _surFinVerification() {
+    final fin = _misesAJour.finVerification.value;
+    if (fin == null || !mounted) {
+      return;
+    }
+    if (fin.aDesNouveautes) {
+      context.read<EtatBibliotheque>().charger();
+    }
+    // Une vérification automatique sans nouveauté reste silencieuse : un
+    // message toutes les six heures pour dire « rien » serait du bruit.
+    if (!fin.estManuelle && !fin.aDesNouveautes) {
+      return;
+    }
+    final erreur = fin.erreur;
+    afficherMessage(
+      context,
+      erreur != null
+          ? Textes.messageErreur(erreur)
+          : Textes.bilanMisesAJour(
+              nombreChapitres: fin.nombreNouveauxChapitres,
+              nombreTitres: fin.nombreTitresAvecNouveautes,
+              nombreSitesEnEchec: fin.nombreSitesEnEchec,
+              nombreAutresEchecs: fin.nombreAutresEchecs,
+            ),
+    );
   }
 
   Future<void> _ajouterTitre() async {
@@ -63,6 +107,7 @@ class _EtatEcranBibliotheque extends State<EcranBibliotheque> {
       appBar: AppBar(
         title: const Text(Textes.ongletBibliotheque),
         actions: <Widget>[
+          const _BoutonMisesAJour(),
           IconButton(
             tooltip: Textes.actualiser,
             icon: const Icon(Icons.refresh),
@@ -176,6 +221,38 @@ class _EtatEcranBibliotheque extends State<EcranBibliotheque> {
           );
         },
       ),
+    );
+  }
+}
+
+/// Bouton de la barre d'app qui lance la recherche des nouveaux chapitres.
+///
+/// Widget séparé : seul lui se reconstruit quand la vérification commence ou
+/// finit, pas toute la grille.
+class _BoutonMisesAJour extends StatelessWidget {
+  const _BoutonMisesAJour();
+
+  @override
+  Widget build(BuildContext context) {
+    final etat = context.watch<EtatMisesAJour>();
+    if (etat.estEnCours) {
+      // L'indicateur prend la taille d'une icône de la barre d'app : le
+      // titre et les autres boutons ne bougent pas pendant la vérification.
+      return IconButton(
+        tooltip: Textes.rechercheNouveauxChapitresEnCours,
+        onPressed: null,
+        icon: SizedBox.square(
+          dimension: IconTheme.of(context).size,
+          child: const CircularProgressIndicator(
+            strokeWidth: epaisseurIndicateurBouton,
+          ),
+        ),
+      );
+    }
+    return IconButton(
+      tooltip: Textes.rechercherNouveauxChapitres,
+      icon: const Icon(Icons.update),
+      onPressed: etat.verifierMaintenant,
     );
   }
 }
