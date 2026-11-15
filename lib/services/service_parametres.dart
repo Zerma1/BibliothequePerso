@@ -3,6 +3,7 @@
 library;
 
 import '../donnees/depot_parametres.dart';
+import 'planification_mises_a_jour.dart';
 import 'politique_telechargement.dart';
 
 /// Lecture et écriture des réglages, avec leurs valeurs par défaut.
@@ -24,6 +25,12 @@ class ServiceParametres {
 
   /// Clé : chapitres téléchargés après le dernier lu pour un titre suivi.
   static const String cleSuivisApres = 'telechargement.suivis.apres';
+
+  /// Clé : nombre de recherches de mises à jour par jour (1 à 24).
+  static const String cleVerificationsParJour = 'mises_a_jour.par_jour';
+
+  /// Clé : date (UTC, ISO 8601) de la dernière recherche de mises à jour.
+  static const String cleDerniereVerification = 'mises_a_jour.derniere';
 
   /// Valeur maximale acceptée pour une limite, pour éviter qu'une faute de
   /// frappe (1000 au lieu de 10) ne lance des centaines de téléchargements.
@@ -87,4 +94,43 @@ class ServiceParametres {
       await _depot.supprimer(cle);
     }
   }
+
+  /// Nombre de recherches de mises à jour par jour (2 par défaut : 00:00 et
+  /// 12:00 UTC).
+  Future<int> chargerVerificationsParJour() async {
+    final valeur = await _depot.chargerEntier(cleVerificationsParJour);
+    if (valeur == null ||
+        valeur < PlanificationMisesAJour.minimumParJour ||
+        valeur > PlanificationMisesAJour.maximumParJour) {
+      return PlanificationMisesAJour.parDefautParJour;
+    }
+    return valeur;
+  }
+
+  /// Enregistre le nombre de recherches par jour (ramené entre 1 et 24).
+  Future<void> enregistrerVerificationsParJour(int nombre) =>
+      _depot.enregistrerEntier(
+        cleVerificationsParJour,
+        nombre.clamp(
+          PlanificationMisesAJour.minimumParJour,
+          PlanificationMisesAJour.maximumParJour,
+        ),
+      );
+
+  /// Planification correspondant au réglage enregistré.
+  Future<PlanificationMisesAJour> chargerPlanification() async =>
+      PlanificationMisesAJour(await chargerVerificationsParJour());
+
+  /// Date de la dernière recherche de mises à jour, ou `null`.
+  Future<DateTime?> chargerDerniereVerification() async {
+    final texte = await _depot.chargerTexte(cleDerniereVerification);
+    return texte == null ? null : DateTime.tryParse(texte)?.toUtc();
+  }
+
+  /// Enregistre la date de la dernière recherche de mises à jour.
+  Future<void> enregistrerDerniereVerification(DateTime date) =>
+      _depot.enregistrerTexte(
+        cleDerniereVerification,
+        date.toUtc().toIso8601String(),
+      );
 }
