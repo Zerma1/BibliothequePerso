@@ -200,10 +200,12 @@ abstract class SourceSite {
 `DetecteurTypeSite` regarde d'abord le domaine, puis télécharge la page d'accueil :
 0. Si le domaine est `mangadex.org`, le type est `mangaDex` (voir ci-dessous), sans analyser le
    HTML.
-1. Si l'on trouve des marqueurs Madara (classes `wp-manga`, chemin `/manga/`, script
-   `madara`), le type est `madara`.
+1. Si l'on trouve des marqueurs Madara forts (classes `wp-manga`, script `madara`), le type
+   est `madara`.
 2. Si l'on trouve des marqueurs MangaThemesia (`ts_reader`, classe `bixbox`), le type est
    `mangaThemesia`.
+2 bis. Sinon, des liens en `/manga/` ne sont qu'un indice faible de Madara (beaucoup de sites
+   MangaThemesia les utilisent aussi). Le formulaire d'ajout permet de corriger le type détecté.
 3. Sinon, le type est `generique` : le client renseigne les sélecteurs CSS dans un formulaire
    (titre, couverture, liste des chapitres, images d'un chapitre, catégories).
 
@@ -221,6 +223,17 @@ données. `SourceMangaDex` utilise donc l'**API publique officielle** `https://a
   documentation officielle** (`https://api.mangadex.org/docs/`) avant d'être codés, puis cités en
   commentaire. Aucun point d'accès n'est écrit de mémoire.
 - Les tests utilisent des **réponses JSON enregistrées** dans `test/sources/exemples_json/`.
+- Règles d'usage de MangaDex (documentation officielle, relevées le 2026-11-15) :
+  - User-Agent honnête obligatoire ; environ 5 requêtes/s par IP (notre délai de 1 s est plus
+    strict) ; `/at-home/server` limité à 40 requêtes/min (1,5 s entre deux appels) ;
+  - en cas de 429, respecter `Retry-After` : insister mène à un bannissement temporaire ;
+  - pagination plafonnée à `offset + limit ≤ 10 000` ;
+  - l'adresse du serveur d'images (`baseUrl`) n'est valable que 15 minutes : on télécharge juste
+    après l'avoir obtenue, et on la redemande en cas d'erreur 403 ;
+  - chaque image chargée depuis un serveur MangaDex@Home doit être signalée à
+    `POST https://api.mangadex.network/report` (étape 5) ;
+  - l'interface crédite MangaDex et les groupes de traduction, et l'application ne contient
+    aucune publicité.
 - Titre de référence pour les tests : *Shinigami ni Sodaterareta Shoujo wa Shikkoku no Tsurugi
   wo Mune ni Idaku* (`12e28a8a-cbfe-4e12-bab8-b6fb0b9a59b4`), avec 6 titres alternatifs et les
   tags Gore, Action, Comedy, Survival, Magic, Military, Fantasy, Supernatural, Adaptation.
@@ -232,7 +245,9 @@ gérer un cas particulier.**
 ### Règles réseau (obligatoires)
 - Toutes les requêtes passent par **`ClientHttpPoli`**, la seule classe autorisée à appeler
   `package:http`. Elle s'occupe de :
-  - l'en-tête `User-Agent` d'un navigateur courant ;
+  - l'en-tête `User-Agent` d'un navigateur courant par défaut ; **sauf si le site exige un
+    User-Agent honnête** (cas de l'API MangaDex, qui interdit d'usurper un navigateur) : on
+    envoie alors `BibliothequePerso/<version> (usage personnel)` ;
   - l'en-tête `Referer` pour les images, que beaucoup de sites exigent ;
   - un délai minimal de **1 seconde entre deux requêtes vers un même domaine** ;
   - un délai d'expiration de 20 secondes et 2 nouvelles tentatives au maximum.
@@ -283,7 +298,9 @@ Chaque adaptateur est testé avec des **pages HTML enregistrées** dans
 - Pas de `print` : on utilise `debugPrint` ou le journal applicatif `Journal`.
 - Pas de `dynamic` implicite. On utilise `as` avec vérification sur les données venant du HTML
   ou de SQLite.
-- Pas de valeur magique : les constantes vont dans `lib/modeles/constantes.dart`.
+- Pas de valeur magique : les constantes partagées vont dans `lib/modeles/constantes.dart` ;
+  celles propres à une couche vont dans le fichier de constantes de cette couche (par exemple
+  `lib/sources/constantes_sources.dart`).
 
 ---
 

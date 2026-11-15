@@ -1,0 +1,353 @@
+/// Client HTTP « poli » : seule classe du projet autorisée à importer
+/// `package:http` (PLAYBOOK.md section 6, règles réseau).
+library;
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:http/http.dart' as http;
+
+import 'constantes_sources.dart';
+import 'erreur_source.dart';
+
+/// Fonction qui donne l'heure courante (remplaçable dans les tests).
+typedef FonctionHorloge = DateTime Function();
+
+/// Fonction qui attend une durée (remplaçable dans les tests pour ne pas
+/// ralentir la suite de tests).
+typedef FonctionAttente = Future<void> Function(Duration duree);
+
+/// Limite de débit supplémentaire, plus stricte que la règle « 1 s par
+/// domaine », pour un point d'accès particulier.
+///
+/// Exemple : l'API MangaDex limite `GET /at-home/server/{id}` à 40 requêtes
+/// par minute (docs/2-limitations).
+class LimiteRequetes {
+  /// Crée une limite identifiée par [cle] : deux requêtes portant la même clé
+  /// sont espacées d'au moins [delaiMinimal].
+  const LimiteRequetes(this.cle, this.delaiMinimal);
+
+  /// Identifiant partagé par toutes les requêtes soumises à cette limite.
+  final String cle;
+
+  /// Écart minimal entre le début de deux requêtes de même [cle].
+  final Duration delaiMinimal;
+}
+
+/// Client HTTP qui respecte la charge des sites lus.
+///
+/// Il applique les règles de PLAYBOOK.md section 6 :
+/// - en-tête `User-Agent` (navigateur courant par défaut, remplaçable par
+///   requête : l'API MangaDex interdit un User-Agent usurpé) ;
+/// - en-tête `Referer` optionnel, que beaucoup de sites exigent pour les
+///   images ;
+/// - au moins [delaiParDomaine] entre le début de deux requêtes vers un même
+///   domaine, plus les éventuelles [LimiteRequetes] plus strictes ;
+/// - délai d'expiration de [delaiExpiration] par tentative ;
+/// - au plus [nombreNouvellesTentatives] nouvelles tentatives, seulement sur
+///   une erreur réseau, un délai dépassé, une réponse 5xx ou 429 ;
+/// - tout échec lève une [ErreurSource] avec l'URL et la cause.
+class ClientHttpPoli {
+  /// Crée le client.
+  ///
+  /// [client] permet d'injecter un `MockClient` dans les tests ; [maintenant]
+  /// et [attendre] permettent de simuler le temps.
+  ClientHttpPoli({
+    http.Client? client,
+    this.userAgentParDefaut = userAgentNavigateur,
+    this.delaiParDomaine = delaiMinimalParDomaine,
+    this.delaiExpiration = delaiExpirationRequete,
+    this.nombreNouvellesTentatives = nombreMaxNouvellesTentatives,
+    FonctionHorloge? maintenant,
+    FonctionAttente? attendre,
+  }) : _client = client ?? http.Client(),
+       _maintenant = maintenant ?? DateTime.now,
+       _attendre = attendre ?? _attendreReellement;
+
+  final http.Client _client;
+  final FonctionHorloge _maintenant;
+  final FonctionAttente _attendre;
+
+  /// User-Agent envoyé quand la requête n'en précise pas d'autre.
+  final String userAgentParDefaut;
+
+  /// Écart minimal entre le début de deux requêtes vers un même domaine.
+  final Duration delaiParDomaine;
+
+  /// Délai d'expiration de chaque tentative.
+  final Duration delaiExpiration;
+
+  /// Nombre maximal de nouvelles tentatives après le premier échec.
+  final int nombreNouvellesTentatives;
+
+  /// Premier instant où une nouvelle requête peut partir, par domaine ou par
+  /// clé de [LimiteRequetes].
+  final Map<String, DateTime> _creneauxLibres = <String, DateTime>{};
+
+  static Future<void> _attendreReellement(Duration duree) =>
+      Future<void>.delayed(duree);
+
+  /// Récupère [uri] et renvoie le corps décodé en texte (HTML, JSON…).
+  ///
+  /// Le jeu de caractères vient de l'en-tête `Content-Type` ; à défaut, on
+  /// décode en UTF-8 (le défaut de `package:http` est latin-1, ce qui abîme
+  /// les pages UTF-8 qui ne déclarent pas leur encodage).
+  ///
+  /// Lève une [ErreurSource] en cas d'échec.
+  Future<String> recupererTexte(
+    Uri uri, {
+    String? referer,
+    String? userAgent,
+    Map<String, String> enTetes = const <String, String>{},
+    LimiteRequetes? limite,
+  }) async {
+    final reponse = await _executer(
+      uri,
+      referer: referer,
+      userAgent: userAgent,
+      enTetes: enTetes,
+      limite: limite,
+    );
+    try {
+      return _decoderTexte(reponse);
+    } on FormatException catch (erreur) {
+      throw ErreurSource(
+        uri.toString(),
+        'Réponse illisible (encodage du texte)',
+        cause: erreur,
+        codeStatut: reponse.statusCode,
+      );
+    }
+  }
+
+  /// Récupère [uri] et renvoie le corps brut (images…).
+  ///
+  /// [referer] est envoyé dans l'en-tête `Referer`, que beaucoup de sites
+  /// exigent pour servir leurs images. Lève une [ErreurSource] en cas d'échec.
+  Future<Uint8List> recupererOctets(
+    Uri uri, {
+    String? referer,
+    String? userAgent,
+    Map<String, String> enTetes = const <String, String>{},
+    LimiteRequetes? limite,
+  }) async {
+    final reponse = await _executer(
+      uri,
+      referer: referer,
+      userAgent: userAgent,
+      enTetes: enTetes,
+      limite: limite,
+    );
+    return reponse.bodyBytes;
+  }
+
+  /// Ferme le client HTTP sous-jacent (à appeler à la fermeture de l'app).
+  void fermer() => _client.close();
+
+  Future<http.Response> _executer(
+    Uri uri, {
+    required String? referer,
+    required String? userAgent,
+    required Map<String, String> enTetes,
+    required LimiteRequetes? limite,
+  }) async {
+    final url = uri.toString();
+    // Seuls http et https ont un sens ici ; un hôte vide rendrait la règle
+    // « 1 s par domaine » inopérante.
+    if ((uri.scheme != 'http' && uri.scheme != 'https') || uri.host.isEmpty) {
+      throw ErreurSource(url, 'URL invalide : http:// ou https:// attendu');
+    }
+
+    final entetesRequete = <String, String>{
+      'User-Agent': userAgent ?? userAgentParDefaut,
+      'Referer': ?referer,
+      ...enTetes,
+    };
+
+    final hote = uri.host.toLowerCase();
+    ErreurSource? derniereErreur;
+    for (
+      var tentative = 0;
+      tentative <= nombreNouvellesTentatives;
+      tentative++
+    ) {
+      await _reserverCreneau(hote, limite);
+
+      final attenteAvantNouvelleTentative =
+          attenteBaseNouvelleTentative * (tentative + 1);
+      // Après un 429, l'attente passe par le créneau du domaine (partagé par
+      // toutes les requêtes) plutôt que par une attente propre à celle-ci.
+      var attenteViaCreneau = false;
+      try {
+        final reponse = await _client
+            .get(uri, headers: entetesRequete)
+            .timeout(delaiExpiration);
+        final code = reponse.statusCode;
+        if (code >= 200 && code < 300) {
+          return reponse;
+        }
+        derniereErreur = ErreurSource(
+          url,
+          'Réponse HTTP $code : ${_extrait(reponse)}',
+          codeStatut: code,
+        );
+        if (code == codeHttpTropDeRequetes) {
+          // Le serveur dit combien de temps patienter : on lui obéit, sauf si
+          // l'attente est déraisonnable (mieux vaut échouer et réessayer à la
+          // prochaine vérification que bloquer toute la file).
+          final demandee = _attenteDemandee(reponse);
+          final attente = demandee ?? attenteAvantNouvelleTentative;
+          // Le 429 vaut pour tout le domaine (MangaDex : « HTTP 429 responses
+          // for all requests to *.mangadex.org ») : on repousse le créneau du
+          // domaine pour que TOUTES ses requêtes patientent, pas seulement
+          // celle-ci. L'attente est plafonnée pour ne pas geler la file.
+          _repousserCreneau(
+            hote,
+            attente > attenteMaxDemandeeParServeur
+                ? attenteMaxDemandeeParServeur
+                : attente,
+          );
+          if (attente > attenteMaxDemandeeParServeur) {
+            throw derniereErreur;
+          }
+          attenteViaCreneau = true;
+        } else if (code < 500) {
+          // Une autre erreur 4xx (404, 403…) ne se corrigera pas en
+          // réessayant : on échoue tout de suite.
+          throw derniereErreur;
+        }
+      } on TimeoutException catch (erreur) {
+        derniereErreur = ErreurSource(
+          url,
+          'Délai dépassé (${delaiExpiration.inSeconds} s)',
+          cause: erreur,
+        );
+      } on ErreurSource {
+        rethrow;
+      } on Exception catch (erreur) {
+        // http.ClientException, SocketException, HandshakeException… : erreurs
+        // réseau souvent passagères, qui justifient une nouvelle tentative.
+        derniereErreur = ErreurSource(url, 'Erreur réseau', cause: erreur);
+      }
+
+      if (tentative < nombreNouvellesTentatives && !attenteViaCreneau) {
+        await _attendre(attenteAvantNouvelleTentative);
+      }
+    }
+    throw derniereErreur!;
+  }
+
+  /// Réserve le prochain créneau libre pour le domaine [hote] (et pour
+  /// [limite] si elle existe), puis attend qu'il arrive.
+  ///
+  /// Les deux clés sont réservées en une seule étape synchrone (aucun `await`
+  /// avant la mise à jour de la table) : le début retenu est le plus tardif
+  /// des créneaux libres, et il est enregistré pour les deux clés. Ainsi,
+  /// même quand une [LimiteRequetes] retarde une requête, la requête suivante
+  /// vers le domaine part au moins [delaiParDomaine] après elle.
+  Future<void> _reserverCreneau(String hote, LimiteRequetes? limite) async {
+    // LIMITE : `DateTime.now` n'est pas monotone : un recalage de l'horloge
+    // système (NTP, changement manuel) pendant l'exécution peut allonger ou
+    // raccourcir une attente. Acceptable pour des délais de l'ordre de la
+    // seconde ; un `Stopwatch` serait monotone mais complique les tests.
+    final maintenant = _maintenant();
+    var debut = maintenant;
+    final libreDomaine = _creneauxLibres[hote];
+    if (libreDomaine != null && libreDomaine.isAfter(debut)) {
+      debut = libreDomaine;
+    }
+    if (limite != null) {
+      final libreLimite = _creneauxLibres[limite.cle];
+      if (libreLimite != null && libreLimite.isAfter(debut)) {
+        debut = libreLimite;
+      }
+      _creneauxLibres[limite.cle] = debut.add(limite.delaiMinimal);
+    }
+    _creneauxLibres[hote] = debut.add(delaiParDomaine);
+    final attente = debut.difference(maintenant);
+    if (attente > Duration.zero) {
+      await _attendre(attente);
+    }
+  }
+
+  /// Interdit toute requête vers [hote] pendant [attente] à partir de
+  /// maintenant (sans jamais avancer un créneau déjà plus tardif).
+  void _repousserCreneau(String hote, Duration attente) {
+    final libre = _maintenant().add(attente);
+    final actuel = _creneauxLibres[hote];
+    if (actuel == null || libre.isAfter(actuel)) {
+      _creneauxLibres[hote] = libre;
+    }
+  }
+
+  /// Lit l'attente demandée par le serveur après une réponse 429.
+  ///
+  /// - `Retry-After` (RFC 9110) en secondes ; LIMITE : la forme « date HTTP »
+  ///   n'est pas gérée (on retombe alors sur l'attente par défaut).
+  /// - `X-RateLimit-Retry-After`, horodatage UNIX documenté par MangaDex
+  ///   (docs/2-limitations : « Timestamp of the end of the current time
+  ///   period, as UNIX timestamp »).
+  Duration? _attenteDemandee(http.Response reponse) {
+    // `package:http` met les noms d'en-têtes en minuscules.
+    final secondes = int.tryParse(reponse.headers['retry-after'] ?? '');
+    if (secondes != null && secondes >= 0) {
+      return Duration(seconds: secondes);
+    }
+    final finPeriode = int.tryParse(
+      reponse.headers['x-ratelimit-retry-after'] ?? '',
+    );
+    if (finPeriode != null) {
+      final fin = DateTime.fromMillisecondsSinceEpoch(
+        finPeriode * 1000,
+        isUtc: true,
+      );
+      final attente = fin.difference(_maintenant().toUtc());
+      return attente.isNegative ? Duration.zero : attente;
+    }
+    return null;
+  }
+
+  /// Jeux de caractères occidentaux sur un octet, lus en latin-1.
+  static const Set<String> _jeuxOccidentaux = <String>{
+    'iso-8859-1',
+    'latin1',
+    'windows-1252',
+    'cp1252',
+  };
+
+  String _decoderTexte(http.Response reponse) {
+    final typeContenu = reponse.headers['content-type'];
+    final jeu = typeContenu == null
+        ? null
+        : RegExp(
+            r'charset\s*=\s*"?([^";\s]+)',
+            caseSensitive: false,
+          ).firstMatch(typeContenu)?.group(1);
+    final nomJeu = jeu?.toLowerCase();
+    if (nomJeu != null && _jeuxOccidentaux.contains(nomJeu)) {
+      // `Encoding.getByName` ne connaît pas windows-1252, très répandu sur
+      // les vieux sites : on le lit en latin-1, qui lui est presque identique.
+      // LIMITE : les octets 0x80-0x9F (€, guillemets typographiques, œ…) sont
+      // différents en windows-1252 et deviennent des caractères de contrôle
+      // en latin-1 ; dart:convert ne fournit pas de décodeur windows-1252.
+      return latin1.decode(reponse.bodyBytes);
+    }
+    final encodage = nomJeu == null ? null : Encoding.getByName(nomJeu);
+    if (encodage == null || encodage == utf8) {
+      return utf8.decode(reponse.bodyBytes, allowMalformed: true);
+    }
+    return encodage.decode(reponse.bodyBytes);
+  }
+
+  String _extrait(http.Response reponse) {
+    final texte = utf8
+        .decode(reponse.bodyBytes, allowMalformed: true)
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (texte.length <= longueurMaxExtraitReponse) {
+      return texte;
+    }
+    return '${texte.substring(0, longueurMaxExtraitReponse)}…';
+  }
+}
