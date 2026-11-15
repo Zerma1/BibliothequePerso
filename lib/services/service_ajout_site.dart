@@ -65,6 +65,27 @@ class ServiceAjoutSite {
     );
   }
 
+  /// Modifie une source existante (nom, langues, type, activation).
+  ///
+  /// Les langues sont des codes ISO 639-1 séparés par des virgules, par ordre
+  /// de préférence (« fr,en ») ; elles sont mises en minuscules et les
+  /// espaces retirés. L'URL de base ne change pas.
+  Future<Source> modifierSource(Source source) {
+    final langues = source.langueParDefaut
+        .split(',')
+        .map((code) => code.trim().toLowerCase())
+        .where((code) => code.isNotEmpty)
+        .join(',');
+    return _depotSources.enregistrerSource(
+      source.copierAvec(nom: source.nom.trim(), langueParDefaut: langues),
+    );
+  }
+
+  /// Supprime une source. Refusé (ErreurBaseDeDonnees) tant qu'elle a des
+  /// titres, pour ne jamais effacer une partie de la bibliothèque.
+  Future<void> supprimerSource(int idSource) =>
+      _depotSources.supprimerSource(idSource);
+
   /// Renvoie la source configurée qui correspond à l'hôte de [url], ou `null`.
   ///
   /// La comparaison ignore `www.` pour qu'une source `https://mangadex.org`
