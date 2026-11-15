@@ -25,16 +25,25 @@ class FabriqueSources {
   SourceSite creer(Source source) {
     switch (source.typeSource) {
       case TypeSource.mangaDex:
-        // La langue par défaut de la source filtre les chapitres demandés à
-        // l'API : sans filtre, un titre très traduit peut dépasser le plafond
-        // de 10 000 résultats de MangaDex. Les variantes régionales (pt-br,
-        // es-la, zh-hk) sont incluses : un client qui lit en « pt » veut aussi
-        // les traductions brésiliennes.
+        // Les langues de la source (« fr,en », par ordre de préférence)
+        // filtrent les chapitres demandés à l'API : sans filtre, un titre très
+        // traduit peut dépasser le plafond de 10 000 résultats de MangaDex.
+        // Les variantes régionales (pt-br, es-la, zh-hk) sont incluses : un
+        // client qui lit en « pt » veut aussi les traductions brésiliennes.
+        // Valeur vide = toutes les langues.
+        final preferees = SourceMangaDex.languesIsoDepuisPreference(
+          source.langueParDefaut,
+        );
         return SourceMangaDex(
           _client,
-          languesChapitres: SourceMangaDex.languesApiDepuisIso(
+          languesChapitres: SourceMangaDex.languesDepuisPreference(
             source.langueParDefaut,
           ),
+          // Le même ordre choisit la langue du résumé ; sans préférence, on
+          // garde le défaut de l'adaptateur (fr puis en).
+          languesPreferees: preferees.isEmpty
+              ? const <String>['fr', 'en']
+              : preferees,
         );
       case TypeSource.madara:
       case TypeSource.mangaThemesia:

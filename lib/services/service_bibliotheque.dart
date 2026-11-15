@@ -68,6 +68,10 @@ class ServiceBibliotheque {
   final ServiceAjoutSite _serviceAjoutSite;
   final ClientHttpPoli _client;
 
+  /// Langues de lecture du client, par ordre de préférence (codes ISO 639-1
+  /// séparés par des virgules), données aux sources ajoutées automatiquement.
+  static const String languesParDefaut = 'fr,en';
+
   /// Nom donné à la source MangaDex quand elle est ajoutée automatiquement.
   static const String nomSourceMangaDex = 'MangaDex';
 
@@ -169,7 +173,11 @@ class ServiceBibliotheque {
     if (SourceMangaDex.estHoteMangaDex(uri.host)) {
       // MangaDex est reconnu par son domaine sans téléchargement : on peut
       // l'ajouter sans demander d'étape supplémentaire au client.
-      return _serviceAjoutSite.ajouterSite(urlTitre, nom: nomSourceMangaDex);
+      return _serviceAjoutSite.ajouterSite(
+        urlTitre,
+        nom: nomSourceMangaDex,
+        langueParDefaut: languesParDefaut,
+      );
     }
     throw const ErreurService(
       'Ce site n\'est pas encore configuré : ajoutez-le d\'abord dans « Sources ».',

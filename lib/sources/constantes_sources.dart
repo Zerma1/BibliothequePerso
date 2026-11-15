@@ -71,3 +71,15 @@ const int plafondOffsetMangaDex = 10000;
 /// docs/2-limitations : « GET /at-home/server/{id} : 40 requêtes par
 /// minute », soit une toutes les 1,5 s (plus strict que la règle d'1 s).
 const Duration delaiMinimalAtHomeMangaDex = Duration(milliseconds: 1500);
+
+/// Point d'accès du signalement MangaDex@Home
+/// (docs/04-chapter/retrieving-chapter : « It is a POST request to
+/// https://api.mangadex.network/report (note that it's api.mangadex.network,
+/// not api.mangadex.org) »).
+const String urlSignalementMangaDexAtHome =
+    'https://api.mangadex.network/report';
+
+/// Texte dont la présence dans l'URL de base désigne un serveur MangaDex
+/// (docs/04-chapter/retrieving-chapter : signaler chaque image chargée
+/// « from a base url that doesn't contain mangadex.org »).
+const String marqueurServeurOfficielMangaDex = 'mangadex.org';

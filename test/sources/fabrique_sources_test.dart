@@ -50,6 +50,46 @@ void main() {
     }
   });
 
+  test('plusieurs langues : chapitres fusionnés et ordre du résumé', () {
+    for (final cas in <String, List<String>>{
+      'fr,en': <String>['fr', 'en'],
+      'pt,en': <String>['pt', 'pt-br', 'en'],
+      ' fr , ,EN,fr ': <String>['fr', 'en'],
+    }.entries) {
+      final adaptateur = fabrique.creer(
+        Source(
+          nom: 'MangaDex',
+          urlBase: 'https://mangadex.org',
+          typeSource: TypeSource.mangaDex,
+          langueParDefaut: cas.key,
+        ),
+      ) as SourceMangaDex;
+      expect(adaptateur.languesChapitres, cas.value, reason: cas.key);
+    }
+    final adaptateur = fabrique.creer(
+      const Source(
+        nom: 'MangaDex',
+        urlBase: 'https://mangadex.org',
+        typeSource: TypeSource.mangaDex,
+        langueParDefaut: 'en,fr',
+      ),
+    ) as SourceMangaDex;
+    expect(adaptateur.languesPreferees, <String>['en', 'fr']);
+  });
+
+  test('une préférence vide ou faite de virgules : toutes les langues', () {
+    final adaptateur = fabrique.creer(
+      const Source(
+        nom: 'MangaDex',
+        urlBase: 'https://mangadex.org',
+        typeSource: TypeSource.mangaDex,
+        langueParDefaut: ' , ',
+      ),
+    ) as SourceMangaDex;
+    expect(adaptateur.languesChapitres, isEmpty);
+    expect(adaptateur.languesPreferees, <String>['fr', 'en']);
+  });
+
   test('sans langue par défaut, toutes les langues sont demandées', () {
     final adaptateur = fabrique.creer(
       const Source(

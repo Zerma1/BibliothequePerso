@@ -698,5 +698,37 @@ void main() {
       expect(SourceMangaDex.languesApiDepuisIso('FR'), <String>['fr']);
       expect(SourceMangaDex.languesApiDepuisIso(''), isEmpty);
     });
+
+    test('préférence « fr,en » découpée en codes ISO dans l\'ordre', () {
+      expect(SourceMangaDex.languesIsoDepuisPreference('fr,en'), <String>[
+        'fr',
+        'en',
+      ]);
+      // Espaces ignorés, codes vides ignorés, doublons et casse ramenés.
+      expect(
+        SourceMangaDex.languesIsoDepuisPreference(' en , ,FR,en,fr '),
+        <String>['en', 'fr'],
+      );
+      expect(SourceMangaDex.languesIsoDepuisPreference(''), isEmpty);
+      expect(SourceMangaDex.languesIsoDepuisPreference(' , ,'), isEmpty);
+    });
+
+    test('préférence de langues vers codes translatedLanguage[]', () {
+      expect(SourceMangaDex.languesDepuisPreference('fr,en'), <String>[
+        'fr',
+        'en',
+      ]);
+      expect(SourceMangaDex.languesDepuisPreference('pt,en'), <String>[
+        'pt',
+        'pt-br',
+        'en',
+      ]);
+      expect(SourceMangaDex.languesDepuisPreference('fr'), <String>['fr']);
+      expect(SourceMangaDex.languesDepuisPreference('pt,PT, pt'), <String>[
+        'pt',
+        'pt-br',
+      ]);
+      expect(SourceMangaDex.languesDepuisPreference(''), isEmpty);
+    });
   });
 }

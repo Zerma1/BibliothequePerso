@@ -18,7 +18,7 @@ typedef Migration = Future<void> Function(DatabaseExecutor executeur);
 
 /// Liste ordonnée des migrations : l'élément d'indice `i` est la migration
 /// `i + 1`.
-const List<Migration> migrations = <Migration>[_migration1];
+const List<Migration> migrations = <Migration>[_migration1, _migration2];
 
 /// Version actuelle du schéma (nombre de migrations).
 int get versionSchema => migrations.length;
@@ -181,4 +181,47 @@ Future<void> _migration1(DatabaseExecutor executeur) async {
     'est_systeme': 1,
     'ordre': 1,
   });
+}
+
+/// Migration 2 : file de téléchargement hors-ligne (étape 5).
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration2(DatabaseExecutor executeur) async {
+  const instructions = <String>[
+    // id_chapitre UNIQUE : un chapitre n'apparaît qu'une fois dans la file
+    // (ajout sans doublon par INSERT OR IGNORE) ; l'index créé par UNIQUE sert
+    // aussi à retrouver le téléchargement d'un chapitre.
+    // ON DELETE CASCADE : un chapitre supprimé n'a plus rien à télécharger.
+    // statut : valeurs écrites en dur (même raison que les listes système de
+    // la migration 1) et vérifiées par CHECK, pour qu'une faute de frappe dans
+    // une requête échoue tout de suite au lieu de bloquer la file.
+    // Compteurs de pages ≥ 0 (CHECK) ; dates en millisecondes UTC, NOT NULL
+    // car date_ajout ordonne la file.
+    '''
+    CREATE TABLE telechargements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id_chapitre INTEGER NOT NULL UNIQUE
+        REFERENCES chapitres (id) ON DELETE CASCADE,
+      statut TEXT NOT NULL DEFAULT 'en_attente'
+        CHECK (statut IN ('en_attente', 'en_cours', 'termine', 'echec')),
+      nombre_pages_total INTEGER NOT NULL DEFAULT 0
+        CHECK (nombre_pages_total >= 0),
+      nombre_pages_faites INTEGER NOT NULL DEFAULT 0
+        CHECK (nombre_pages_faites >= 0),
+      message_erreur TEXT,
+      date_ajout INTEGER NOT NULL,
+      date_maj INTEGER NOT NULL
+    )
+    ''',
+    // Index composite (statut, date_ajout) : couvre « prochain en attente »
+    // (filtre sur statut puis plus ancien d'abord) sans tri en mémoire, la
+    // remise en attente des en_cours au démarrage et le filtre par statut de
+    // l'écran des téléchargements.
+    'CREATE INDEX index_telechargements_statut '
+        'ON telechargements (statut, date_ajout)',
+  ];
+
+  for (final instruction in instructions) {
+    await executeur.execute(instruction);
+  }
 }

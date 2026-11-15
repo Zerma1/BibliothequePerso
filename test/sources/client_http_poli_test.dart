@@ -435,6 +435,26 @@ void main() {
       );
     });
 
+    test('une erreur 403 (baseUrl MangaDex expirée) expose le code 403, sans '
+        'nouvelle tentative', () async {
+      final client = clientAvecReponses(<http.Response>[
+        http.Response('interdit', 403),
+        http.Response('jamais', 200),
+      ]);
+      await expectLater(
+        client.recupererOctetsAvecDetails(
+          Uri.parse('https://noeud.mangadex.network/jeton/data/h/1.png'),
+        ),
+        throwsA(
+          isA<ErreurSource>()
+              .having((e) => e.codeStatut, 'code', 403)
+              .having((e) => e.octetsRecus, 'octets', 8)
+              .having((e) => e.duree, 'durée', isNotNull),
+        ),
+      );
+      expect(requetes, hasLength(1));
+    });
+
     test('le client injecté est bien celui qui est appelé', () async {
       var appele = false;
       final client = ClientHttpPoli(
@@ -447,6 +467,216 @@ void main() {
       );
       await client.recupererTexte(Uri.parse('https://exemple.org/'));
       expect(appele, isTrue);
+    });
+  });
+
+  group('recupererOctetsAvecDetails', () {
+    test('renvoie octets, en-têtes (minuscules), durée et code', () async {
+      final client = clientAvecReponses(<http.Response>[
+        http.Response.bytes(
+          <int>[9, 8, 7],
+          200,
+          headers: <String, String>{'X-Cache': 'HIT', 'content-type': 'x/y'},
+        ),
+      ]);
+      final reponse = await client.recupererOctetsAvecDetails(
+        Uri.parse('https://exemple.org/i.png'),
+        referer: 'https://exemple.org/',
+      );
+      expect(reponse.octets, <int>[9, 8, 7]);
+      expect(reponse.enTetes['x-cache'], 'HIT');
+      expect(reponse.enTetes['content-type'], 'x/y');
+      expect(reponse.codeStatut, 200);
+      expect(reponse.duree.isNegative, isFalse);
+      expect(requetes.single.method, 'GET');
+      expect(requetes.single.headers['referer'], 'https://exemple.org/');
+    });
+
+    test(
+      'nouvellesTentatives: 0 n\'insiste pas après une erreur 500',
+      () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response('panne', 500),
+          http.Response('ok', 200),
+        ]);
+        await expectLater(
+          client.recupererOctetsAvecDetails(
+            Uri.parse('https://exemple.org/i.png'),
+            nouvellesTentatives: 0,
+          ),
+          throwsA(isA<ErreurSource>().having((e) => e.codeStatut, 'code', 500)),
+        );
+        expect(requetes, hasLength(1));
+      },
+    );
+
+    test('nouvellesTentatives est plafonné à la règle du client', () async {
+      final client = clientAvecReponses(<http.Response>[
+        http.Response('panne', 500),
+        http.Response('panne', 500),
+        http.Response('panne', 500),
+        http.Response('jamais', 200),
+      ]);
+      await expectLater(
+        client.recupererOctetsAvecDetails(
+          Uri.parse('https://exemple.org/i.png'),
+          nouvellesTentatives: 10,
+        ),
+        throwsA(isA<ErreurSource>()),
+      );
+      expect(requetes, hasLength(3));
+    });
+
+    test('une erreur réseau donne 0 octet reçu', () async {
+      final client = creerClientTest((requete) async {
+        throw http.ClientException('coupure', requete.url);
+      }, horloge);
+      await expectLater(
+        client.recupererOctetsAvecDetails(
+          Uri.parse('https://exemple.org/i.png'),
+          nouvellesTentatives: 0,
+        ),
+        throwsA(
+          isA<ErreurSource>()
+              .having((e) => e.octetsRecus, 'octets', 0)
+              .having((e) => e.duree, 'durée', isNotNull),
+        ),
+      );
+    });
+  });
+
+  group('envoyerJson', () {
+    test(
+      'envoie un POST JSON avec Content-Type exactement application/json',
+      () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response('{"ok":true}', 200),
+        ]);
+        final texte = await client.envoyerJson(
+          Uri.parse('https://exemple.org/report'),
+          <String, Object>{'url': 'https://a/b', 'success': true, 'bytes': 3},
+          userAgent: userAgentApplication,
+          // Une tentative d'écrasement du Content-Type est ignorée.
+          enTetes: const <String, String>{'Content-Type': 'text/plain'},
+        );
+        expect(texte, '{"ok":true}');
+        final requete = requetes.single;
+        expect(requete.method, 'POST');
+        expect(requete.headers['content-type'], 'application/json');
+        expect(requete.headers['user-agent'], userAgentApplication);
+        expect(requete.headers.containsKey('referer'), isFalse);
+        expect(jsonDecode(requete.body), <String, Object>{
+          'url': 'https://a/b',
+          'success': true,
+          'bytes': 3,
+        });
+      },
+    );
+
+    test(
+      'aucune nouvelle tentative par défaut (POST non idempotent)',
+      () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response('panne', 503),
+          http.Response('ok', 200),
+        ]);
+        await expectLater(
+          client.envoyerJson(Uri.parse('https://exemple.org/report'), 1),
+          throwsA(isA<ErreurSource>().having((e) => e.codeStatut, 'code', 503)),
+        );
+        expect(requetes, hasLength(1));
+      },
+    );
+
+    test('un délai dépassé n\'est pas renvoyé par défaut', () async {
+      var appels = 0;
+      final client = creerClientTest(
+        (requete) {
+          appels++;
+          return Completer<http.Response>().future;
+        },
+        horloge,
+        delaiExpiration: const Duration(milliseconds: 20),
+      );
+      await expectLater(
+        client.envoyerJson(Uri.parse('https://exemple.org/report'), 1),
+        throwsA(
+          isA<ErreurSource>().having(
+            (e) => e.cause,
+            'cause',
+            isA<TimeoutException>(),
+          ),
+        ),
+      );
+      expect(appels, 1);
+    });
+
+    test('nouvelles tentatives possibles si l\'appelant les demande', () async {
+      final client = clientAvecReponses(<http.Response>[
+        http.Response('panne', 503),
+        http.Response('ok', 200),
+      ]);
+      expect(
+        await client.envoyerJson(
+          Uri.parse('https://exemple.org/report'),
+          1,
+          nouvellesTentatives: 1,
+        ),
+        'ok',
+      );
+      expect(requetes, hasLength(2));
+    });
+
+    test('respecte le délai par domaine partagé avec les GET', () async {
+      final client = clientAvecReponses(<http.Response>[
+        http.Response('a', 200),
+        http.Response('b', 200),
+      ]);
+      await client.recupererTexte(Uri.parse('https://exemple.org/a'));
+      await client.envoyerJson(Uri.parse('https://exemple.org/report'), 1);
+      expect(horloge.attentes, <Duration>[const Duration(seconds: 1)]);
+    });
+
+    test(
+      'un 429 repousse le créneau du domaine sans renvoyer le POST',
+      () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response(
+            'trop',
+            429,
+            headers: <String, String>{'retry-after': '10'},
+          ),
+          http.Response('ok', 200),
+        ]);
+        await expectLater(
+          client.envoyerJson(Uri.parse('https://exemple.org/report'), 1),
+          throwsA(isA<ErreurSource>().having((e) => e.codeStatut, 'code', 429)),
+        );
+        expect(requetes, hasLength(1));
+        await client.recupererTexte(Uri.parse('https://exemple.org/x'));
+        expect(horloge.attentes, <Duration>[const Duration(seconds: 10)]);
+      },
+    );
+
+    test(
+      'un corps impossible à encoder lève une ErreurSource sans requête',
+      () async {
+        final client = clientAvecReponses(<http.Response>[]);
+        await expectLater(
+          client.envoyerJson(Uri.parse('https://exemple.org/report'), Object()),
+          throwsA(isA<ErreurSource>()),
+        );
+        expect(requetes, isEmpty);
+      },
+    );
+
+    test('une URL invalide lève une ErreurSource sans requête', () async {
+      final client = clientAvecReponses(<http.Response>[]);
+      await expectLater(
+        client.envoyerJson(Uri.parse('ftp://exemple.org/'), 1),
+        throwsA(isA<ErreurSource>()),
+      );
+      expect(requetes, isEmpty);
     });
   });
 }

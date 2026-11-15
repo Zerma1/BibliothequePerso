@@ -1,6 +1,10 @@
+import 'dart:io';
+
+import 'package:bibliotheque_perso/donnees/base_de_donnees.dart';
 import 'package:bibliotheque_perso/donnees/migrations.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'outils_tests_donnees.dart';
@@ -16,8 +20,8 @@ void main() {
     await base.close();
   });
 
-  test('la version du schéma est 1 et correspond à la base ouverte', () async {
-    expect(versionSchema, 1);
+  test('la version du schéma est 2 et correspond à la base ouverte', () async {
+    expect(versionSchema, 2);
     expect(await base.getVersion(), versionSchema);
   });
 
@@ -59,6 +63,95 @@ void main() {
     expect(lignes[1]['est_systeme'], 1);
     expect(lignes[1]['ordre'], ordreListeSuivis);
   });
+
+  test('la migration 2 crée la table telechargements et son index', () async {
+    final tables = await base.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      <Object?>['telechargements'],
+    );
+    expect(tables, hasLength(1));
+    final index = await base.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+      <Object?>['index_telechargements_statut'],
+    );
+    expect(index, hasLength(1));
+  });
+
+  test(
+    'la migration 1 → 2 conserve les données d\'une base existante',
+    () async {
+      // Une base en mémoire disparaît à la fermeture : pour tester une vraie
+      // mise à niveau (onUpgrade), il faut un fichier, ici dans un dossier
+      // temporaire supprimé à la fin.
+      final dossier = await Directory.systemTemp.createTemp('migration_test_');
+      final chemin = p.join(dossier.path, 'version1.db');
+      try {
+        final version1 = await databaseFactoryFfi.openDatabase(
+          chemin,
+          options: OpenDatabaseOptions(
+            version: 1,
+            onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+            // Uniquement la migration 1, comme une installation d'avant
+            // l'étape 5.
+            onCreate: (db, version) => appliquerMigrations(db, 0, 1),
+          ),
+        );
+        final idSource = await version1.insert('sources', <String, Object?>{
+          'nom': 'MangaDex',
+          'url_base': 'https://mangadex.org',
+          'type_source': 'mangaDex',
+        });
+        final idTitre = await version1.insert('titres', <String, Object?>{
+          'id_source': idSource,
+          'url_titre': 'https://mangadex.org/title/abc',
+          'nom': 'Titre existant',
+          'type_titre': 'manga',
+        });
+        final idChapitre = await version1.insert('chapitres', <String, Object?>{
+          'id_titre': idTitre,
+          'url_chapitre': 'https://mangadex.org/chapter/1',
+          'nom': 'Chapitre 1',
+          'numero': 1.0,
+          'langue': 'en',
+          'est_lu': 1,
+        });
+        expect(await version1.getVersion(), 1);
+        await version1.close();
+
+        // Réouverture avec le code actuel : onUpgrade applique la migration 2.
+        final version2 = await ouvrirBaseDeDonnees(
+          chemin: chemin,
+          fabrique: databaseFactoryFfi,
+        );
+        try {
+          expect(await version2.getVersion(), 2);
+          final chapitres = await version2.query('chapitres');
+          expect(chapitres.single['nom'], 'Chapitre 1');
+          expect(chapitres.single['est_lu'], 1);
+          expect(
+            (await version2.query('titres')).single['nom'],
+            'Titre existant',
+          );
+          expect(await version2.query('listes'), hasLength(2));
+          expect(await version2.query('telechargements'), isEmpty);
+
+          // La nouvelle table est utilisable avec les données existantes.
+          await version2.insert('telechargements', <String, Object?>{
+            'id_chapitre': idChapitre,
+            'date_ajout': 0,
+            'date_maj': 0,
+          });
+          final ligne = (await version2.query('telechargements')).single;
+          expect(ligne['statut'], 'en_attente');
+          expect(ligne['nombre_pages_faites'], 0);
+        } finally {
+          await version2.close();
+        }
+      } finally {
+        await dossier.delete(recursive: true);
+      }
+    },
+  );
 
   test('un titre ne peut pas référencer une source inexistante', () async {
     await expectLater(

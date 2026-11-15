@@ -35,6 +35,32 @@ class LimiteRequetes {
   final Duration delaiMinimal;
 }
 
+/// Octets d'une réponse réussie, avec les informations utiles pour mesurer le
+/// téléchargement (signalement MangaDex@Home : cache, taille, durée).
+class ReponseOctets {
+  /// Crée le résultat d'un téléchargement réussi.
+  const ReponseOctets({
+    required this.octets,
+    required this.enTetes,
+    required this.duree,
+    required this.codeStatut,
+  });
+
+  /// Corps brut de la réponse.
+  final Uint8List octets;
+
+  /// En-têtes de la réponse, noms en minuscules (normalisés par
+  /// [ClientHttpPoli]), par exemple `x-cache` ou `content-type`.
+  final Map<String, String> enTetes;
+
+  /// Durée de la requête réussie, du départ à la réception complète du corps
+  /// (hors attente du créneau du domaine et hors tentatives précédentes).
+  final Duration duree;
+
+  /// Code de statut HTTP (2xx).
+  final int codeStatut;
+}
+
 /// Client HTTP qui respecte la charge des sites lus.
 ///
 /// Il applique les règles de PLAYBOOK.md section 6 :
@@ -46,7 +72,8 @@ class LimiteRequetes {
 ///   domaine, plus les éventuelles [LimiteRequetes] plus strictes ;
 /// - délai d'expiration de [delaiExpiration] par tentative ;
 /// - au plus [nombreNouvellesTentatives] nouvelles tentatives, seulement sur
-///   une erreur réseau, un délai dépassé, une réponse 5xx ou 429 ;
+///   une erreur réseau, un délai dépassé, une réponse 5xx ou 429 (aucune par
+///   défaut pour un `POST`, voir [envoyerJson]) ;
 /// - tout échec lève une [ErreurSource] avec l'URL et la cause.
 class ClientHttpPoli {
   /// Crée le client.
@@ -102,12 +129,13 @@ class ClientHttpPoli {
     Map<String, String> enTetes = const <String, String>{},
     LimiteRequetes? limite,
   }) async {
-    final reponse = await _executer(
+    final (reponse, _) = await _executer(
       uri,
       referer: referer,
       userAgent: userAgent,
       enTetes: enTetes,
       limite: limite,
+      nouvellesTentatives: nombreNouvellesTentatives,
     );
     try {
       return _decoderTexte(reponse);
@@ -132,25 +160,144 @@ class ClientHttpPoli {
     Map<String, String> enTetes = const <String, String>{},
     LimiteRequetes? limite,
   }) async {
-    final reponse = await _executer(
+    final reponse = await recupererOctetsAvecDetails(
       uri,
       referer: referer,
       userAgent: userAgent,
       enTetes: enTetes,
       limite: limite,
     );
-    return reponse.bodyBytes;
+    return reponse.octets;
+  }
+
+  /// Comme [recupererOctets], mais renvoie aussi les en-têtes de la réponse
+  /// et la durée de la requête réussie ([ReponseOctets]).
+  ///
+  /// [nouvellesTentatives] remplace, pour cet appel, le nombre de nouvelles
+  /// tentatives (plafonné à [nombreNouvellesTentatives]). Pour une image
+  /// servie par MangaDex@Home, passer `0` : la doc demande de signaler
+  /// chaque échec puis de redemander une adresse de serveur
+  /// (`/at-home/server`) plutôt que d'insister sur le même nœud.
+  ///
+  /// En cas d'échec, l'[ErreurSource] levée porte [ErreurSource.codeStatut],
+  /// [ErreurSource.octetsRecus] et [ErreurSource.duree] de la dernière
+  /// tentative.
+  Future<ReponseOctets> recupererOctetsAvecDetails(
+    Uri uri, {
+    String? referer,
+    String? userAgent,
+    Map<String, String> enTetes = const <String, String>{},
+    LimiteRequetes? limite,
+    int? nouvellesTentatives,
+  }) async {
+    final (reponse, duree) = await _executer(
+      uri,
+      referer: referer,
+      userAgent: userAgent,
+      enTetes: enTetes,
+      limite: limite,
+      nouvellesTentatives: _plafonnerTentatives(nouvellesTentatives),
+    );
+    return ReponseOctets(
+      octets: reponse.bodyBytes,
+      // `IOClient` met déjà les noms en minuscules, mais pas tous les clients
+      // (MockClient, clients web) : on normalise pour une lecture fiable.
+      enTetes: Map<String, String>.unmodifiable(<String, String>{
+        for (final entree in reponse.headers.entries)
+          entree.key.toLowerCase(): entree.value,
+      }),
+      duree: duree,
+      codeStatut: reponse.statusCode,
+    );
+  }
+
+  /// Envoie [corps] encodé en JSON par `POST` vers [uri] et renvoie le corps
+  /// de la réponse décodé en texte.
+  ///
+  /// L'en-tête `Content-Type` vaut exactement `application/json` (le corps
+  /// est transmis en octets UTF-8 : avec un corps texte, `package:http`
+  /// ajouterait « ; charset=utf-8 », or MangaDex exige « exactly
+  /// application/json » pour son signalement).
+  ///
+  /// Mêmes règles que les lectures : User-Agent, créneau par domaine (et
+  /// [limite]), délai d'expiration, [ErreurSource] en cas d'échec, créneau du
+  /// domaine repoussé après un 429.
+  ///
+  /// Nouvelles tentatives : **aucune par défaut**. Un `POST` n'est pas
+  /// idempotent : après un délai dépassé ou une coupure, on ne sait pas si
+  /// le serveur a déjà traité la requête, et la renvoyer pourrait la
+  /// dupliquer. L'appelant qui sait que son envoi est sans risque peut
+  /// passer [nouvellesTentatives] (plafonné à [nombreNouvellesTentatives]).
+  /// Le signalement MangaDex@Home n'en a pas besoin : c'est une mesure
+  /// statistique, une mesure perdue vaut mieux qu'une mesure comptée deux
+  /// fois.
+  Future<String> envoyerJson(
+    Uri uri,
+    Object? corps, {
+    String? userAgent,
+    Map<String, String> enTetes = const <String, String>{},
+    LimiteRequetes? limite,
+    int nouvellesTentatives = 0,
+  }) async {
+    final List<int> octetsCorps;
+    try {
+      octetsCorps = utf8.encode(jsonEncode(corps));
+    } on JsonUnsupportedObjectError catch (erreur) {
+      throw ErreurSource(
+        uri.toString(),
+        'Corps de requête impossible à encoder en JSON',
+        cause: erreur,
+      );
+    }
+    final (reponse, _) = await _executer(
+      uri,
+      referer: null,
+      userAgent: userAgent,
+      enTetes: <String, String>{
+        ...enTetes,
+        // Placé après [enTetes] : la valeur exacte ne peut pas être écrasée.
+        'Content-Type': 'application/json',
+      },
+      limite: limite,
+      nouvellesTentatives: _plafonnerTentatives(nouvellesTentatives),
+      corpsPost: octetsCorps,
+    );
+    try {
+      return _decoderTexte(reponse);
+    } on FormatException catch (erreur) {
+      throw ErreurSource(
+        uri.toString(),
+        'Réponse illisible (encodage du texte)',
+        cause: erreur,
+        codeStatut: reponse.statusCode,
+      );
+    }
   }
 
   /// Ferme le client HTTP sous-jacent (à appeler à la fermeture de l'app).
   void fermer() => _client.close();
 
-  Future<http.Response> _executer(
+  /// Ramène [demande] entre 0 et [nombreNouvellesTentatives] (`null` =
+  /// valeur du client) : un appelant ne peut pas dépasser la règle du
+  /// PLAYBOOK (2 nouvelles tentatives au maximum).
+  int _plafonnerTentatives(int? demande) {
+    if (demande == null || demande > nombreNouvellesTentatives) {
+      return nombreNouvellesTentatives;
+    }
+    return demande < 0 ? 0 : demande;
+  }
+
+  /// Exécute la requête (GET, ou POST si [corpsPost] est fourni) avec les
+  /// règles du client, et renvoie la réponse 2xx avec la durée de la
+  /// tentative réussie.
+  Future<(http.Response, Duration)> _executer(
     Uri uri, {
     required String? referer,
     required String? userAgent,
     required Map<String, String> enTetes,
     required LimiteRequetes? limite,
+    required int nouvellesTentatives,
+    List<int>? corpsPost,
   }) async {
     final url = uri.toString();
     // Seuls http et https ont un sens ici ; un hôte vide rendrait la règle
@@ -167,11 +314,7 @@ class ClientHttpPoli {
 
     final hote = uri.host.toLowerCase();
     ErreurSource? derniereErreur;
-    for (
-      var tentative = 0;
-      tentative <= nombreNouvellesTentatives;
-      tentative++
-    ) {
+    for (var tentative = 0; tentative <= nouvellesTentatives; tentative++) {
       await _reserverCreneau(hote, limite);
 
       final attenteAvantNouvelleTentative =
@@ -179,18 +322,26 @@ class ClientHttpPoli {
       // Après un 429, l'attente passe par le créneau du domaine (partagé par
       // toutes les requêtes) plutôt que par une attente propre à celle-ci.
       var attenteViaCreneau = false;
+      // Chronomètre monotone : la durée mesurée sert au signalement
+      // MangaDex@Home (« complete retrieval (not TTFB) ») ; `http.get` et
+      // `http.post` ne rendent la main qu'une fois le corps entier reçu.
+      final chrono = Stopwatch()..start();
       try {
-        final reponse = await _client
-            .get(uri, headers: entetesRequete)
-            .timeout(delaiExpiration);
+        final envoi = corpsPost == null
+            ? _client.get(uri, headers: entetesRequete)
+            : _client.post(uri, headers: entetesRequete, body: corpsPost);
+        final reponse = await envoi.timeout(delaiExpiration);
+        chrono.stop();
         final code = reponse.statusCode;
         if (code >= 200 && code < 300) {
-          return reponse;
+          return (reponse, chrono.elapsed);
         }
         derniereErreur = ErreurSource(
           url,
           'Réponse HTTP $code : ${_extrait(reponse)}',
           codeStatut: code,
+          octetsRecus: reponse.bodyBytes.length,
+          duree: chrono.elapsed,
         );
         if (code == codeHttpTropDeRequetes) {
           // Le serveur dit combien de temps patienter : on lui obéit, sauf si
@@ -218,20 +369,30 @@ class ClientHttpPoli {
           throw derniereErreur;
         }
       } on TimeoutException catch (erreur) {
+        chrono.stop();
         derniereErreur = ErreurSource(
           url,
           'Délai dépassé (${delaiExpiration.inSeconds} s)',
           cause: erreur,
+          octetsRecus: 0,
+          duree: chrono.elapsed,
         );
       } on ErreurSource {
         rethrow;
       } on Exception catch (erreur) {
+        chrono.stop();
         // http.ClientException, SocketException, HandshakeException… : erreurs
         // réseau souvent passagères, qui justifient une nouvelle tentative.
-        derniereErreur = ErreurSource(url, 'Erreur réseau', cause: erreur);
+        derniereErreur = ErreurSource(
+          url,
+          'Erreur réseau',
+          cause: erreur,
+          octetsRecus: 0,
+          duree: chrono.elapsed,
+        );
       }
 
-      if (tentative < nombreNouvellesTentatives && !attenteViaCreneau) {
+      if (tentative < nouvellesTentatives && !attenteViaCreneau) {
         await _attendre(attenteAvantNouvelleTentative);
       }
     }

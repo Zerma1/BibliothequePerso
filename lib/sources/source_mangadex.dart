@@ -290,10 +290,13 @@ class SourceMangaDex implements SourceSite {
   /// (docs/04-chapter/retrieving-chapter).
   ///
   /// LIMITE : `baseUrl` n'est garanti que 15 minutes (« We guarantee 15
-  /// minutes ») ; passé ce délai, il faut rappeler cette méthode.
-  /// LIMITE : la doc demande de signaler chaque image chargée depuis un
-  /// serveur MangaDex@Home à `POST https://api.mangadex.network/report` ; ce
-  /// signalement relève du téléchargement (service), pas de cet adaptateur.
+  /// minutes ») ; passé ce délai, le serveur d'images répond 403
+  /// (`ErreurSource.codeStatut == 403`) et il faut rappeler cette méthode.
+  /// Signalement : la doc demande de signaler chaque image chargée depuis un
+  /// serveur MangaDex@Home ; le téléchargement (service) s'en charge avec
+  /// `SignalementMangaDex` (signalement_mangadex.dart), qui reconnaît ces
+  /// images avec `SignalementMangaDex.estServeurMangaDexAtHome`.
+  /// Qualité : [qualiteReduite] choisit les images `data-saver`.
   @override
   Future<ContenuChapitre> recupererContenu(String urlChapitre) async {
     final id = extraireIdChapitre(urlChapitre);
@@ -559,6 +562,42 @@ class SourceMangaDex implements SourceSite {
       return const <String>[];
     }
     return _variantesRegionales[l] ?? <String>[l];
+  }
+
+  /// Découpe une préférence de langues `Source.langueParDefaut` (codes ISO
+  /// 639-1 séparés par des virgules, par ordre de préférence, ex. « fr,en »).
+  ///
+  /// Les espaces sont ignorés, les codes vides aussi, la casse est ramenée
+  /// en minuscules et les doublons sont retirés (le premier gardé fixe
+  /// l'ordre). « fr, en ,,FR » → `[fr, en]` ; « » → `[]`.
+  static List<String> languesIsoDepuisPreference(String preference) {
+    final codes = <String>[];
+    for (final morceau in preference.split(',')) {
+      final code = morceau.trim().toLowerCase();
+      if (code.isNotEmpty && !codes.contains(code)) {
+        codes.add(code);
+      }
+    }
+    return codes;
+  }
+
+  /// Codes `translatedLanguage[]` à demander pour une préférence de langues
+  /// (voir [languesIsoDepuisPreference]) : chaque code passe par
+  /// [languesApiDepuisIso], puis les résultats sont fusionnés dans l'ordre,
+  /// sans doublon.
+  ///
+  /// « fr,en » → `[fr, en]` ; « pt,en » → `[pt, pt-br, en]` ; valeur vide →
+  /// liste vide (toutes les langues).
+  static List<String> languesDepuisPreference(String preference) {
+    final langues = <String>[];
+    for (final iso in languesIsoDepuisPreference(preference)) {
+      for (final code in languesApiDepuisIso(iso)) {
+        if (!langues.contains(code)) {
+          langues.add(code);
+        }
+      }
+    }
+    return langues;
   }
 
   /// Récupère [uri] en JSON et vérifie le champ `result` (api.yaml :
