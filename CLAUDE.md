@@ -64,5 +64,14 @@ limité à son scope :
 
 ## État actuel (2026-11-15)
 
-Cadrage terminé, **aucun code encore** : prochaine étape = étape 0 de la feuille de route
-(`flutter create` par `integrateur-plateformes`). Dépôt Git avec les branches `main` et `dev`.
+Étape 0 faite (projet Flutter créé, version 0.1.0+1) : prochaine étape = étape 1 de la feuille de route
+(modèles, base SQLite, dépôts). Dépôt Git avec les branches `main` et `dev`.
+
+## Pièges connus
+
+- Flutter 3.50 : les widgets Material s'importent avec `package:material_ui/material_ui.dart`
+  (et non `package:flutter/material.dart`).
+- `flutter build windows` exige le **mode développeur** de Windows (liens symboliques des
+  plugins).
+- Les sous-agents ne voient pas toujours `D:\dev\flutter\bin` dans leur PATH : l'ajouter en
+  tête de commande si `flutter` est introuvable.

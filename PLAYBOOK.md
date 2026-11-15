@@ -61,6 +61,7 @@ deux scopes. Les autres agents la lisent sans la modifier.
 | Besoin | Choix | Paquet pub.dev |
 |--------|-------|----------------|
 | Interface multiplateforme | Flutter (Dart) | SDK |
+| Widgets Material (`MaterialApp`, `Scaffold`…) | imposé par le modèle Flutter 3.50 | `material_ui` |
 | Requêtes HTTP | client HTTP officiel | `http` |
 | Analyse HTML | parseur DOM avec sélecteurs CSS | `html` |
 | Base de données | SQLite | `sqflite` (Android), `sqflite_common_ffi` (Windows, Linux) |

@@ -1,0 +1,49 @@
+name: bibliotheque_perso
+description: "Bibliothèque personnelle multiplateforme qui regroupe les livres, mangas et manhwas suivis sur plusieurs sites de lecture."
+# Application privée : empêche toute publication accidentelle sur pub.dev.
+publish_to: 'none'
+
+# Format X.Y.Z+N (voir PLAYBOOK.md section 12) : N est le numéro de build, qui doit
+# augmenter à chaque version publiée sur Android (versionCode).
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.14.0
+
+# Seuls les paquets listés dans PLAYBOOK.md (section 3) sont autorisés.
+# Tout nouveau paquet doit d'abord être validé par l'orchestrateur et le client.
+dependencies:
+  flutter:
+    sdk: flutter
+  # Widgets Material (MaterialApp, Scaffold…) : avec Flutter 3.50, le modèle
+  # `flutter create` les importe depuis ce paquet et non plus depuis le SDK.
+  material_ui: ^1.1.0
+
+  # Requêtes HTTP (utilisé uniquement par ClientHttpPoli).
+  http: ^1.6.0
+  # Analyse HTML avec sélecteurs CSS.
+  html: ^0.15.7
+  # SQLite : sqflite sur Android, sqflite_common_ffi sur Windows et Linux.
+  sqflite: ^2.4.6
+  sqflite_common_ffi: ^2.4.7
+  # Dossiers système de l'application et manipulation de chemins.
+  path_provider: ^2.1.6
+  path: ^1.9.1
+  # Archives .zip des chapitres téléchargés.
+  archive: ^4.7.1
+  # Gestion d'état (ChangeNotifier).
+  provider: ^6.1.5+1
+  # Tâche de fond périodique, initialisée uniquement sur Android.
+  workmanager: ^0.10.10
+  # Ouverture d'un site dans le navigateur.
+  url_launcher: ^6.3.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  # Règles d'analyse recommandées, complétées dans analysis_options.yaml.
+  flutter_lints: ^6.0.0
+
+flutter:
+  # Embarque la police d'icônes Material (classe Icons).
+  uses-material-design: true

@@ -1,0 +1,32 @@
+# Configuration de l'analyseur Dart (`flutter analyze`).
+# Objectif (PLAYBOOK.md section 9) : 0 erreur et 0 avertissement avant toute livraison.
+
+# Base : règles recommandées pour les applications Flutter.
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  # Le code natif généré des plateformes n'est pas du Dart du projet.
+  exclude:
+    - build/**
+    - android/**
+    - windows/**
+    - linux/**
+
+  # Pas de `dynamic` implicite : chaque conversion doit être explicite (`as` vérifié).
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+
+linter:
+  rules:
+    # Pas de print : utiliser debugPrint ou le journal applicatif.
+    avoid_print: true
+    # Toute API publique doit avoir un commentaire de documentation ///.
+    public_member_api_docs: true
+    # Constructeurs const quand c'est possible (moins de reconstructions).
+    prefer_const_constructors: true
+    # Variables locales finales quand elles ne sont pas réaffectées.
+    prefer_final_locals: true
+    # Types de retour toujours déclarés.
+    always_declare_return_types: true
