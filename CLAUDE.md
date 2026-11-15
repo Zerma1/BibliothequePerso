@@ -47,6 +47,13 @@ limité à son scope :
 - Ne jamais inventer d'API : en cas de doute, commentaire `// LIMITE :`.
 - `flutter analyze` doit donner 0 problème avant toute livraison.
 
+## Branches et versions (détail : PLAYBOOK.md section 12)
+
+- **On code uniquement sur `dev`**, et on y teste en local. `main` sert seulement à publier
+  les versions validées par le client. Ne jamais commiter sur `main`.
+- Versions au format `X.Y.Z` : X = rupture, Y = nouvelle fonctionnalité, Z = correction.
+  Dans `pubspec.yaml` : `version: X.Y.Z+N`. Étiquette `vX.Y.Z` sur `main` à chaque version.
+
 ## Environnement
 
 - Windows 11, PowerShell, IntelliJ (plugins Dart + Flutter). Flutter SDK dans `D:\dev\flutter`,
@@ -58,4 +65,4 @@ limité à son scope :
 ## État actuel (2026-11-15)
 
 Cadrage terminé, **aucun code encore** : prochaine étape = étape 0 de la feuille de route
-(`flutter create` par `integrateur-plateformes`). Le dossier n'est pas encore un dépôt Git.
+(`flutter create` par `integrateur-plateformes`). Dépôt Git avec les branches `main` et `dev`.

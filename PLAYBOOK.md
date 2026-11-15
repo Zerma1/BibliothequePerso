@@ -281,3 +281,29 @@ délais de `ClientHttpPoli` et ne contourne aucune protection d'accès (connexio
 | 7 | Compilation et livraison (.exe, Linux, .apk) | integrateur-plateformes |
 
 Chaque étape se termine par une relecture (`relecteur-code`) et une validation du client.
+
+---
+
+## 12. Branches et versions
+
+### Branches Git
+| Branche | Rôle |
+|---------|------|
+| `dev` | **Tout le développement se fait ici.** On y code, on y teste en local (`flutter analyze`, `flutter test`, lancement de l'application). |
+| `main` | **Réservée au déploiement des versions.** On n'y code jamais directement. |
+
+- Aucun agent ne commite sur `main`.
+- Une version passe de `dev` à `main` seulement quand le client l'a validée et que
+  `flutter analyze` et `flutter test` ne signalent aucun problème.
+- La fusion vers `main` est suivie d'une étiquette Git `vX.Y.Z` (exemple : `v1.4.2`).
+
+### Numéro de version : `X.Y.Z`
+| Partie | Quand l'augmenter | Exemple |
+|--------|-------------------|---------|
+| **X** (majeure) | Changement incompatible avec les versions précédentes : le fonctionnement global change et les habitudes ou les données doivent être adaptées. Y et Z repartent à 0. | `1.4.2` → `2.0.0` |
+| **Y** (mineure) | Nouvelle fonctionnalité qui ne casse rien de l'existant. Z repart à 0. | `1.4.2` → `1.5.0` |
+| **Z** (corrective) | Correction d'un bug ou d'une faille, sans nouveauté ni rupture. | `1.4.2` → `1.4.3` |
+
+- La version est écrite dans `pubspec.yaml` sous la forme `version: X.Y.Z+N`, où `N` est le
+  numéro de build. Flutter l'exige, et Android a besoin qu'il augmente à chaque version publiée.
+- Tant que l'application n'a pas eu de première version stable, on reste en `0.Y.Z`.
