@@ -2,6 +2,52 @@
 /// valeur magique).
 library;
 
+/// Numéro de version affiché (« À propos », sous la navigation).
+///
+/// Doit être identique à la version de `pubspec.yaml` sans le numéro de
+/// build (`X.Y.Z` de `version: X.Y.Z+N`) : un test le vérifie. Recopié ici
+/// car lire la version à l'exécution demanderait un paquet supplémentaire.
+const String versionApplication = '0.1.0';
+
+// ---------------------------------------------------------------- Chapitres
+
+/// Parts de largeur des colonnes de la liste des chapitres (nom, langue,
+/// date, hors-ligne, lu) : proportions plutôt que pixels, pour suivre la
+/// largeur de l'écran.
+const int flexColonneNom = 6;
+
+/// Part de largeur de la colonne de la langue.
+const int flexColonneLangue = 2;
+
+/// Part de largeur de la colonne de la date.
+const int flexColonneDate = 3;
+
+/// Part de largeur de la colonne de l'état hors-ligne.
+const int flexColonneHorsLigne = 2;
+
+/// Part de largeur de la colonne « lu ».
+const int flexColonneLu = 2;
+
+// ------------------------------------------------------------------ Lecteur
+
+/// Agrandissement maximal du lecteur.
+const double zoomMaxLecteur = 4;
+
+/// Pas des boutons de zoom du lecteur.
+const double pasZoomLecteur = 0.5;
+
+/// Largeur maximale des pages et du texte dans le lecteur : sur un grand
+/// écran, une page de webtoon étirée sur toute la largeur serait illisible.
+const double largeurMaxLecture = 900;
+
+/// Hauteur provisoire d'une page pas encore lue, en part de la hauteur de
+/// l'écran : la liste garde une taille plausible pendant le chargement.
+const double fractionHauteurPageProvisoire = 1.2;
+
+/// Interligne du texte d'un roman dans le lecteur (plus aéré que le texte
+/// de l'interface, pour une lecture longue).
+const double interligneLecture = 1.6;
+
 /// Largeur (en pixels logiques) à partir de laquelle la navigation passe de
 /// la barre du bas au `NavigationRail` latéral (PLAYBOOK.md section 8).
 const double largeurMinNavigationLaterale = 600;

@@ -41,10 +41,6 @@ class PastilleCategorie extends StatelessWidget {
     if (action == null) {
       return Chip(label: libelle, visualDensity: VisualDensity.compact);
     }
-    return FilterChip(
-      label: libelle,
-      selected: estChoisie,
-      onSelected: action,
-    );
+    return FilterChip(label: libelle, selected: estChoisie, onSelected: action);
   }
 }

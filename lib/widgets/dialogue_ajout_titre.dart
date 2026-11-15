@@ -65,9 +65,7 @@ class _EtatDialogueAjoutTitre extends State<DialogueAjoutTitre> {
 
   void _cocher(EtatBibliotheque etat, int idListe, bool coche) {
     setState(() {
-      final choisies = _idsListesChoisies ??= <int>{
-        ...etat.idsListesParDefaut,
-      };
+      final choisies = _idsListesChoisies ??= <int>{...etat.idsListesParDefaut};
       if (coche) {
         choisies.add(idListe);
       } else {

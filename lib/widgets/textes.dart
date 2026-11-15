@@ -3,7 +3,10 @@
 library;
 
 import '../etat/description_erreur.dart';
+import '../etat/etat_parametres.dart';
+import '../etat/outils_chapitres.dart';
 import '../modeles/source.dart';
+import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
 
 /// Textes de l'interface. Les textes qui dépendent d'une valeur sont des
@@ -19,6 +22,23 @@ abstract final class Textes {
 
   /// Onglet des sites configurés.
   static const String ongletSources = 'Sources';
+
+  /// Onglet de la file de téléchargement.
+  static const String ongletTelechargements = 'Téléchargements';
+
+  /// Onglet des paramètres.
+  static const String ongletParametres = 'Paramètres';
+
+  /// Numéro de version court, affiché sous la navigation.
+  static String versionCourte(String version) => 'v$version';
+
+  /// Numéro de version complet (« À propos »).
+  static String versionComplete(String version) => 'Version $version';
+
+  /// Libellé accessible du badge des téléchargements actifs.
+  static String telechargementsActifs(int nombre) => nombre <= 1
+      ? '$nombre téléchargement en cours'
+      : '$nombre téléchargements en cours';
 
   // ---------------------------------------------------------------- Communs
 
@@ -65,6 +85,18 @@ abstract final class Textes {
   static const String erreurInattendue =
       'Une erreur inattendue s\'est produite.';
 
+  /// Nom de site laissé vide.
+  static const String erreurNomVide = 'Donnez un nom au site.';
+
+  /// Suppression d'un site refusée : des titres en viennent encore.
+  static String erreurSiteAvecTitres(int nombre) {
+    final titres = nombre <= 1
+        ? 'un titre de votre bibliothèque vient'
+        : '$nombre titres de votre bibliothèque viennent';
+    return 'Impossible de supprimer ce site : $titres encore de lui. '
+        'Supprimez d\'abord ces titres, ou désactivez simplement le site.';
+  }
+
   /// Message affichable pour une [erreur] classée par un état.
   static String messageErreur(DescriptionErreur erreur) {
     final detail = erreur.detail.trim();
@@ -82,6 +114,10 @@ abstract final class Textes {
         return erreurAdresseVide;
       case NatureErreur.introuvable:
         return erreurIntrouvable;
+      case NatureErreur.nomVide:
+        return erreurNomVide;
+      case NatureErreur.siteAvecTitres:
+        return erreurSiteAvecTitres(int.tryParse(detail) ?? 0);
       case NatureErreur.inattendue:
         return avecDetail(erreurInattendue);
     }
@@ -401,6 +437,388 @@ abstract final class Textes {
         return 'Autre';
     }
   }
+
+  // ------------------------------------------- Titre : chapitres hors-ligne
+
+  /// En-tête de la liste des chapitres regroupés par numéro.
+  static String enTeteNumeros(int nombre, int nonLus) =>
+      'Chapitres : $nombre (${chapitresNonLus(nonLus)})';
+
+  /// Légende de la colonne du numéro et du nom.
+  static const String colonneChapitre = 'N° / nom';
+
+  /// Légende de la colonne de la langue.
+  static const String colonneLangue = 'Langue';
+
+  /// Légende de la colonne de la date.
+  static const String colonneDate = 'Date';
+
+  /// Légende de la colonne de l'état hors-ligne.
+  static const String colonneHorsLigne = 'Hors-ligne';
+
+  /// Légende de la colonne de lecture.
+  static const String colonneLu = 'Lu';
+
+  /// Titre de la légende des icônes.
+  static const String legende = 'Légende';
+
+  /// Explication des appuis sur une ligne de chapitre.
+  static const String aideAppuiChapitre =
+      'Touchez un chapitre téléchargé pour le lire. Un chapitre non '
+      'téléchargé propose de le télécharger ou de l\'ouvrir sur le site.';
+
+  /// Nom d'un état hors-ligne (légende, info-bulle).
+  static String libelleStatutHorsLigne(StatutHorsLigne statut) {
+    switch (statut) {
+      case StatutHorsLigne.telecharge:
+        return 'Téléchargé';
+      case StatutHorsLigne.enFile:
+        return 'En file d\'attente';
+      case StatutHorsLigne.enCours:
+        return 'Téléchargement en cours';
+      case StatutHorsLigne.echec:
+        return 'Échec du téléchargement';
+      case StatutHorsLigne.nonTelecharge:
+        return 'Non téléchargé (en ligne seulement)';
+    }
+  }
+
+  /// Info-bulle de l'état hors-ligne d'un chapitre, avec l'action proposée.
+  static String infoBulleHorsLigne(EtatHorsLigne etat) {
+    switch (etat.statut) {
+      case StatutHorsLigne.telecharge:
+        return 'Téléchargé — appuyer pour supprimer le téléchargement';
+      case StatutHorsLigne.enFile:
+        return 'En file d\'attente — appuyer pour retirer de la file';
+      case StatutHorsLigne.enCours:
+        return 'Téléchargement en cours (${pourcentage(etat.progression)}) '
+            '— appuyer pour annuler';
+      case StatutHorsLigne.echec:
+        final message = etat.messageErreur;
+        return 'Échec${message == null ? '' : ' : $message'} '
+            '— appuyer pour réessayer';
+      case StatutHorsLigne.nonTelecharge:
+        return 'Non téléchargé — appuyer pour télécharger';
+    }
+  }
+
+  /// Progression en pourcentage (« 45 % », « … » si inconnue).
+  static String pourcentage(double? progression) =>
+      progression == null ? '…' : '${(progression * 100).round()} %';
+
+  /// Nombre d'autres versions d'un même numéro.
+  static String autresVersions(int nombre) =>
+      nombre <= 1 ? '1 autre version' : '$nombre autres versions';
+
+  /// Action : lire un chapitre.
+  static const String lire = 'Lire';
+
+  /// Action : télécharger un chapitre.
+  static const String telecharger = 'Télécharger';
+
+  /// Action : supprimer l'archive d'un chapitre.
+  static const String supprimerTelechargement = 'Supprimer le téléchargement';
+
+  /// Action : retirer un chapitre de la file.
+  static const String retirerDeLaFile = 'Retirer de la file';
+
+  /// Action : relancer un téléchargement en échec.
+  static const String reessayerTelechargement = 'Réessayer le téléchargement';
+
+  /// Question avant la suppression d'une archive.
+  static String confirmationSuppressionTelechargement(String nomChapitre) =>
+      'Supprimer le fichier hors-ligne de « $nomChapitre » ?\n'
+      'Le chapitre reste dans la liste. Pour un titre favori ou suivi, il '
+      'pourra être téléchargé de nouveau automatiquement.';
+
+  /// Chapitre ajouté à la file.
+  static const String telechargementAjoute =
+      'Chapitre ajouté à la file de téléchargement.';
+
+  /// Archive supprimée.
+  static const String telechargementSupprime = 'Téléchargement supprimé.';
+
+  // ---------------------------------------------------------------- Lecteur
+
+  /// Position dans le chapitre.
+  static String pageSurTotal(int page, int total) => 'Page $page / $total';
+
+  /// Bouton du chapitre précédent.
+  static const String chapitrePrecedent = 'Chapitre précédent';
+
+  /// Bouton du chapitre suivant.
+  static const String chapitreSuivant = 'Chapitre suivant';
+
+  /// Fin du chapitre.
+  static const String finDuChapitre = 'Fin du chapitre';
+
+  /// Dernier chapitre connu atteint.
+  static const String dernierChapitre =
+      'C\'est le dernier chapitre connu de ce titre.';
+
+  /// Bouton de zoom avant.
+  static const String agrandir = 'Agrandir';
+
+  /// Bouton de zoom arrière.
+  static const String reduire = 'Réduire';
+
+  /// Retour à la taille normale.
+  static const String tailleNormale = 'Taille normale';
+
+  /// Page illisible dans l'archive.
+  static const String pageIllisible = 'Cette page n\'a pas pu être lue.';
+
+  /// Chapitre pas encore sur l'appareil.
+  static const String lecteurNonTelecharge =
+      'Ce chapitre n\'est pas encore sur l\'appareil.\n'
+      'Téléchargez-le pour le lire ici, ou ouvrez-le sur le site.';
+
+  /// Chapitre en attente ou en cours de téléchargement.
+  static String lecteurEnTelechargement(EtatHorsLigne etat) =>
+      etat.statut == StatutHorsLigne.enCours
+      ? 'Téléchargement en cours (${pourcentage(etat.progression)}) : la '
+            'lecture commencera dès qu\'il sera terminé.'
+      : 'Chapitre en file d\'attente : la lecture commencera dès qu\'il '
+            'sera téléchargé.';
+
+  /// Chapitre texte vide.
+  static const String texteVide = 'Ce chapitre ne contient pas de texte.';
+
+  // -------------------------------------------------------- Téléchargements
+
+  /// File vide (aide).
+  static const String telechargementsVide =
+      'Aucun téléchargement.\n'
+      'Les chapitres des titres Favoris et Suivis sont téléchargés '
+      'automatiquement (voir Paramètres). Vous pouvez aussi télécharger un '
+      'chapitre depuis la fiche d\'un titre.';
+
+  /// Bouton : retirer les terminés de la liste.
+  static const String viderTermines = 'Vider les terminés';
+
+  /// Bouton : relancer tous les échecs.
+  static const String reessayerEchecs = 'Réessayer les échecs';
+
+  /// Terminés retirés de la liste.
+  static String terminesRetires(int nombre) => nombre <= 1
+      ? '$nombre téléchargement terminé retiré de la liste.'
+      : '$nombre téléchargements terminés retirés de la liste.';
+
+  /// Ligne d'état d'un téléchargement de la file.
+  static String statutTelechargement(Telechargement telechargement) {
+    switch (telechargement.statut) {
+      case StatutTelechargement.enAttente:
+        return 'En attente';
+      case StatutTelechargement.enCours:
+        final total = telechargement.nombrePagesTotal;
+        return total <= 0
+            ? 'En cours…'
+            : 'En cours : ${telechargement.nombrePagesFaites} / $total pages';
+      case StatutTelechargement.termine:
+        return 'Terminé';
+      case StatutTelechargement.echec:
+        final message = telechargement.messageErreur;
+        return message == null || message.isEmpty
+            ? 'Échec'
+            : 'Échec : $message';
+    }
+  }
+
+  /// Chapitre de la file qui n'existe plus.
+  static String chapitreIntrouvable(int idChapitre) =>
+      'Chapitre n°$idChapitre (introuvable)';
+
+  /// Titre inconnu.
+  static const String titreInconnu = 'Titre inconnu';
+
+  // ------------------------------------------------------------- Paramètres
+
+  /// Section des réglages de téléchargement.
+  static const String sectionTelechargements = 'Téléchargements';
+
+  /// Section des sites.
+  static const String sectionSites = 'Sites';
+
+  /// Section « À propos ».
+  static const String sectionAPropos = 'À propos';
+
+  /// Introduction des règles de téléchargement.
+  static const String introReglesTelechargement =
+      'Les chapitres sont téléchargés automatiquement pour la lecture '
+      'hors-ligne selon les listes du titre. Un titre ni favori ni suivi '
+      'n\'est jamais téléchargé automatiquement. Une seule version est '
+      'gardée par numéro de chapitre, dans la langue préférée du site.';
+
+  /// Nom d'une limite de téléchargement.
+  static String libelleLimite(LimiteTelechargement limite) {
+    switch (limite) {
+      case LimiteTelechargement.favorisLusConserves:
+        return 'Favoris : chapitres lus gardés';
+      case LimiteTelechargement.suivisInitial:
+        return 'Suivis : chapitres téléchargés au départ';
+      case LimiteTelechargement.suivisAvant:
+        return 'Suivis : chapitres gardés jusqu\'au dernier lu';
+      case LimiteTelechargement.suivisApres:
+        return 'Suivis : chapitres téléchargés après le dernier lu';
+    }
+  }
+
+  /// Phrase qui explique une limite avec sa [valeur] actuelle.
+  static String explicationLimite(LimiteTelechargement limite, int valeur) {
+    final chapitres = valeur <= 1 ? '$valeur chapitre' : '$valeur chapitres';
+    switch (limite) {
+      case LimiteTelechargement.favorisLusConserves:
+        return 'Pour un favori, tous les chapitres non lus sont téléchargés, '
+            'et on garde aussi les $chapitres lus les plus récents.';
+      case LimiteTelechargement.suivisInitial:
+        return 'Pour un titre suivi dont la lecture n\'a pas commencé, les '
+            'premiers chapitres sont téléchargés : $chapitres.';
+      case LimiteTelechargement.suivisAvant:
+        return 'Quand la lecture avance, on garde $chapitres jusqu\'au '
+            'dernier lu (inclus) ; les plus anciens sont supprimés.';
+      case LimiteTelechargement.suivisApres:
+        return 'Quand la lecture avance, on télécharge les $chapitres qui '
+            'suivent le dernier lu.';
+    }
+  }
+
+  /// Info-bulle du bouton « + ».
+  static const String augmenter = 'Augmenter';
+
+  /// Info-bulle du bouton « − ».
+  static const String diminuer = 'Diminuer';
+
+  /// Remise aux valeurs par défaut.
+  static const String valeursParDefaut = 'Valeurs par défaut';
+
+  /// Bouton d'enregistrement.
+  static const String enregistrer = 'Enregistrer';
+
+  /// Annulation des modifications non enregistrées.
+  static const String annulerModifications = 'Annuler les modifications';
+
+  /// Réglages enregistrés.
+  static const String reglagesEnregistres =
+      'Réglages enregistrés : les téléchargements sont mis à jour.';
+
+  /// Section des recherches de mises à jour.
+  static const String sectionMisesAJour = 'Mises à jour';
+
+  /// Libellé du nombre de recherches par jour.
+  static const String verificationsParJour =
+      'Recherches de nouveaux chapitres par jour';
+
+  /// Explication du réglage.
+  static const String explicationVerificationsParJour =
+      'Les titres suivis sont vérifiés à heures fixes, réparties dans la '
+      'journée à partir de minuit UTC. Moins de recherches ménage la batterie '
+      'et les sites.';
+
+  /// Heure « HH:MM ».
+  static String formaterHeure(DateTime date) =>
+      '${date.hour.toString().padLeft(2, '0')}:'
+      '${date.minute.toString().padLeft(2, '0')}';
+
+  /// Énumération française : « a », « a et b », « a, b et c ».
+  static String enumerer(List<String> elements) {
+    if (elements.length <= 1) return elements.join();
+    return '${elements.sublist(0, elements.length - 1).join(', ')} et '
+        '${elements.last}';
+  }
+
+  /// Horaires des recherches en UTC et en heure locale : « 00:00 et 12:00
+  /// UTC, soit 01:00 et 13:00 chez vous ». [jour] (UTC) sert au calcul de
+  /// l'heure locale (heure d'été ou d'hiver du jour affiché).
+  static String horairesVerifications(List<Duration> horaires, DateTime jour) {
+    final minuit = DateTime.utc(jour.year, jour.month, jour.day);
+    final utc = <String>[
+      for (final horaire in horaires) formaterHeure(minuit.add(horaire)),
+    ];
+    final locales = <String>[
+      for (final horaire in horaires)
+        formaterHeure(minuit.add(horaire).toLocal()),
+    ];
+    final enUtc = '${enumerer(utc)} UTC';
+    // Sur un appareil réglé en UTC, inutile de répéter les mêmes heures.
+    if (minuit.toLocal().timeZoneOffset == Duration.zero) return enUtc;
+    return '$enUtc, soit ${enumerer(locales)} chez vous';
+  }
+
+  /// Date et heure locales « jj/mm/aaaa à HH:MM ».
+  static String formaterDateHeure(DateTime date) =>
+      '${formaterDate(date)} à ${formaterHeure(date.toLocal())}';
+
+  /// Dernière recherche de mises à jour.
+  static String derniereRecherche(DateTime? date) => date == null
+      ? 'Aucune recherche pour l\'instant.'
+      : 'Dernière recherche : ${formaterDateHeure(date)}';
+
+  /// Prochaine recherche programmée (ordinateur).
+  static String prochaineRecherche(DateTime date) =>
+      'Prochaine recherche : ${formaterDateHeure(date)}';
+
+  /// Réglage des recherches enregistré.
+  static const String planificationEnregistree =
+      'Horaires des recherches enregistrés.';
+
+  /// Aucun site configuré (section Sites).
+  static const String aucunSiteParametres =
+      'Aucun site configuré. Ajoutez-en un depuis l\'onglet « Sources ».';
+
+  /// Action : modifier un site.
+  static const String modifierSite = 'Modifier le site';
+
+  /// Action : supprimer un site.
+  static const String supprimerSite = 'Supprimer le site';
+
+  /// Champ du nom d'un site (obligatoire).
+  static const String champNomSiteObligatoire = 'Nom';
+
+  /// Champ des langues d'un site.
+  static const String champLangues = 'Langues, par ordre de préférence';
+
+  /// Aide du champ des langues.
+  static const String aideLangues =
+      'Exemple : « fr,en » = français en priorité ; si un chapitre sort '
+      'd\'abord en anglais, il est téléchargé puis remplacé par la version '
+      'française à sa sortie.';
+
+  /// Langues mal saisies.
+  static const String erreurLangues =
+      'Codes à deux lettres séparés par des virgules (par ex. fr,en).';
+
+  /// Interrupteur d'activation d'un site.
+  static const String siteActif = 'Rechercher les nouveaux chapitres';
+
+  /// Aide de l'interrupteur d'activation.
+  static const String aideSiteActif =
+      'Désactivé : les titres de ce site restent dans la bibliothèque mais '
+      'ne sont plus vérifiés.';
+
+  /// Langues d'un site dans la liste.
+  static String languesSite(String langues) => langues.isEmpty
+      ? 'Langues : non précisées (fr,en par défaut)'
+      : 'Langues : ${langues.toUpperCase().replaceAll(',', ', ')}';
+
+  /// Site modifié.
+  static String siteModifie(String nom) => 'Site « $nom » modifié.';
+
+  /// Site supprimé.
+  static String siteSupprime(String nom) => 'Site « $nom » supprimé.';
+
+  /// Question avant la suppression d'un site.
+  static String confirmationSuppressionSite(String nom) =>
+      'Supprimer le site « $nom » ?\n'
+      'Ses réglages seront perdus ; il pourra être ajouté de nouveau.';
+
+  /// Crédit complet de MangaDex (PLAYBOOK.md section 6).
+  static const String creditMangaDexComplet =
+      'Données et images fournies par MangaDex et ses groupes de traduction.';
+
+  /// Présentation de l'application.
+  static const String descriptionApplication =
+      'Application personnelle, sans publicité, qui regroupe les titres '
+      'suivis sur plusieurs sites de lecture.';
 
   // ------------------------------------------------------------- Formatage
 

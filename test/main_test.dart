@@ -1,9 +1,11 @@
 // Tests de l'assemblage des services (lib/main.dart) et de la tâche de fond
-// Android, sur une base SQLite en mémoire et sans réseau.
+// Android, sur une base SQLite en mémoire, des archives dans un dossier
+// temporaire et sans réseau.
 import 'dart:io';
 
 import 'package:bibliotheque_perso/main.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
+import 'package:bibliotheque_perso/services/planification_mises_a_jour.dart';
 import 'package:bibliotheque_perso/sources/client_http_poli.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -25,11 +27,19 @@ void main() {
     }, HorlogeFactice());
   }
 
+  // Dossier des archives hors-ligne : path_provider n'existe pas en test.
+  late Directory dossierArchives;
+  setUp(() async {
+    dossierArchives = await Directory.systemTemp.createTemp('archives_test');
+  });
+  tearDown(() => dossierArchives.delete(recursive: true));
+
   test('construireServices assemble des services utilisables', () async {
     final services = await construireServices(
       chemin: inMemoryDatabasePath,
       fabrique: databaseFactoryFfi,
       client: creerClient(),
+      dossierTelechargements: dossierArchives.path,
     );
     addTearDown(services.fermer);
 
@@ -45,6 +55,21 @@ void main() {
     final rapport = await services.serviceMisesAJour.verifierTitresSuivis();
     expect(rapport.resultats, isEmpty);
     expect(requetes, isEmpty);
+
+    // Le service de téléchargement est branché : file vide, démarrage sans
+    // erreur ni réseau.
+    await services.serviceTelechargement.demarrer();
+    await services.serviceTelechargement.lancerTraitement();
+    expect(await services.serviceTelechargement.chargerFile(), isEmpty);
+    expect(requetes, isEmpty);
+
+    // Les réglages sont lus avec leurs valeurs par défaut.
+    final planification = await services.serviceParametres
+        .chargerPlanification();
+    expect(
+      planification.verificationsParJour,
+      PlanificationMisesAJour.parDefautParJour,
+    );
   });
 
   test('fermer ferme la base', () async {
@@ -52,6 +77,7 @@ void main() {
       chemin: inMemoryDatabasePath,
       fabrique: databaseFactoryFfi,
       client: creerClient(),
+      dossierTelechargements: dossierArchives.path,
     );
     await services.fermer();
     expect(services.base.isOpen, isFalse);
@@ -62,40 +88,60 @@ void main() {
       chemin: inMemoryDatabasePath,
       fabrique: databaseFactoryFfi,
       client: creerClient(),
+      dossierTelechargements: dossierArchives.path,
     );
     expect(reussi, isTrue);
   });
 
-  test(
-    "la tâche de fond ne ferme pas la base partagée avec l'application",
-    () async {
-      // Sur Android, la connexion native est commune au processus : si la tâche
-      // de fond fermait la base, l'application ouverte ne pourrait plus lire.
-      final dossier = await Directory.systemTemp.createTemp(
-        'bibliotheque_test',
-      );
-      final chemin = chemins.join(dossier.path, 'base.db');
-      final services = await construireServices(
-        chemin: chemin,
-        fabrique: databaseFactoryFfi,
-        client: creerClient(),
-      );
-      addTearDown(() async {
-        await services.fermer();
-        await dossier.delete(recursive: true);
-      });
+  test("la tâche de fond ne ferme pas la base partagée avec l'application, "
+      "et ne vérifie que si une échéance est passée", () async {
+    // Sur Android, la connexion native est commune au processus : si la tâche
+    // de fond fermait la base, l'application ouverte ne pourrait plus lire.
+    final dossier = await Directory.systemTemp.createTemp('bibliotheque_test');
+    final chemin = chemins.join(dossier.path, 'base.db');
+    final services = await construireServices(
+      chemin: chemin,
+      fabrique: databaseFactoryFfi,
+      client: creerClient(),
+      dossierTelechargements: dossierArchives.path,
+    );
+    addTearDown(() async {
+      await services.fermer();
+      await dossier.delete(recursive: true);
+    });
+    expect(
+      await services.serviceParametres.chargerDerniereVerification(),
+      isNull,
+    );
 
-      final reussi = await executerTacheDeFond(
-        chemin: chemin,
-        fabrique: databaseFactoryFfi,
-        client: creerClient(),
-      );
+    // Première exécution : jamais vérifié, donc en retard → vérification.
+    final reussi = await executerTacheDeFond(
+      chemin: chemin,
+      fabrique: databaseFactoryFfi,
+      client: creerClient(),
+      dossierTelechargements: dossierArchives.path,
+    );
 
-      expect(reussi, isTrue);
-      expect(services.base.isOpen, isTrue);
-      expect(await services.serviceBibliotheque.chargerListes(), isNotEmpty);
-    },
-  );
+    expect(reussi, isTrue);
+    expect(services.base.isOpen, isTrue);
+    expect(await services.serviceBibliotheque.chargerListes(), isNotEmpty);
+    final premiere = await services.serviceParametres
+        .chargerDerniereVerification();
+    expect(premiere, isNotNull);
+
+    // Seconde exécution juste après : aucune échéance passée depuis, la
+    // date de dernière vérification ne change pas.
+    await executerTacheDeFond(
+      chemin: chemin,
+      fabrique: databaseFactoryFfi,
+      client: creerClient(),
+      dossierTelechargements: dossierArchives.path,
+    );
+    expect(
+      await services.serviceParametres.chargerDerniereVerification(),
+      premiere,
+    );
+  });
 
   test('la tâche de fond échoue si la base ne s\'ouvre pas', () async {
     // Le « dossier » parent est un fichier : ni sqflite ni SQLite ne
@@ -109,7 +155,26 @@ void main() {
       chemin: cheminImpossible,
       fabrique: databaseFactoryFfi,
       client: creerClient(),
+      dossierTelechargements: dossierArchives.path,
     );
     expect(reussi, isFalse);
   });
+
+  test(
+    'fréquence de la tâche Android : écart entre échéances, 1 h minimum',
+    () {
+      expect(
+        frequenceTacheAndroid(PlanificationMisesAJour(2)),
+        const Duration(hours: 12),
+      );
+      expect(
+        frequenceTacheAndroid(PlanificationMisesAJour(24)),
+        const Duration(hours: 1),
+      );
+      expect(
+        frequenceTacheAndroid(PlanificationMisesAJour(5)),
+        greaterThan(frequenceMinimaleTacheAndroid),
+      );
+    },
+  );
 }

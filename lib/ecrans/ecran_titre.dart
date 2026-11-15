@@ -6,16 +6,20 @@ import 'dart:math' as math;
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
+import '../etat/description_erreur.dart';
 import '../etat/etat_bibliotheque.dart';
 import '../etat/etat_titre.dart';
+import '../etat/outils_chapitres.dart';
 import '../modeles/chapitre.dart';
 import '../modeles/titre.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/image_couverture.dart';
+import '../widgets/indicateur_hors_ligne.dart';
 import '../widgets/messages.dart';
 import '../widgets/pastille_categorie.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
+import 'ecran_lecteur.dart';
 
 /// Actions du menu de la fiche.
 enum _ActionTitre { toutLu, toutNonLu, supprimer }
@@ -181,7 +185,7 @@ class EcranTitre extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, contraintes) {
         final estLarge = contraintes.maxWidth >= largeurMinNavigationLaterale;
-        final chapitres = etat.chapitres;
+        final groupes = etat.groupes;
         // CustomScrollView : la fiche et les chapitres défilent ensemble, et
         // seuls les chapitres visibles sont construits (titres très longs).
         return CustomScrollView(
@@ -203,27 +207,38 @@ class EcranTitre extends StatelessWidget {
                   espacementPetit,
                 ),
                 child: Text(
-                  Textes.enTeteChapitres(chapitres.length, etat.nombreNonLus),
+                  Textes.enTeteNumeros(
+                    etat.nombreNumeros,
+                    etat.nombreNumerosNonLus,
+                  ),
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
             ),
-            if (chapitres.isEmpty)
+            if (groupes.isEmpty)
               const SliverToBoxAdapter(
                 child: Padding(
                   padding: EdgeInsets.all(espacementGrand),
-                  child: Text(Textes.aucunChapitre, textAlign: TextAlign.center),
+                  child: Text(
+                    Textes.aucunChapitre,
+                    textAlign: TextAlign.center,
+                  ),
                 ),
               )
-            else
+            else ...<Widget>[
+              // La légende reste en haut de la liste pendant le défilement :
+              // le client garde le sens des colonnes sous les yeux.
+              SliverToBoxAdapter(child: _LegendeChapitres(etat: etat)),
               SliverList.builder(
-                itemCount: chapitres.length,
-                itemBuilder: (context, index) =>
-                    _TuileChapitre(etat: etat, chapitre: chapitres[index]),
+                itemCount: groupes.length,
+                itemBuilder: (context, index) => _LigneGroupe(
+                  key: ValueKey<double>(groupes[index].numero),
+                  etat: etat,
+                  groupe: groupes[index],
+                ),
               ),
-            const SliverToBoxAdapter(
-              child: SizedBox(height: espacementGrand),
-            ),
+            ],
+            const SliverToBoxAdapter(child: SizedBox(height: espacementGrand)),
           ],
         );
       },
@@ -400,6 +415,400 @@ class _Informations extends StatelessWidget {
   }
 }
 
+/// Légende de la liste des chapitres : intitulés des colonnes, alignés sur
+/// les lignes, puis sens des icônes hors-ligne.
+class _LegendeChapitres extends StatelessWidget {
+  const _LegendeChapitres({required this.etat});
+
+  final EtatTitre etat;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final style = theme.textTheme.labelMedium?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        espacementMoyen,
+        0,
+        espacementMoyen,
+        espacementPetit,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          if (etat.gereTelechargements) ...<Widget>[
+            Text(Textes.aideAppuiChapitre, style: theme.textTheme.bodySmall),
+            const SizedBox(height: espacementPetit),
+            const LegendeHorsLigne(),
+            const SizedBox(height: espacementPetit),
+          ],
+          // Mêmes proportions que les lignes (_ColonnesChapitre) : chaque
+          // intitulé tombe au-dessus de sa colonne, quelle que soit la
+          // largeur de l'écran.
+          _ColonnesChapitre(
+            avecHorsLigne: etat.gereTelechargements,
+            nom: Text(Textes.colonneChapitre, style: style),
+            langue: Text(Textes.colonneLangue, style: style),
+            date: Text(Textes.colonneDate, style: style),
+            horsLigne: Text(
+              Textes.colonneHorsLigne,
+              style: style,
+              textAlign: TextAlign.center,
+              overflow: TextOverflow.ellipsis,
+            ),
+            lu: Text(
+              Textes.colonneLu,
+              style: style,
+              textAlign: TextAlign.center,
+            ),
+          ),
+          const Divider(height: espacementPetit),
+        ],
+      ),
+    );
+  }
+}
+
+/// Disposition commune à la légende et aux lignes : cinq colonnes en
+/// proportions de la largeur (pas de largeur fixe en pixels).
+class _ColonnesChapitre extends StatelessWidget {
+  const _ColonnesChapitre({
+    required this.avecHorsLigne,
+    required this.nom,
+    required this.langue,
+    required this.date,
+    required this.horsLigne,
+    required this.lu,
+  });
+
+  final bool avecHorsLigne;
+  final Widget nom;
+  final Widget langue;
+  final Widget date;
+  final Widget horsLigne;
+  final Widget lu;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: <Widget>[
+        Expanded(flex: flexColonneNom, child: nom),
+        Expanded(flex: flexColonneLangue, child: langue),
+        Expanded(flex: flexColonneDate, child: date),
+        if (avecHorsLigne)
+          Expanded(
+            flex: flexColonneHorsLigne,
+            child: Center(child: horsLigne),
+          ),
+        Expanded(
+          flex: flexColonneLu,
+          child: Center(child: lu),
+        ),
+      ],
+    );
+  }
+}
+
+/// Un numéro de chapitre : la version retenue, et les autres versions
+/// (autres langues) repliées dessous.
+class _LigneGroupe extends StatefulWidget {
+  const _LigneGroupe({super.key, required this.etat, required this.groupe});
+
+  final EtatTitre etat;
+  final GroupeChapitres groupe;
+
+  @override
+  State<_LigneGroupe> createState() => _EtatLigneGroupe();
+}
+
+class _EtatLigneGroupe extends State<_LigneGroupe> {
+  bool _estDeplie = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final groupe = widget.groupe;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        _LigneChapitre(
+          etat: widget.etat,
+          chapitre: groupe.retenu,
+          estLu: groupe.estLu,
+          surBasculerLu: () =>
+              widget.etat.marquerGroupeLu(groupe, estLu: !groupe.estLu),
+          autresVersions: groupe.autres.length,
+          estDeplie: _estDeplie,
+          surDeplier: () => setState(() => _estDeplie = !_estDeplie),
+        ),
+        if (_estDeplie)
+          for (final autre in groupe.autres)
+            _LigneChapitre(
+              etat: widget.etat,
+              chapitre: autre,
+              estLu: autre.estLu,
+              surBasculerLu: () =>
+                  widget.etat.marquerLu(autre, estLu: !autre.estLu),
+              estSecondaire: true,
+            ),
+      ],
+    );
+  }
+}
+
+/// Ligne d'un chapitre : nom, langue, date, état hors-ligne, lu.
+///
+/// Un appui n'ouvre jamais le site directement : chapitre téléchargé →
+/// lecteur ; sinon, un menu propose de le télécharger ou de l'ouvrir sur le
+/// site.
+class _LigneChapitre extends StatelessWidget {
+  const _LigneChapitre({
+    required this.etat,
+    required this.chapitre,
+    required this.estLu,
+    required this.surBasculerLu,
+    this.autresVersions = 0,
+    this.estDeplie = false,
+    this.surDeplier,
+    this.estSecondaire = false,
+  });
+
+  final EtatTitre etat;
+  final Chapitre chapitre;
+  final bool estLu;
+  final Future<ResultatAction<bool>> Function() surBasculerLu;
+  final int autresVersions;
+  final bool estDeplie;
+  final VoidCallback? surDeplier;
+  final bool estSecondaire;
+
+  Future<void> _surAppui(BuildContext context) async {
+    final horsLigne = etat.etatHorsLigne(chapitre);
+    if (horsLigne.statut == StatutHorsLigne.telecharge) {
+      await _lire(context);
+      return;
+    }
+    await _afficherMenu(context, horsLigne);
+  }
+
+  Future<void> _lire(BuildContext context) async {
+    final etatLecteur = etat.creerEtatLecteur(chapitre);
+    if (etatLecteur == null) return;
+    await EcranLecteur.ouvrir(context, etatLecteur);
+    // Au retour, des chapitres ont pu être lus et la file a pu avancer.
+    await etat.charger();
+  }
+
+  Future<void> _afficherMenu(
+    BuildContext context,
+    EtatHorsLigne horsLigne,
+  ) async {
+    final action = await showModalBottomSheet<_ActionChapitre>(
+      context: context,
+      showDragHandle: true,
+      builder: (contexteMenu) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            ListTile(
+              title: Text(
+                Textes.nomChapitre(chapitre.nom, chapitre.numero),
+                style: Theme.of(contexteMenu).textTheme.titleMedium,
+              ),
+              subtitle: Text(Textes.libelleStatutHorsLigne(horsLigne.statut)),
+            ),
+            if (etat.gereTelechargements &&
+                (horsLigne.statut == StatutHorsLigne.nonTelecharge ||
+                    horsLigne.statut == StatutHorsLigne.echec))
+              ListTile(
+                leading: const Icon(Icons.download),
+                title: Text(
+                  horsLigne.statut == StatutHorsLigne.echec
+                      ? Textes.reessayerTelechargement
+                      : Textes.telecharger,
+                ),
+                onTap: () =>
+                    Navigator.of(contexteMenu).pop(_ActionChapitre.telecharger),
+              ),
+            ListTile(
+              leading: const Icon(Icons.open_in_new),
+              title: const Text(Textes.ouvrirSurLeSite),
+              onTap: () =>
+                  Navigator.of(contexteMenu).pop(_ActionChapitre.ouvrirSite),
+            ),
+            ListTile(
+              leading: Icon(estLu ? Icons.remove_done : Icons.done),
+              title: Text(estLu ? Textes.marquerNonLu : Textes.marquerLu),
+              onTap: () =>
+                  Navigator.of(contexteMenu).pop(_ActionChapitre.basculerLu),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (action == null || !context.mounted) return;
+    switch (action) {
+      case _ActionChapitre.telecharger:
+        final resultat = await etat.telecharger(chapitre);
+        if (context.mounted) {
+          afficherResultat(
+            context,
+            resultat,
+            succes: Textes.telechargementAjoute,
+          );
+        }
+      case _ActionChapitre.ouvrirSite:
+        await ouvrirLienExterne(context, chapitre.urlChapitre);
+      case _ActionChapitre.basculerLu:
+        final resultat = await surBasculerLu();
+        if (context.mounted) afficherResultat(context, resultat);
+    }
+  }
+
+  /// Bouton de la colonne hors-ligne : l'action dépend de l'état.
+  Future<void> _surAppuiHorsLigne(
+    BuildContext context,
+    EtatHorsLigne horsLigne,
+  ) async {
+    switch (horsLigne.statut) {
+      case StatutHorsLigne.telecharge:
+        final nom = Textes.nomChapitre(chapitre.nom, chapitre.numero);
+        final confirme = await showDialog<bool>(
+          context: context,
+          builder: (contexteDialogue) => AlertDialog(
+            title: const Text(Textes.supprimerTelechargement),
+            content: Text(Textes.confirmationSuppressionTelechargement(nom)),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(contexteDialogue).pop(false),
+                child: const Text(Textes.annuler),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(contexteDialogue).pop(true),
+                child: const Text(Textes.supprimer),
+              ),
+            ],
+          ),
+        );
+        if (confirme != true || !context.mounted) return;
+        final resultat = await etat.supprimerTelechargement(chapitre);
+        if (context.mounted) {
+          afficherResultat(
+            context,
+            resultat,
+            succes: Textes.telechargementSupprime,
+          );
+        }
+      case StatutHorsLigne.enFile:
+      case StatutHorsLigne.enCours:
+        final resultat = await etat.supprimerTelechargement(chapitre);
+        if (context.mounted) afficherResultat(context, resultat);
+      case StatutHorsLigne.echec:
+      case StatutHorsLigne.nonTelecharge:
+        final resultat = await etat.telecharger(chapitre);
+        if (context.mounted) {
+          afficherResultat(
+            context,
+            resultat,
+            succes: Textes.telechargementAjoute,
+          );
+        }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final couleurs = theme.colorScheme;
+    final horsLigne = etat.etatHorsLigne(chapitre);
+    // Les chapitres lus sont atténués : les nouveautés ressortent.
+    final couleurTexte = estLu ? couleurs.outline : null;
+    final styleDetail = theme.textTheme.bodySmall?.copyWith(
+      color: couleurTexte,
+    );
+    return InkWell(
+      onTap: () => _surAppui(context),
+      child: Padding(
+        // Les autres versions sont décalées : on voit qu'elles appartiennent
+        // au numéro du dessus.
+        padding: EdgeInsets.fromLTRB(
+          estSecondaire ? espacementGrand + espacementMoyen : espacementMoyen,
+          espacementPetit / 2,
+          espacementMoyen,
+          espacementPetit / 2,
+        ),
+        child: _ColonnesChapitre(
+          avecHorsLigne: etat.gereTelechargements,
+          nom: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(
+                Textes.nomChapitre(chapitre.nom, chapitre.numero),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: couleurTexte,
+                  fontWeight: estLu || estSecondaire ? null : FontWeight.w600,
+                ),
+              ),
+              if (autresVersions > 0)
+                InkWell(
+                  onTap: surDeplier,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Text(
+                        Textes.autresVersions(autresVersions),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: couleurs.primary,
+                        ),
+                      ),
+                      Icon(
+                        estDeplie ? Icons.expand_less : Icons.expand_more,
+                        size: theme.textTheme.bodySmall?.fontSize,
+                        color: couleurs.primary,
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+          langue: Text(
+            chapitre.langue.isEmpty ? '—' : chapitre.langue.toUpperCase(),
+            style: styleDetail,
+          ),
+          date: Text(
+            chapitre.datePublication == null
+                ? '—'
+                : Textes.formaterDate(chapitre.datePublication!),
+            style: styleDetail,
+          ),
+          horsLigne: IconButton(
+            tooltip: Textes.infoBulleHorsLigne(horsLigne),
+            onPressed: () => _surAppuiHorsLigne(context, horsLigne),
+            icon: IndicateurHorsLigne(etat: horsLigne),
+          ),
+          lu: IconButton(
+            tooltip: estLu ? Textes.marquerNonLu : Textes.marquerLu,
+            icon: Icon(
+              estLu ? Icons.check_circle : Icons.circle_outlined,
+              color: estLu ? couleurs.outline : couleurs.primary,
+            ),
+            onPressed: () async {
+              final resultat = await surBasculerLu();
+              if (context.mounted) afficherResultat(context, resultat);
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Actions du menu d'un chapitre non téléchargé.
+enum _ActionChapitre { telecharger, ouvrirSite, basculerLu }
+
 /// Ligne « Libellé : valeur ».
 class _LigneInfo extends StatelessWidget {
   const _LigneInfo(this.libelle, this.valeur);
@@ -421,50 +830,6 @@ class _LigneInfo extends StatelessWidget {
             TextSpan(text: valeur),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// Ligne d'un chapitre : nom, langue, date, état de lecture.
-class _TuileChapitre extends StatelessWidget {
-  const _TuileChapitre({required this.etat, required this.chapitre});
-
-  final EtatTitre etat;
-  final Chapitre chapitre;
-
-  @override
-  Widget build(BuildContext context) {
-    final couleurs = Theme.of(context).colorScheme;
-    final estLu = chapitre.estLu;
-    return ListTile(
-      leading: Icon(
-        estLu ? Icons.check_circle : Icons.circle_outlined,
-        color: estLu ? couleurs.outline : couleurs.primary,
-      ),
-      title: Text(
-        Textes.nomChapitre(chapitre.nom, chapitre.numero),
-        // Les chapitres lus sont atténués : les nouveautés ressortent.
-        style: TextStyle(
-          color: estLu ? couleurs.outline : null,
-          fontWeight: estLu ? null : FontWeight.w600,
-        ),
-      ),
-      subtitle: Text(
-        Textes.detailsChapitre(chapitre.langue, chapitre.datePublication),
-      ),
-      // LIMITE : le lecteur intégré arrive à l'étape 5 ; d'ici là, l'appui
-      // ouvre le chapitre sur le site.
-      onTap: () => ouvrirLienExterne(context, chapitre.urlChapitre),
-      trailing: IconButton(
-        tooltip: estLu ? Textes.marquerNonLu : Textes.marquerLu,
-        icon: Icon(estLu ? Icons.remove_done : Icons.done),
-        onPressed: () async {
-          final resultat = await etat.marquerLu(chapitre, estLu: !estLu);
-          if (context.mounted) {
-            afficherResultat(context, resultat);
-          }
-        },
       ),
     );
   }

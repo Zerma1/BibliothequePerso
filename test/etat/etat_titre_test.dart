@@ -105,25 +105,22 @@ void main() {
     expect(etat.erreur, isNull);
   });
 
-  test(
-    'un titre supprimé pendant l\'actualisation est signalé, sans '
-    'chargement infini',
-    () async {
-      final faux = FauxServiceBibliotheque()..ajouterTitreDeTest('Éphémère');
-      faux.avantAjout = faux.titres.clear;
-      final etatFaux = EtatTitre(faux, 1);
-      await etatFaux.charger();
-      expect(etatFaux.titre, isNotNull);
+  test('un titre supprimé pendant l\'actualisation est signalé, sans '
+      'chargement infini', () async {
+    final faux = FauxServiceBibliotheque()..ajouterTitreDeTest('Éphémère');
+    faux.avantAjout = faux.titres.clear;
+    final etatFaux = EtatTitre(faux, 1);
+    await etatFaux.charger();
+    expect(etatFaux.titre, isNotNull);
 
-      final resultat = await etatFaux.actualiser();
+    final resultat = await etatFaux.actualiser();
 
-      expect(resultat.erreur!.nature, NatureErreur.introuvable);
-      expect(etatFaux.erreur!.nature, NatureErreur.introuvable);
-      expect(etatFaux.titre, isNull);
-      expect(etatFaux.estEnActualisation, isFalse);
-      etatFaux.dispose();
-    },
-  );
+    expect(resultat.erreur!.nature, NatureErreur.introuvable);
+    expect(etatFaux.erreur!.nature, NatureErreur.introuvable);
+    expect(etatFaux.titre, isNull);
+    expect(etatFaux.estEnActualisation, isFalse);
+    etatFaux.dispose();
+  });
 
   test('un chargement périmé n\'écrase pas le plus récent', () async {
     final faux = FauxServiceBibliotheque()..ajouterTitreDeTest('Premier');

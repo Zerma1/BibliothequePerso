@@ -15,17 +15,25 @@ import 'package:bibliotheque_perso/donnees/depot_titres.dart';
 import 'package:bibliotheque_perso/etat/etat_bibliotheque.dart';
 import 'package:bibliotheque_perso/etat/etat_couvertures.dart';
 import 'package:bibliotheque_perso/etat/etat_mises_a_jour.dart';
+import 'package:bibliotheque_perso/etat/etat_parametres.dart';
 import 'package:bibliotheque_perso/etat/etat_sources.dart';
+import 'package:bibliotheque_perso/etat/etat_telechargements.dart';
 import 'package:bibliotheque_perso/main.dart';
 import 'package:bibliotheque_perso/modeles/categorie.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
 import 'package:bibliotheque_perso/modeles/liste_lecture.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
+import 'package:bibliotheque_perso/modeles/telechargement.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
+import 'package:bibliotheque_perso/services/erreur_service.dart';
+import 'package:bibliotheque_perso/services/planification_mises_a_jour.dart';
+import 'package:bibliotheque_perso/services/politique_telechargement.dart';
 import 'package:bibliotheque_perso/services/service_ajout_site.dart';
 import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
 import 'package:bibliotheque_perso/services/service_mises_a_jour.dart';
+import 'package:bibliotheque_perso/services/service_parametres.dart';
+import 'package:bibliotheque_perso/services/service_telechargement.dart';
 import 'package:bibliotheque_perso/sources/detecteur_type_site.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/sources/fabrique_sources.dart';
@@ -395,6 +403,280 @@ class FauxServiceAjoutSite implements ServiceAjoutSite {
 
   @override
   Future<Source?> trouverSourcePourUrl(String url) async => null;
+
+  /// Sources reçues par [modifierSource].
+  final List<Source> sourcesModifiees = <Source>[];
+
+  @override
+  Future<Source> modifierSource(Source source) async {
+    final erreur = erreurAjout;
+    if (erreur != null) {
+      throw erreur;
+    }
+    // Même normalisation que le vrai service.
+    final modifiee = source.copierAvec(
+      nom: source.nom.trim(),
+      langueParDefaut: source.langueParDefaut
+          .split(',')
+          .map((code) => code.trim().toLowerCase())
+          .where((code) => code.isNotEmpty)
+          .join(','),
+    );
+    sourcesModifiees.add(modifiee);
+    final index = bibliotheque.sources.indexWhere((s) => s.id == source.id);
+    if (index >= 0) {
+      bibliotheque.sources[index] = modifiee;
+    }
+    return modifiee;
+  }
+
+  @override
+  Future<void> supprimerSource(int idSource) async {
+    bibliotheque.sources.removeWhere((source) => source.id == idSource);
+  }
+}
+
+/// Faux `ServiceTelechargement` en mémoire, relié à un
+/// [FauxServiceBibliotheque] pour marquer les chapitres téléchargés.
+class FauxServiceTelechargement implements ServiceTelechargement {
+  /// Crée le faux service.
+  FauxServiceTelechargement(this.bibliotheque);
+
+  /// Faux service qui détient les chapitres.
+  final FauxServiceBibliotheque bibliotheque;
+
+  final StreamController<void> _changements =
+      StreamController<void>.broadcast();
+
+  /// File, dans l'ordre d'ajout.
+  final List<Telechargement> file = <Telechargement>[];
+
+  /// Pages de chaque chapitre téléchargé (octets).
+  final Map<int, List<Uint8List>> pages = <int, List<Uint8List>>{};
+
+  /// Texte HTML des chapitres de roman téléchargés.
+  final Map<int, String> textes = <int, String>{};
+
+  /// Titres passés à [appliquerRegles], dans l'ordre.
+  final List<int> reglesAppliquees = <int>[];
+
+  /// Appels à [appliquerReglesATous].
+  int nombreAppelsReglesATous = 0;
+
+  /// Appels à [demarrer].
+  int nombreDemarrages = 0;
+
+  /// Journal des appels, pour vérifier leur ordre.
+  final List<String> journal = <String>[];
+
+  /// Erreur levée par [chargerFile], si définie.
+  Object? erreurFile;
+
+  /// Index de page qui lève une erreur à la lecture.
+  final Set<int> pagesIllisibles = <int>{};
+
+  int _prochainId = 1;
+
+  /// Prévient les écouteurs (comme le vrai service à chaque changement).
+  void signaler() => _changements.add(null);
+
+  /// Ajoute un chapitre déjà téléchargé avec [nombrePages] pages.
+  void ajouterChapitreTelecharge(int idChapitre, {int nombrePages = 3}) {
+    pages[idChapitre] = <Uint8List>[
+      for (var i = 0; i < nombrePages; i++) pngMinimal,
+    ];
+    _marquer(idChapitre, estTelecharge: true);
+  }
+
+  /// Change la ligne de file d'un chapitre (statut, progression, erreur).
+  void modifierLigne(
+    int idChapitre,
+    StatutTelechargement statut, {
+    int faites = 0,
+    int total = 0,
+    String? messageErreur,
+  }) {
+    final index = file.indexWhere((t) => t.idChapitre == idChapitre);
+    final ligne = Telechargement(
+      id: index >= 0 ? file[index].id : _prochainId++,
+      idChapitre: idChapitre,
+      statut: statut,
+      nombrePagesFaites: faites,
+      nombrePagesTotal: total,
+      messageErreur: messageErreur,
+    );
+    if (index >= 0) {
+      file[index] = ligne;
+    } else {
+      file.add(ligne);
+    }
+    if (statut == StatutTelechargement.termine) {
+      pages.putIfAbsent(idChapitre, () => <Uint8List>[pngMinimal]);
+      _marquer(idChapitre, estTelecharge: true);
+    }
+    signaler();
+  }
+
+  void _marquer(int idChapitre, {required bool estTelecharge}) {
+    for (final chapitres in bibliotheque.chapitresParTitre.values) {
+      for (var i = 0; i < chapitres.length; i++) {
+        if (chapitres[i].id == idChapitre) {
+          chapitres[i] = chapitres[i].copierAvec(estTelecharge: estTelecharge);
+        }
+      }
+    }
+  }
+
+  @override
+  Stream<void> get changements => _changements.stream;
+
+  @override
+  bool get estEnCours => false;
+
+  @override
+  Future<void> demarrer() async {
+    nombreDemarrages++;
+  }
+
+  @override
+  Future<void> fermer() => _changements.close();
+
+  @override
+  Future<void> appliquerReglesATous() async {
+    nombreAppelsReglesATous++;
+    journal.add('reglesATous');
+  }
+
+  @override
+  Future<PlanTelechargement> appliquerRegles(int idTitre) async {
+    reglesAppliquees.add(idTitre);
+    journal.add('regles:$idTitre');
+    return PlanTelechargement.vide;
+  }
+
+  @override
+  Future<List<Telechargement>> chargerFile() async {
+    final erreur = erreurFile;
+    if (erreur != null) {
+      throw erreur;
+    }
+    return List<Telechargement>.of(file);
+  }
+
+  @override
+  Future<void> telechargerChapitre(int idChapitre) async {
+    journal.add('telecharger:$idChapitre');
+    final existant = file.where((t) => t.idChapitre == idChapitre).firstOrNull;
+    if (existant == null || existant.statut == StatutTelechargement.echec) {
+      modifierLigne(idChapitre, StatutTelechargement.enAttente);
+    }
+  }
+
+  @override
+  Future<void> supprimerTelechargement(
+    int idChapitre, {
+    bool signalerChangement = true,
+  }) async {
+    journal.add('supprimer:$idChapitre');
+    file.removeWhere((t) => t.idChapitre == idChapitre);
+    pages.remove(idChapitre);
+    textes.remove(idChapitre);
+    _marquer(idChapitre, estTelecharge: false);
+    if (signalerChangement) signaler();
+  }
+
+  @override
+  Future<int> viderTermines() async {
+    final avant = file.length;
+    file.removeWhere((t) => t.statut == StatutTelechargement.termine);
+    signaler();
+    return avant - file.length;
+  }
+
+  @override
+  Future<int> compterPages(int idChapitre) async {
+    if (!pages.containsKey(idChapitre) && !textes.containsKey(idChapitre)) {
+      throw ErreurService('Archive absente pour $idChapitre');
+    }
+    return pages[idChapitre]?.length ?? 0;
+  }
+
+  @override
+  Future<Uint8List> lirePage(int idChapitre, int index) async {
+    if (pagesIllisibles.contains(index)) {
+      throw ErreurService('Page $index illisible');
+    }
+    return pages[idChapitre]![index];
+  }
+
+  @override
+  Future<String?> lireTexte(int idChapitre) async => textes[idChapitre];
+
+  @override
+  Future<void> lancerTraitement() async {}
+}
+
+/// Faux `ServiceParametres` : réglages gardés en mémoire.
+class FauxServiceParametres implements ServiceParametres {
+  /// Réglages « enregistrés ».
+  ReglagesTelechargement reglages = const ReglagesTelechargement();
+
+  /// Erreur levée par la lecture, si définie.
+  Object? erreurLecture;
+
+  /// Nombre d'enregistrements.
+  int nombreEnregistrements = 0;
+
+  @override
+  Future<ReglagesTelechargement> chargerReglagesTelechargement() async {
+    final erreur = erreurLecture;
+    if (erreur != null) {
+      throw erreur;
+    }
+    return reglages;
+  }
+
+  @override
+  Future<void> enregistrerReglagesTelechargement(
+    ReglagesTelechargement nouveaux,
+  ) async {
+    nombreEnregistrements++;
+    reglages = nouveaux;
+  }
+
+  @override
+  Future<void> reinitialiserReglagesTelechargement() async {
+    reglages = const ReglagesTelechargement();
+  }
+
+  /// Nombre de recherches par jour « enregistré ».
+  int verificationsParJour = PlanificationMisesAJour.parDefautParJour;
+
+  /// Date de la dernière recherche « enregistrée ».
+  DateTime? derniereVerification;
+
+  @override
+  Future<int> chargerVerificationsParJour() async => verificationsParJour;
+
+  @override
+  Future<void> enregistrerVerificationsParJour(int nombre) async {
+    verificationsParJour = nombre.clamp(
+      PlanificationMisesAJour.minimumParJour,
+      PlanificationMisesAJour.maximumParJour,
+    );
+  }
+
+  @override
+  Future<PlanificationMisesAJour> chargerPlanification() async =>
+      PlanificationMisesAJour(verificationsParJour);
+
+  @override
+  Future<DateTime?> chargerDerniereVerification() async => derniereVerification;
+
+  @override
+  Future<void> enregistrerDerniereVerification(DateTime date) async {
+    derniereVerification = date.toUtc();
+  }
 }
 
 /// Faux `ServiceMisesAJour` : renvoie un rapport préparé, sans base ni
@@ -416,6 +698,20 @@ class FauxServiceMisesAJour implements ServiceMisesAJour {
 
   /// Nombre d'appels à [verifierTitresSuivis].
   int nombreAppels = 0;
+
+  /// Nombre d'appels à [verifierSiEcheancePassee].
+  int nombreControlesEcheance = 0;
+
+  /// Si `false`, [verifierSiEcheancePassee] ne vérifie pas (aucune échéance
+  /// passée depuis la dernière vérification).
+  bool echeancePassee = true;
+
+  @override
+  Future<RapportMisesAJour?> verifierSiEcheancePassee() async {
+    nombreControlesEcheance++;
+    if (!echeancePassee) return null;
+    return verifierTitresSuivis();
+  }
 
   bool _estEnCours = false;
 
@@ -528,24 +824,43 @@ Widget envelopper(
   required FauxServiceBibliotheque bibliotheque,
   FauxServiceAjoutSite? ajoutSite,
   FauxServiceMisesAJour? misesAJour,
+  FauxServiceTelechargement? telechargement,
+  FauxServiceParametres? parametres,
   bool verifierMisesAJourAuDemarrage = false,
 }) {
+  final serviceTelechargement =
+      telechargement ?? FauxServiceTelechargement(bibliotheque);
   return MultiProvider(
     providers: [
       ChangeNotifierProvider<EtatMisesAJour>(
         create: (_) => EtatMisesAJour(
           misesAJour ?? FauxServiceMisesAJour(),
-          verifierAuDemarrage: verifierMisesAJourAuDemarrage,
+          planifier: verifierMisesAJourAuDemarrage,
+          serviceTelechargement: serviceTelechargement,
         )..demarrer(),
       ),
       Provider<EtatCouvertures>(create: (_) => EtatCouvertures(bibliotheque)),
       ChangeNotifierProvider<EtatBibliotheque>(
-        create: (_) => EtatBibliotheque(bibliotheque)..charger(),
+        create: (_) => EtatBibliotheque(
+          bibliotheque,
+          serviceTelechargement: serviceTelechargement,
+        )..charger(),
       ),
       ChangeNotifierProvider<EtatSources>(
         create: (_) => EtatSources(
           bibliotheque,
           ajoutSite ?? FauxServiceAjoutSite(bibliotheque),
+          serviceTelechargement: serviceTelechargement,
+        )..charger(),
+      ),
+      ChangeNotifierProvider<EtatTelechargements>(
+        create: (_) =>
+            EtatTelechargements(serviceTelechargement, bibliotheque)..charger(),
+      ),
+      ChangeNotifierProvider<EtatParametres>(
+        create: (_) => EtatParametres(
+          parametres ?? FauxServiceParametres(),
+          serviceTelechargement,
         )..charger(),
       ),
     ],

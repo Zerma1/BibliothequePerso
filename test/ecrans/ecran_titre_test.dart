@@ -1,8 +1,10 @@
 // Tests de EcranTitre avec de faux services.
+import 'package:bibliotheque_perso/ecrans/ecran_lecteur.dart';
 import 'package:bibliotheque_perso/ecrans/ecran_titre.dart';
 import 'package:bibliotheque_perso/etat/etat_titre.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
+import 'package:bibliotheque_perso/modeles/telechargement.dart';
 import 'package:bibliotheque_perso/modeles/titre_alternatif.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
@@ -104,20 +106,204 @@ void main() {
     final haut2 = tester.getTopLeft(find.text('Chapitre 2')).dy;
     final haut1 = tester.getTopLeft(find.text('Le début')).dy;
     expect(haut2, lessThan(haut1));
+    // Langue et date sont dans leurs propres colonnes.
     expect(find.text('FR'), findsOneWidget);
-    expect(find.text('EN · 10/01/2026'), findsOneWidget);
-    expect(find.text(Textes.enTeteChapitres(2, 2)), findsOneWidget);
+    // « EN » aussi dans les titres alternatifs dépliés.
+    expect(find.text('EN'), findsNWidgets(2));
+    expect(find.text('10/01/2026'), findsOneWidget);
+    expect(find.text(Textes.enTeteNumeros(2, 2)), findsOneWidget);
   });
 
-  testWidgets('pas de crédit MangaDex pour un autre site, disposition étroite', (
-    tester,
-  ) async {
-    preparer(type: TypeSource.madara);
-    await afficher(tester, largeur: 400);
+  group('chapitres hors-ligne', () {
+    late FauxServiceTelechargement telechargement;
 
-    expect(find.text(Textes.creditMangaDex), findsNothing);
-    expect(find.text('Le début'), findsOneWidget);
+    Future<void> afficherAvecTelechargements(WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1200, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        envelopper(
+          ChangeNotifierProvider<EtatTitre>(
+            create: (_) =>
+                EtatTitre(service, 1, serviceTelechargement: telechargement)
+                  ..charger(),
+            child: const EcranTitre(),
+          ),
+          bibliotheque: service,
+          telechargement: telechargement,
+        ),
+      );
+      await tester.pump();
+    }
+
+    setUp(() => telechargement = FauxServiceTelechargement(service));
+
+    testWidgets('légende des colonnes et des icônes', (tester) async {
+      preparer();
+      await afficherAvecTelechargements(tester);
+
+      for (final colonne in <String>[
+        Textes.colonneChapitre,
+        Textes.colonneLangue,
+        Textes.colonneDate,
+        Textes.colonneHorsLigne,
+        Textes.colonneLu,
+      ]) {
+        expect(find.text(colonne), findsOneWidget);
+      }
+      expect(find.text(Textes.aideAppuiChapitre), findsOneWidget);
+      expect(find.text('Téléchargé'), findsOneWidget);
+      expect(find.text('Non téléchargé (en ligne seulement)'), findsOneWidget);
+    });
+
+    testWidgets('chaque ligne montre son état hors-ligne', (tester) async {
+      preparer();
+      telechargement.ajouterChapitreTelecharge(1);
+      telechargement.modifierLigne(
+        2,
+        StatutTelechargement.enCours,
+        faites: 1,
+        total: 4,
+      );
+      await afficherAvecTelechargements(tester);
+
+      expect(
+        find.byTooltip('Téléchargé — appuyer pour supprimer le téléchargement'),
+        findsOneWidget,
+      );
+      expect(find.text('25 %'), findsOneWidget);
+
+      // La progression suit la file en direct.
+      telechargement.modifierLigne(
+        2,
+        StatutTelechargement.enCours,
+        faites: 3,
+        total: 4,
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('75 %'), findsOneWidget);
+    });
+
+    testWidgets(
+      'un appui sur un chapitre non téléchargé ouvre un menu, jamais le site',
+      (tester) async {
+        preparer();
+        await afficherAvecTelechargements(tester);
+
+        await tester.tap(find.text('Le début'));
+        await tester.pumpAndSettle();
+        expect(find.text(Textes.telecharger), findsOneWidget);
+        expect(
+          find.widgetWithText(ListTile, Textes.ouvrirSurLeSite),
+          findsOneWidget,
+        );
+
+        await tester.tap(find.text(Textes.telecharger));
+        await tester.pumpAndSettle();
+        expect(telechargement.journal, contains('telecharger:1'));
+        expect(find.text(Textes.telechargementAjoute), findsOneWidget);
+        expect(
+          find.byTooltip(
+            'En file d\'attente — appuyer pour retirer de la file',
+          ),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets('un chapitre téléchargé s\'ouvre dans le lecteur', (
+      tester,
+    ) async {
+      preparer();
+      telechargement.ajouterChapitreTelecharge(1, nombrePages: 2);
+      await afficherAvecTelechargements(tester);
+
+      await tester.tap(find.text('Le début'));
+      await tester.pumpAndSettle();
+      expect(find.byType(EcranLecteur), findsOneWidget);
+      expect(find.text(Textes.pageSurTotal(1, 2)), findsOneWidget);
+    });
+
+    testWidgets('supprimer le téléchargement après confirmation', (
+      tester,
+    ) async {
+      preparer();
+      telechargement.ajouterChapitreTelecharge(1);
+      await afficherAvecTelechargements(tester);
+
+      await tester.tap(
+        find.byTooltip('Téléchargé — appuyer pour supprimer le téléchargement'),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, Textes.supprimer));
+      await tester.pumpAndSettle();
+
+      expect(telechargement.journal, contains('supprimer:1'));
+      expect(find.text(Textes.telechargementSupprime), findsOneWidget);
+    });
+
+    testWidgets('marquer lu ou changer de liste applique les règles', (
+      tester,
+    ) async {
+      preparer();
+      await afficherAvecTelechargements(tester);
+
+      await tester.tap(find.byTooltip(Textes.marquerLu).first);
+      await tester.pump();
+      expect(telechargement.reglesAppliquees, <int>[1]);
+
+      await tester.tap(find.widgetWithText(FilterChip, 'Suivis'));
+      await tester.pump();
+      expect(telechargement.reglesAppliquees, <int>[1, 1]);
+
+      // Une liste personnelle ne déclenche pas de téléchargement.
+      await tester.tap(find.widgetWithText(FilterChip, 'À lire plus tard'));
+      await tester.pump();
+      expect(telechargement.reglesAppliquees, <int>[1, 1]);
+    });
+
+    testWidgets('un même numéro en deux langues tient sur une ligne', (
+      tester,
+    ) async {
+      preparer();
+      service.chapitresParTitre[1]!.add(
+        const Chapitre(
+          id: 3,
+          idTitre: 1,
+          urlChapitre: 'https://mangadex.org/chapter/3',
+          nom: 'The beginning',
+          numero: 1,
+          langue: 'en',
+        ),
+      );
+      // Le chapitre 1 existant devient la version française.
+      service.chapitresParTitre[1]![0] = service.chapitresParTitre[1]![0]
+          .copierAvec(langue: 'fr');
+      service.sources[0] = service.sources[0].copierAvec(
+        langueParDefaut: 'fr,en',
+      );
+      await afficherAvecTelechargements(tester);
+
+      expect(find.text(Textes.enTeteNumeros(2, 2)), findsOneWidget);
+      expect(find.text('Le début'), findsOneWidget);
+      expect(find.text('The beginning'), findsNothing);
+      await tester.tap(find.text(Textes.autresVersions(1)));
+      await tester.pump();
+      expect(find.text('The beginning'), findsOneWidget);
+    });
   });
+
+  testWidgets(
+    'pas de crédit MangaDex pour un autre site, disposition étroite',
+    (tester) async {
+      preparer(type: TypeSource.madara);
+      await afficher(tester, largeur: 400);
+
+      expect(find.text(Textes.creditMangaDex), findsNothing);
+      expect(find.text('Le début'), findsOneWidget);
+    },
+  );
 
   testWidgets('marque un chapitre lu puis tout non lu', (tester) async {
     preparer();
@@ -149,7 +335,9 @@ void main() {
     final suivis = find.widgetWithText(FilterChip, 'Suivis');
     expect(tester.widget<FilterChip>(suivis).selected, isFalse);
     expect(
-      tester.widget<FilterChip>(find.widgetWithText(FilterChip, 'Favoris')).selected,
+      tester
+          .widget<FilterChip>(find.widgetWithText(FilterChip, 'Favoris'))
+          .selected,
       isTrue,
     );
 
@@ -217,7 +405,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text(Textes.supprimerTitre));
     await tester.pumpAndSettle();
-    expect(find.text(Textes.confirmationSuppression('Shinigami')), findsOneWidget);
+    expect(
+      find.text(Textes.confirmationSuppression('Shinigami')),
+      findsOneWidget,
+    );
 
     await tester.tap(find.widgetWithText(FilledButton, Textes.supprimer));
     await tester.pumpAndSettle();

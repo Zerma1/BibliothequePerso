@@ -1,9 +1,12 @@
 /// État de l'écran Sources : sites configurés et ajout d'un site.
 library;
 
+import 'package:flutter/foundation.dart';
+
 import '../modeles/source.dart';
 import '../services/service_ajout_site.dart';
 import '../services/service_bibliotheque.dart';
+import '../services/service_telechargement.dart';
 import 'description_erreur.dart';
 
 /// Site obtenu après une demande d'ajout.
@@ -19,13 +22,22 @@ class SiteAjoute {
   final bool etaitDejaConfigure;
 }
 
-/// Liste des sites configurés et ajout d'un site par URL.
+/// Liste des sites configurés, ajout d'un site par URL, modification et
+/// suppression.
 class EtatSources extends EtatNotifiant {
   /// Crée l'état ; appeler [charger] pour lire la base.
-  EtatSources(this._serviceBibliotheque, this._serviceAjoutSite);
+  ///
+  /// [serviceTelechargement] sert à réappliquer les règles de téléchargement
+  /// quand les langues d'un site changent.
+  EtatSources(
+    this._serviceBibliotheque,
+    this._serviceAjoutSite, {
+    this._serviceTelechargement,
+  });
 
   final ServiceBibliotheque _serviceBibliotheque;
   final ServiceAjoutSite _serviceAjoutSite;
+  final ServiceTelechargement? _serviceTelechargement;
 
   List<Source> _sources = const <Source>[];
   bool _estEnChargement = false;
@@ -126,6 +138,78 @@ class EtatSources extends EtatNotifiant {
       return ResultatAction<SiteAjoute>.echec(
         DescriptionErreur.depuis(erreur, pile),
       );
+    }
+  }
+
+  /// Modifie le nom, les langues (« fr,en », par ordre de préférence) et
+  /// l'activation d'un site.
+  ///
+  /// Si les langues changent, les règles de téléchargement sont
+  /// réappliquées : la version retenue de chaque numéro peut changer.
+  Future<ResultatAction<Source>> modifierSource(
+    Source source, {
+    required String nom,
+    required String langues,
+    required bool estActive,
+  }) async {
+    if (nom.trim().isEmpty) {
+      return const ResultatAction<Source>.echec(
+        DescriptionErreur(NatureErreur.nomVide),
+      );
+    }
+    try {
+      final modifiee = await _serviceAjoutSite.modifierSource(
+        source.copierAvec(
+          nom: nom,
+          langueParDefaut: langues,
+          estActive: estActive,
+        ),
+      );
+      await charger();
+      final service = _serviceTelechargement;
+      if (service != null &&
+          modifiee.langueParDefaut != source.langueParDefaut) {
+        try {
+          await service.appliquerReglesATous();
+        } catch (erreur, pile) {
+          debugPrint(
+            'Règles non appliquées après modification : $erreur\n$pile',
+          );
+        }
+      }
+      return ResultatAction<Source>.reussite(modifiee);
+    } catch (erreur, pile) {
+      return ResultatAction<Source>.echec(
+        DescriptionErreur.depuis(erreur, pile),
+      );
+    }
+  }
+
+  /// Supprime un site.
+  ///
+  /// Refusé tant que des titres de la bibliothèque viennent de ce site : on
+  /// le vérifie avant d'appeler le service pour afficher un message clair
+  /// plutôt que l'erreur technique de la base.
+  Future<ResultatAction<bool>> supprimerSource(Source source) async {
+    final idSource = source.id;
+    if (idSource == null) {
+      return const ResultatAction<bool>.echec(
+        DescriptionErreur(NatureErreur.introuvable),
+      );
+    }
+    try {
+      final titres = await _serviceBibliotheque.chargerTitres();
+      final nombre = titres.where((titre) => titre.idSource == idSource).length;
+      if (nombre > 0) {
+        return ResultatAction<bool>.echec(
+          DescriptionErreur(NatureErreur.siteAvecTitres, detail: '$nombre'),
+        );
+      }
+      await _serviceAjoutSite.supprimerSource(idSource);
+      await charger();
+      return const ResultatAction<bool>.reussite(true);
+    } catch (erreur, pile) {
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
     }
   }
 }

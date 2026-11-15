@@ -16,11 +16,7 @@ import '../etat/etat_couvertures.dart';
 /// (PLAYBOOK.md section 6). `Image.network` contournerait ces règles.
 class ImageCouverture extends StatefulWidget {
   /// Crée l'image pour [urlCouverture] (`null` : espace réservé seul).
-  const ImageCouverture({
-    super.key,
-    required this.urlCouverture,
-    this.referer,
-  });
+  const ImageCouverture({super.key, required this.urlCouverture, this.referer});
 
   /// Adresse de l'image, si le titre en a une.
   final String? urlCouverture;

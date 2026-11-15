@@ -2,23 +2,53 @@
 /// chapitres.
 library;
 
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+
 import '../modeles/categorie.dart';
 import '../modeles/chapitre.dart';
+import '../modeles/constantes.dart';
 import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
+import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
 import '../services/service_bibliotheque.dart';
+import '../services/service_telechargement.dart';
 import 'description_erreur.dart';
+import 'etat_lecteur.dart';
+import 'outils_chapitres.dart';
 
 /// Fiche d'un titre et actions sur ses chapitres et ses listes.
 class EtatTitre extends EtatNotifiant {
   /// Crée l'état du titre [idTitre] ; appeler [charger] pour lire la base.
-  EtatTitre(this._service, this.idTitre);
+  ///
+  /// Sans [serviceTelechargement], la fiche n'affiche pas l'état hors-ligne
+  /// des chapitres (tests de l'étape 3).
+  EtatTitre(
+    this._service,
+    this.idTitre, {
+    ServiceTelechargement? serviceTelechargement,
+  }) : _serviceTelechargement = serviceTelechargement {
+    // La file change à chaque page téléchargée : la fiche suit la
+    // progression de ses chapitres sans que le client ne recharge.
+    _abonnement = serviceTelechargement?.changements.listen(
+      (_) => unawaited(_relireTelechargements()),
+    );
+  }
 
   final ServiceBibliotheque _service;
+  final ServiceTelechargement? _serviceTelechargement;
+  StreamSubscription<void>? _abonnement;
 
   /// Identifiant du titre affiché.
   final int idTitre;
+
+  /// Lignes de la file de téléchargement des chapitres de ce titre.
+  Map<int, Telechargement> _telechargements = const <int, Telechargement>{};
+
+  /// Versions regroupées par numéro, du plus récent au plus ancien.
+  List<GroupeChapitres> _groupes = const <GroupeChapitres>[];
 
   Titre? _titre;
   Source? _source;
@@ -64,6 +94,29 @@ class EtatTitre extends EtatNotifiant {
   /// Nombre de chapitres non lus.
   int get nombreNonLus =>
       _chapitres.where((chapitre) => !chapitre.estLu).length;
+
+  /// `true` si les téléchargements sont disponibles (service branché).
+  bool get gereTelechargements => _serviceTelechargement != null;
+
+  /// Chapitres regroupés par numéro (une ligne par numéro, la version
+  /// téléchargée par le service en premier), du plus récent au plus ancien.
+  List<GroupeChapitres> get groupes => _groupes;
+
+  /// Nombre de numéros distincts.
+  int get nombreNumeros => _groupes.length;
+
+  /// Nombre de numéros dont aucune version n'est lue.
+  int get nombreNumerosNonLus =>
+      _groupes.where((groupe) => !groupe.estLu).length;
+
+  /// État hors-ligne d'un chapitre (téléchargé, en file, en cours…).
+  EtatHorsLigne etatHorsLigne(Chapitre chapitre) {
+    final id = chapitre.id;
+    return EtatHorsLigne.depuis(
+      chapitre,
+      id == null ? null : _telechargements[id],
+    );
+  }
 
   /// Numéro de la dernière lecture de la base : une réponse plus ancienne
   /// (chargement relancé, actualisation terminée entre-temps) est ignorée.
@@ -149,10 +202,46 @@ class EtatTitre extends EtatNotifiant {
       // saute pas et l'action reste instantanée sur un long titre.
       _chapitres = <Chapitre>[
         for (final existant in _chapitres)
-          existant.id == idChapitre ? existant.copierAvec(estLu: estLu) : existant,
+          existant.id == idChapitre
+              ? existant.copierAvec(estLu: estLu)
+              : existant,
       ];
       _mettreAJourNonLus();
+      _regrouper();
       notifier();
+      // La lecture fait avancer la fenêtre des titres suivis (et change les
+      // lus gardés des favoris) : le service met la file à jour.
+      await _appliquerRegles();
+      return const ResultatAction<bool>.reussite(true);
+    } catch (erreur, pile) {
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    }
+  }
+
+  /// Marque toutes les versions du [groupe] lues (ou non lues) : pour le
+  /// client, un numéro est lu ou ne l'est pas, quelle que soit la langue.
+  Future<ResultatAction<bool>> marquerGroupeLu(
+    GroupeChapitres groupe, {
+    bool estLu = true,
+  }) async {
+    try {
+      final ids = <int>{
+        for (final chapitre in groupe.versions)
+          if (chapitre.id != null && chapitre.estLu != estLu) chapitre.id!,
+      };
+      for (final id in ids) {
+        await _service.marquerLu(id, estLu: estLu);
+      }
+      _chapitres = <Chapitre>[
+        for (final existant in _chapitres)
+          ids.contains(existant.id)
+              ? existant.copierAvec(estLu: estLu)
+              : existant,
+      ];
+      _mettreAJourNonLus();
+      _regrouper();
+      notifier();
+      await _appliquerRegles();
       return const ResultatAction<bool>.reussite(true);
     } catch (erreur, pile) {
       return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
@@ -167,7 +256,9 @@ class EtatTitre extends EtatNotifiant {
         for (final existant in _chapitres) existant.copierAvec(estLu: estLu),
       ];
       _mettreAJourNonLus();
+      _regrouper();
       notifier();
+      await _appliquerRegles();
       return const ResultatAction<bool>.reussite(true);
     } catch (erreur, pile) {
       return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
@@ -180,6 +271,7 @@ class EtatTitre extends EtatNotifiant {
       await _service.ajouterTitreALaListe(idListe, idTitre);
       _idsListesDuTitre = <int>{..._idsListesDuTitre, idListe};
       notifier();
+      await _appliquerReglesSiSysteme(idListe);
       return const ResultatAction<bool>.reussite(true);
     } catch (erreur, pile) {
       return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
@@ -196,9 +288,131 @@ class EtatTitre extends EtatNotifiant {
           if (id != idListe) id,
       };
       notifier();
+      await _appliquerReglesSiSysteme(idListe);
       return const ResultatAction<bool>.reussite(true);
     } catch (erreur, pile) {
       return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    }
+  }
+
+  // ------------------------------------------------------- Téléchargements
+
+  /// Ajoute [chapitre] à la file de téléchargement (ou relance un échec).
+  Future<ResultatAction<bool>> telecharger(Chapitre chapitre) async {
+    final service = _serviceTelechargement;
+    final id = chapitre.id;
+    if (service == null || id == null) {
+      return const ResultatAction<bool>.echec(
+        DescriptionErreur(NatureErreur.introuvable),
+      );
+    }
+    try {
+      await service.telechargerChapitre(id);
+      await _relireTelechargements();
+      return const ResultatAction<bool>.reussite(true);
+    } catch (erreur, pile) {
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    }
+  }
+
+  /// Supprime l'archive de [chapitre] (ou le retire de la file).
+  ///
+  /// LIMITE : pour un titre favori ou suivi, les règles automatiques peuvent
+  /// le télécharger de nouveau plus tard s'il fait encore partie des
+  /// chapitres voulus.
+  Future<ResultatAction<bool>> supprimerTelechargement(
+    Chapitre chapitre,
+  ) async {
+    final service = _serviceTelechargement;
+    final id = chapitre.id;
+    if (service == null || id == null) {
+      return const ResultatAction<bool>.echec(
+        DescriptionErreur(NatureErreur.introuvable),
+      );
+    }
+    try {
+      await service.supprimerTelechargement(id);
+      await _relireTelechargements(relireChapitres: true);
+      return const ResultatAction<bool>.reussite(true);
+    } catch (erreur, pile) {
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    }
+  }
+
+  /// Crée l'état du lecteur ouvert sur [chapitre], ou `null` si les
+  /// téléchargements ne sont pas disponibles.
+  EtatLecteur? creerEtatLecteur(Chapitre chapitre) {
+    final service = _serviceTelechargement;
+    final id = chapitre.id;
+    if (service == null || id == null) return null;
+    return EtatLecteur(
+      serviceBibliotheque: _service,
+      serviceTelechargement: service,
+      idTitre: idTitre,
+      idChapitre: id,
+    );
+  }
+
+  /// Applique les règles de conservation si [idListe] est Favoris ou Suivis
+  /// (les seules listes qui déclenchent des téléchargements).
+  Future<void> _appliquerReglesSiSysteme(int idListe) async {
+    final liste = _listes.where((liste) => liste.id == idListe).firstOrNull;
+    if (liste == null ||
+        liste.nom == nomListeFavoris ||
+        liste.nom == nomListeSuivis) {
+      await _appliquerRegles();
+    }
+  }
+
+  /// Demande au service d'appliquer les règles de conservation à ce titre.
+  ///
+  /// Une erreur ici n'annule pas l'action du client (déjà enregistrée) : elle
+  /// est seulement journalisée, les règles seront réappliquées plus tard.
+  Future<void> _appliquerRegles() async {
+    final service = _serviceTelechargement;
+    if (service == null) return;
+    try {
+      await service.appliquerRegles(idTitre);
+    } catch (erreur, pile) {
+      debugPrint('Règles de téléchargement non appliquées : $erreur\n$pile');
+    }
+    await _relireTelechargements(relireChapitres: true);
+  }
+
+  /// Relit la file pour les chapitres de ce titre ; relit aussi les
+  /// chapitres si un téléchargement s'est terminé ou a été retiré (le
+  /// marqueur « téléchargé » a changé en base).
+  Future<void> _relireTelechargements({bool relireChapitres = false}) async {
+    final service = _serviceTelechargement;
+    if (service == null || estLibere) return;
+    try {
+      final idsChapitres = <int>{
+        for (final chapitre in _chapitres)
+          if (chapitre.id != null) chapitre.id!,
+      };
+      final file = await service.chargerFile();
+      final nouveaux = <int, Telechargement>{
+        for (final telechargement in file)
+          if (idsChapitres.contains(telechargement.idChapitre))
+            telechargement.idChapitre: telechargement,
+      };
+      final anciens = _telechargements;
+      final statutsChanges =
+          anciens.length != nouveaux.length ||
+          nouveaux.entries.any(
+            (entree) => anciens[entree.key]?.statut != entree.value.statut,
+          );
+      _telechargements = nouveaux;
+      if ((relireChapitres || statutsChanges) && _titre != null) {
+        final chapitres = await _service.chargerChapitres(idTitre);
+        _chapitres = _trier(chapitres);
+        _mettreAJourNonLus();
+        _regrouper();
+      }
+      notifier();
+    } catch (erreur, pile) {
+      // Un échec de lecture de la file ne doit pas masquer la fiche.
+      debugPrint('File de téléchargement illisible : $erreur\n$pile');
     }
   }
 
@@ -217,15 +431,19 @@ class EtatTitre extends EtatNotifiant {
     final listes = await _service.chargerListes();
     final listesDuTitre = await _service.chargerListesDuTitre(idTitre);
     final chapitres = await _service.chargerChapitres(idTitre);
-
-    // Le dépôt trie par numéro croissant ; la fiche montre le plus récent en
-    // haut. À numéro égal (plusieurs langues), le plus récemment enregistré
-    // passe d'abord.
-    final tries = List<Chapitre>.of(chapitres)
-      ..sort((a, b) {
-        final parNumero = b.numero.compareTo(a.numero);
-        return parNumero != 0 ? parNumero : (b.id ?? 0).compareTo(a.id ?? 0);
-      });
+    final tries = _trier(chapitres);
+    final service = _serviceTelechargement;
+    final idsChapitres = <int>{
+      for (final chapitre in tries)
+        if (chapitre.id != null) chapitre.id!,
+    };
+    final telechargements = service == null
+        ? const <int, Telechargement>{}
+        : <int, Telechargement>{
+            for (final telechargement in await service.chargerFile())
+              if (idsChapitres.contains(telechargement.idChapitre))
+                telechargement.idChapitre: telechargement,
+          };
 
     return (
       titre: titre,
@@ -237,7 +455,18 @@ class EtatTitre extends EtatNotifiant {
           if (liste.id != null) liste.id!,
       },
       chapitres: tries,
+      telechargements: telechargements,
     );
+  }
+
+  /// Le dépôt trie par numéro croissant ; la fiche montre le plus récent en
+  /// haut. À numéro égal (plusieurs langues), le plus récemment enregistré
+  /// passe d'abord.
+  static List<Chapitre> _trier(List<Chapitre> chapitres) {
+    return List<Chapitre>.of(chapitres)..sort((a, b) {
+      final parNumero = b.numero.compareTo(a.numero);
+      return parNumero != 0 ? parNumero : (b.id ?? 0).compareTo(a.id ?? 0);
+    });
   }
 
   void _appliquer(_DonneesTitre donnees) {
@@ -247,6 +476,22 @@ class EtatTitre extends EtatNotifiant {
     _listes = donnees.listes;
     _idsListesDuTitre = donnees.idsListesDuTitre;
     _chapitres = donnees.chapitres;
+    _telechargements = donnees.telechargements;
+    _regrouper();
+  }
+
+  /// Une ligne par numéro, la plus récente en haut.
+  void _regrouper() {
+    _groupes = regrouperParNumero(
+      _chapitres,
+      languesPreferees(_source),
+    ).reversed.toList();
+  }
+
+  @override
+  void dispose() {
+    unawaited(_abonnement?.cancel());
+    super.dispose();
   }
 
   void _signalerIntrouvable() {
@@ -270,6 +515,7 @@ typedef _DonneesTitre = ({
   List<ListeLecture> listes,
   Set<int> idsListesDuTitre,
   List<Chapitre> chapitres,
+  Map<int, Telechargement> telechargements,
 });
 
 /// Signal interne : le titre n'existe plus en base.

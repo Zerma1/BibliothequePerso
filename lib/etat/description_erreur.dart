@@ -32,6 +32,13 @@ enum NatureErreur {
   /// L'élément demandé n'existe plus dans la bibliothèque.
   introuvable,
 
+  /// Le client n'a pas saisi de nom (modification d'un site).
+  nomVide,
+
+  /// Suppression d'un site refusée : des titres en viennent encore. Le
+  /// [DescriptionErreur.detail] contient leur nombre.
+  siteAvecTitres,
+
   /// Erreur imprévue (bogue) : affichée sans faire planter l'application.
   inattendue,
 }

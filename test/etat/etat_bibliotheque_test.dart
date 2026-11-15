@@ -57,7 +57,10 @@ void main() {
       expect(resultat.donnee!.nombreNouveauxChapitres, greaterThan(0));
       expect(etat.titres, hasLength(1));
       expect(etat.titres.single.nombreChapitresNonLus, greaterThan(0));
-      expect(etat.categories.map((categorie) => categorie.nom), contains('gore'));
+      expect(
+        etat.categories.map((categorie) => categorie.nom),
+        contains('gore'),
+      );
       expect(etat.estEnAjout, isFalse);
 
       final favoris = etat.listes.firstWhere(
@@ -125,21 +128,24 @@ void main() {
     expect(etat.titres, isEmpty);
   });
 
-  test('une erreur de chargement est exposée, puis effacée au rechargement', () async {
-    final faux = FauxServiceBibliotheque()
-      ..erreurLecture = const ErreurService('Base verrouillée');
-    final etatFaux = EtatBibliotheque(faux);
+  test(
+    'une erreur de chargement est exposée, puis effacée au rechargement',
+    () async {
+      final faux = FauxServiceBibliotheque()
+        ..erreurLecture = const ErreurService('Base verrouillée');
+      final etatFaux = EtatBibliotheque(faux);
 
-    await etatFaux.charger();
-    expect(etatFaux.erreur!.nature, NatureErreur.refus);
-    expect(etatFaux.estEnChargement, isFalse);
+      await etatFaux.charger();
+      expect(etatFaux.erreur!.nature, NatureErreur.refus);
+      expect(etatFaux.estEnChargement, isFalse);
 
-    faux.erreurLecture = null;
-    await etatFaux.charger();
-    expect(etatFaux.erreur, isNull);
-    expect(etatFaux.estVide, isTrue);
-    etatFaux.dispose();
-  });
+      faux.erreurLecture = null;
+      await etatFaux.charger();
+      expect(etatFaux.erreur, isNull);
+      expect(etatFaux.estVide, isTrue);
+      etatFaux.dispose();
+    },
+  );
 
   test('recharge la bibliothèque même quand l\'ajout échoue', () async {
     final faux = FauxServiceBibliotheque();

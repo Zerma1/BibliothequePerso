@@ -85,7 +85,10 @@ void main() {
   });
 
   test('propose un nom à partir de l\'adresse', () {
-    expect(etat.proposerNom('https://www.exemple.test/manga/x'), 'exemple.test');
+    expect(
+      etat.proposerNom('https://www.exemple.test/manga/x'),
+      'exemple.test',
+    );
     expect(etat.proposerNom('pas une adresse'), '');
   });
 

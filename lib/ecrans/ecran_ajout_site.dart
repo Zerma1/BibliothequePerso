@@ -121,9 +121,8 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
                       border: OutlineInputBorder(),
                     ),
                     validator: _validerUrl,
-                    onChanged: (valeur) => setState(
-                      () => _nomPropose = etat.proposerNom(valeur),
-                    ),
+                    onChanged: (valeur) =>
+                        setState(() => _nomPropose = etat.proposerNom(valeur)),
                   ),
                   const SizedBox(height: espacementMoyen),
                   TextFormField(

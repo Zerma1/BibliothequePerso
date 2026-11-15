@@ -3,9 +3,12 @@ import 'package:bibliotheque_perso/ecrans/ecran_accueil.dart';
 import 'package:bibliotheque_perso/ecrans/ecran_erreur_demarrage.dart';
 import 'package:bibliotheque_perso/etat/constantes_etat.dart';
 import 'package:bibliotheque_perso/main.dart';
+import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
+import 'package:bibliotheque_perso/modeles/telechargement.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/widgets/carte_titre.dart';
+import 'package:bibliotheque_perso/widgets/constantes_interface.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -116,6 +119,55 @@ void main() {
       expect(find.text('MangaDex'), findsOneWidget);
     },
   );
+
+  testWidgets('onglets Téléchargements et Paramètres, badge et version', (
+    tester,
+  ) async {
+    final bibliotheque = FauxServiceBibliotheque()
+      ..ajouterTitreDeTest(
+        'Titre',
+        chapitres: const <Chapitre>[
+          Chapitre(id: 1, urlChapitre: 'u1', nom: 'Un', numero: 1),
+        ],
+      );
+    final telechargement = FauxServiceTelechargement(bibliotheque)
+      ..modifierLigne(1, StatutTelechargement.enAttente);
+    tester.view.physicalSize = const Size(1000, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      envelopper(
+        const EcranAccueil(),
+        bibliotheque: bibliotheque,
+        telechargement: telechargement,
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    // Version en petit sous le rail.
+    expect(find.text(Textes.versionCourte(versionApplication)), findsOneWidget);
+    // Badge : un chapitre en attente.
+    expect(
+      find.descendant(
+        of: find.byType(NavigationRail),
+        matching: find.descendant(
+          of: find.byType(Badge),
+          matching: find.text('1'),
+        ),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text(Textes.ongletTelechargements));
+    await tester.pumpAndSettle();
+    expect(find.text('En attente'), findsOneWidget);
+
+    await tester.tap(find.text(Textes.ongletParametres).first);
+    await tester.pumpAndSettle();
+    // Première section de l'écran Paramètres.
+    expect(find.text(Textes.sectionMisesAJour), findsOneWidget);
+  });
 
   testWidgets('écran d\'erreur de démarrage lisible', (tester) async {
     var essais = 0;

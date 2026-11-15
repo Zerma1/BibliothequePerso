@@ -9,6 +9,7 @@ import '../modeles/constantes.dart';
 import '../modeles/liste_lecture.dart';
 import '../modeles/titre.dart';
 import '../services/service_bibliotheque.dart';
+import '../services/service_telechargement.dart';
 import 'constantes_etat.dart';
 import 'description_erreur.dart';
 import 'etat_titre.dart';
@@ -17,9 +18,13 @@ import 'etat_titre.dart';
 /// recherche.
 class EtatBibliotheque extends EtatNotifiant {
   /// Crée l'état ; appeler [charger] pour lire la base.
-  EtatBibliotheque(this._service);
+  ///
+  /// [serviceTelechargement] est transmis aux fiches des titres (état
+  /// hors-ligne des chapitres, lecteur).
+  EtatBibliotheque(this._service, {this._serviceTelechargement});
 
   final ServiceBibliotheque _service;
+  final ServiceTelechargement? _serviceTelechargement;
 
   List<Titre> _titres = const <Titre>[];
   List<ListeLecture> _listes = const <ListeLecture>[];
@@ -238,7 +243,11 @@ class EtatBibliotheque extends EtatNotifiant {
   }
 
   /// Crée l'état de la fiche d'un titre (l'écran n'a pas accès au service).
-  EtatTitre creerEtatTitre(int idTitre) => EtatTitre(_service, idTitre);
+  EtatTitre creerEtatTitre(int idTitre) => EtatTitre(
+    _service,
+    idTitre,
+    serviceTelechargement: _serviceTelechargement,
+  );
 
   @override
   void dispose() {
