@@ -329,6 +329,17 @@ délais de `ClientHttpPoli` et ne contourne aucune protection d'accès (connexio
 
 Chaque étape se termine par une relecture (`relecteur-code`) et une validation du client.
 
+### Idées pour des versions futures (à prévoir, pas à implémenter maintenant)
+
+Demandées par le client le 2026-11-15. Le code actuel ne doit pas les fermer :
+
+| Idée | Ce qu'il faut préserver dès maintenant |
+|------|----------------------------------------|
+| **Stockage des chapitres sur un NAS ou un serveur personnel** | `StockageTelechargements` reste le **seul** point d'accès aux archives : aucune autre classe ne lit ni n'écrit de fichier de chapitre. On pourra alors en faire une interface avec plusieurs implémentations (disque local, partage réseau, serveur WebDAV…). |
+| **Publicité dans l'application** | ⚠️ Incompatible avec les conditions d'utilisation de MangaDex, qui interdisent toute publicité dans une application utilisant son API (section 6). À trancher par le client avant toute implémentation : publicité absente quand MangaDex est utilisé, ou abandon de l'idée. Garder l'interface découpée en écrans et widgets réutilisables pour pouvoir y réserver un emplacement. |
+| **Regroupement des catégories de même sens** (« Survival » / « Survie », « Comedy » / « Comédie ») | Les catégories restent normalisées dans une seule table et liées aux titres par `titres_categories`. On pourra ajouter une table d'équivalences (catégorie → catégorie de référence) et un dictionnaire de traductions, sans toucher aux adaptateurs de sites. |
+
+
 ---
 
 ## 12. Branches et versions
