@@ -27,11 +27,14 @@ limité à son scope :
 | `integrateur-plateformes` | `pubspec.yaml`, `analysis_options.yaml`, `lib/main.dart`, `android/`, `windows/`, `linux/`, `assets/` |
 | `developpeur-donnees` | `lib/modeles/`, `lib/donnees/` (+ tests) |
 | `developpeur-sources` | `lib/sources/` (+ tests, HTML enregistrés) |
+| `developpeur-services` | `lib/services/` (+ tests) |
 | `developpeur-interface` | `lib/ecrans/`, `lib/widgets/`, `lib/etat/` (+ tests) |
 | `testeur-qualite` | `test/` uniquement |
 | `relecteur-code` | lecture seule |
 
-- `lib/services/` et `test/services/` : écrits directement par l'orchestrateur.
+- `lib/services/` et `test/services/` : écrits par `developpeur-services` (créé le 2026-11-15
+  à la demande du client, pour que l'orchestrateur reste disponible). L'orchestrateur garde
+  l'assemblage et les décisions, et délègue le travail lourd.
 - Cycle : agent spécialiste → `testeur-qualite` → `relecteur-code` → présentation au client.
 - Un nouvel agent ou un nouveau paquet pub.dev : proposer au client avant de l'ajouter.
 - Économie de tokens : pour une petite modification évidente, l'orchestrateur peut la faire

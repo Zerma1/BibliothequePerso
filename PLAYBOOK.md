@@ -50,7 +50,8 @@ etc. que le client lit sur **plusieurs sites différents** :
 Un agent qui doit modifier un fichier **hors de son scope** s'arrête et le signale à
 l'orchestrateur. Il ne fait pas la modification lui-même.
 
-**`lib/services/` et `test/services/` sont sous la responsabilité directe de l'orchestrateur.**
+**`lib/services/` et `test/services/` sont écrits par l'agent `developpeur-services`** (créé à la
+demande du client), sous la supervision de l'orchestrateur.
 Cette couche assemble les sources et les données ; elle doit donc rester cohérente avec les
 deux scopes. Les autres agents la lisent sans la modifier.
 
