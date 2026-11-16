@@ -62,6 +62,16 @@ const int taillePageMaxFluxMangaDex = 500;
 /// `limit` « maximum: 100 »).
 const int taillePageRechercheMangaDex = 20;
 
+/// Taille de page de `GET /cover` (api.yaml, operationId `get-cover` :
+/// `limit` « default: 10, maximum: 100 »).
+const int taillePageCouverturesMangaDex = 100;
+
+/// Largeur (en pixels) de la miniature de couverture utilisée pour le choix
+/// du client. docs/03-manga/covers : « two premade thumbnail sizes for each
+/// cover, with respective widths of 256 and 512 pixels »,
+/// `…/:cover-filename.{256, 512}.jpg`.
+const int largeurMiniatureCouvertureMangaDex = 512;
+
 /// Plafond `offset + limit` des collections MangaDex (docs/2-limitations :
 /// « Requests where offset + size > 10.000 will be rejected »).
 const int plafondOffsetMangaDex = 10000;

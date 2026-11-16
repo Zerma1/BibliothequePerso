@@ -7,17 +7,27 @@
 // - manga_recherche.json : GET /manga?title=Shinigami ni Sodaterareta&limit=5&
 //   includes[]=cover_art
 // - at_home_serveur.json : GET /at-home/server/ef4aae9e-…
+// Enregistrées le 2026-11-16 (étape 6, User-Agent de l'application) :
+// - couvertures_liste.json : GET /cover?manga[]=12e28a8a-…&limit=100&
+//   offset=0&order[volume]=asc (10 couvertures, volumes 1 à 10)
+// - manga_recherche_filtre.json : GET /manga?title=Shinigami ni Sodaterareta
+//   &limit=5&includes[]=cover_art&includes[]=author&includes[]=artist&
+//   contentRating[]=safe&contentRating[]=suggestive
 // Les pages 2 et 3 du flux ne sont pas enregistrées (dix requêtes au plus) :
 // les tests de pagination les reconstruisent à partir des entrées réelles de
 // la page 1, en gardant la structure exacte de l'enveloppe (result, response,
 // data, limit, offset, total).
 import 'dart:convert';
 
+import 'package:bibliotheque_perso/modeles/constantes.dart';
+import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
 import 'package:bibliotheque_perso/modeles/titre_alternatif.dart';
 import 'package:bibliotheque_perso/sources/constantes_sources.dart';
+import 'package:bibliotheque_perso/sources/couverture_site.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/sources/source_mangadex.dart';
+import 'package:bibliotheque_perso/sources/source_site.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
@@ -44,6 +54,7 @@ void main() {
     List<String> languesChapitres = const <String>[],
     bool qualiteReduite = false,
     int taillePageChapitres = taillePageMaxFluxMangaDex,
+    List<String>? niveauxContenuRecherche,
   }) {
     return SourceMangaDex(
       creerClientTest((requete) async {
@@ -53,6 +64,7 @@ void main() {
       languesChapitres: languesChapitres,
       qualiteReduite: qualiteReduite,
       taillePageChapitres: taillePageChapitres,
+      niveauxContenuRecherche: niveauxContenuRecherche,
     );
   }
 
@@ -277,6 +289,250 @@ void main() {
         expect(await source.rechercher('zzzz'), isEmpty);
       },
     );
+  });
+
+  group('Niveau de contenu (contentRating)', () {
+    test('la fiche réelle donne niveauContenu = safe', () async {
+      final source = creerSource(
+        (requete) => reponseJson(lireExemple('exemples_json/manga_fiche.json')),
+      );
+      final fiche = await source.recupererFiche(urlTitreReference);
+      expect(fiche.titre.niveauContenu, niveauContenuTousPublics);
+    });
+
+    test('les résultats de recherche portent aussi leur niveau', () async {
+      final source = creerSource(
+        (requete) =>
+            reponseJson(lireExemple('exemples_json/manga_recherche.json')),
+      );
+      final titres = await source.rechercher('Shinigami');
+      expect(titres.single.niveauContenu, 'safe');
+    });
+
+    test('valeur absente ou inconnue : null ; casse tolérée', () {
+      expect(SourceMangaDex.niveauContenuDepuisApi(null), isNull);
+      expect(SourceMangaDex.niveauContenuDepuisApi('inconnu'), isNull);
+      expect(SourceMangaDex.niveauContenuDepuisApi(''), isNull);
+      expect(
+        SourceMangaDex.niveauContenuDepuisApi(' Pornographic '),
+        niveauContenuPornographique,
+      );
+      for (final niveau in niveauxContenu) {
+        expect(SourceMangaDex.niveauContenuDepuisApi(niveau), niveau);
+      }
+    });
+
+    test("sans filtre : aucun contentRating[] (défaut de l'API)", () async {
+      final source = creerSource(
+        (requete) =>
+            reponseJson(lireExemple('exemples_json/manga_recherche.json')),
+      );
+      await source.rechercher('Shinigami');
+      expect(
+        requetes.single.url.queryParametersAll.containsKey('contentRating[]'),
+        isFalse,
+      );
+    });
+
+    test(
+      'avec filtre : contentRating[] envoyé (réponse réelle filtrée)',
+      () async {
+        final source = creerSource(
+          (requete) => reponseJson(
+            lireExemple('exemples_json/manga_recherche_filtre.json'),
+          ),
+          niveauxContenuRecherche: <String>['safe', 'suggestive', 'safe'],
+        );
+        final titres = await source.rechercher('Shinigami ni Sodaterareta');
+        // Doublon retiré, ordre gardé.
+        expect(
+          requetes.single.url.queryParametersAll['contentRating[]'],
+          <String>['safe', 'suggestive'],
+        );
+        expect(titres, hasLength(1));
+        expect(titres.single.niveauContenu, 'safe');
+      },
+    );
+
+    test('filtre vide : aucun résultat, sans appel réseau', () async {
+      final source = creerSource(
+        (requete) => reponseJson('{}'),
+        niveauxContenuRecherche: const <String>[],
+      );
+      expect(await source.rechercher('Shinigami'), isEmpty);
+      expect(requetes, isEmpty);
+    });
+
+    test('niveau inconnu : ArgumentError à la construction', () {
+      expect(
+        () => creerSource(
+          (requete) => reponseJson('{}'),
+          niveauxContenuRecherche: <String>['tout'],
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('le flux de chapitres demande toujours les quatre niveaux', () async {
+      final source = creerSource(
+        (requete) => reponseJson(pageFlux(<Object?>[], 500, 0, 0)),
+        niveauxContenuRecherche: <String>['safe'],
+      );
+      await source.recupererChapitres(urlTitreReference);
+      expect(
+        requetes.single.url.queryParametersAll['contentRating[]'],
+        niveauxContenu,
+      );
+    });
+  });
+
+  group('recupererCouvertures', () {
+    test('GET /cover avec manga[], limit, offset et order[volume]', () async {
+      final source = creerSource(
+        (requete) =>
+            reponseJson(lireExemple('exemples_json/couvertures_liste.json')),
+      );
+      await source.recupererCouvertures(urlTitreReference);
+      final url = requetes.single.url;
+      expect(url.host, 'api.mangadex.org');
+      expect(url.path, '/cover');
+      expect(url.queryParametersAll['manga[]'], <String>[idReference]);
+      expect(url.queryParameters['limit'], '100');
+      expect(url.queryParameters['offset'], '0');
+      expect(url.queryParameters['order[volume]'], 'asc');
+      expect(requetes.single.headers['user-agent'], userAgentApplication);
+    });
+
+    test("les 10 couvertures réelles, dans l'ordre des volumes", () async {
+      final source = creerSource(
+        (requete) =>
+            reponseJson(lireExemple('exemples_json/couvertures_liste.json')),
+      );
+      final couvertures = await source.recupererCouvertures(urlTitreReference);
+      expect(couvertures, hasLength(10));
+      expect(couvertures.map((c) => c.volume).toList(), <String>[
+        for (var i = 1; i <= 10; i++) '$i',
+      ]);
+      expect(couvertures.every((c) => c.langue == 'ja'), isTrue);
+      expect(
+        couvertures.first,
+        const CouvertureSite(
+          url:
+              'https://uploads.mangadex.org/covers/$idReference/'
+              'c4efd44d-b107-4634-a8e9-062e45b25253.jpg',
+          urlMiniature:
+              'https://uploads.mangadex.org/covers/$idReference/'
+              'c4efd44d-b107-4634-a8e9-062e45b25253.jpg.512.jpg',
+          volume: '1',
+          langue: 'ja',
+        ),
+      );
+      // Le volume 10 est la couverture principale de la fiche réelle.
+      expect(
+        couvertures.last.url,
+        'https://uploads.mangadex.org/covers/$idReference/'
+        '2e9341cc-267d-487b-95e5-a00cd23a3c36.jpg',
+      );
+    });
+
+    test('SourceMangaDex est une SourceAvecCouvertures', () {
+      final SourceSite source = creerSource((requete) => reponseJson('{}'));
+      expect(source, isA<SourceAvecCouvertures>());
+    });
+
+    test('pagination reconstruite : 2 pages pour 150 couvertures', () async {
+      final reelles =
+          lireJsonExemple('couvertures_liste.json')['data']! as List<Object?>;
+      Object? copie(int i) {
+        final base = reelles[i % reelles.length]! as Map<String, Object?>;
+        final attributs = base['attributes']! as Map<String, Object?>;
+        return <String, Object?>{
+          ...base,
+          'id': 'c-$i',
+          'attributes': <String, Object?>{
+            ...attributs,
+            'volume': '${i + 1}',
+            'fileName': 'f$i.jpg',
+          },
+        };
+      }
+
+      final source = creerSource((requete) {
+        final offset = int.parse(requete.url.queryParameters['offset']!);
+        final fin = offset + 100 > 150 ? 150 : offset + 100;
+        return reponseJson(
+          pageFlux(
+            <Object?>[for (var i = offset; i < fin; i++) copie(i)],
+            100,
+            offset,
+            150,
+          ),
+        );
+      });
+      final couvertures = await source.recupererCouvertures(urlTitreReference);
+      expect(couvertures, hasLength(150));
+      expect(requetes.map((r) => r.url.queryParameters['offset']), <String>[
+        '0',
+        '100',
+      ]);
+    });
+
+    test('volume et langue null ; fileName vide ignoré', () async {
+      final source = creerSource(
+        (requete) => reponseJson(
+          pageFlux(
+            <Object?>[
+              <String, Object?>{
+                'id': 'a',
+                'type': 'cover_art',
+                'attributes': <String, Object?>{
+                  'volume': null,
+                  'fileName': 'x.png',
+                  'locale': null,
+                },
+                'relationships': <Object?>[],
+              },
+              <String, Object?>{
+                'id': 'b',
+                'type': 'cover_art',
+                'attributes': <String, Object?>{'volume': '2', 'fileName': ''},
+                'relationships': <Object?>[],
+              },
+            ],
+            100,
+            0,
+            2,
+          ),
+        ),
+      );
+      final couvertures = await source.recupererCouvertures(urlTitreReference);
+      expect(couvertures, hasLength(1));
+      expect(couvertures.single.volume, isNull);
+      expect(couvertures.single.langue, isNull);
+      expect(couvertures.single.urlMiniature, endsWith('/x.png.512.jpg'));
+    });
+
+    test('aucune couverture : liste vide (pas une erreur)', () async {
+      final source = creerSource(
+        (requete) => reponseJson(pageFlux(<Object?>[], 100, 0, 0)),
+      );
+      expect(await source.recupererCouvertures(urlTitreReference), isEmpty);
+    });
+
+    test('URL de titre invalide : ErreurSource sans requête', () async {
+      final source = creerSource((requete) => reponseJson('{}'));
+      await expectLater(
+        source.recupererCouvertures('https://exemple.org/title/x'),
+        throwsA(
+          isA<ErreurSource>().having(
+            (e) => e.typeDetecte,
+            'typeDetecte',
+            TypeSource.mangaDex,
+          ),
+        ),
+      );
+      expect(requetes, isEmpty);
+    });
   });
 
   group('recupererChapitres', () {
@@ -645,6 +901,51 @@ void main() {
           throwsA(isA<ErreurSource>().having((e) => e.codeStatut, 'code', 404)),
         );
         expect(requetes, hasLength(1));
+      },
+    );
+
+    test(
+      '404 : type MangaDex et extrait de la réponse pour le rapport',
+      () async {
+        final source = creerSource(
+          (requete) => reponseJson(
+            '{"result":"error","errors":[{"status":404,"title":"Not found"}]}',
+            statut: 404,
+          ),
+        );
+        await expectLater(
+          source.recupererFiche(urlTitreReference),
+          throwsA(
+            isA<ErreurSource>()
+                .having((e) => e.typeDetecte, 'type', TypeSource.mangaDex)
+                .having(
+                  (e) => e.extraitReponse,
+                  'extrait',
+                  contains('Not found'),
+                ),
+          ),
+        );
+      },
+    );
+
+    test(
+      'structure inattendue (200) : extrait du début de la réponse',
+      () async {
+        final source = creerSource(
+          (requete) => reponseJson('{"result":"ok","data":{},"total":0}'),
+        );
+        await expectLater(
+          source.recupererChapitres(urlTitreReference),
+          throwsA(
+            isA<ErreurSource>()
+                .having((e) => e.typeDetecte, 'type', TypeSource.mangaDex)
+                .having(
+                  (e) => e.extraitReponse,
+                  'extrait',
+                  '{"result":"ok","data":{},"total":0}',
+                ),
+          ),
+        );
       },
     );
   });

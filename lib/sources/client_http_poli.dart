@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 
 import 'constantes_sources.dart';
 import 'erreur_source.dart';
+import 'rapport_erreur_source.dart';
 
 /// Fonction qui donne l'heure courante (remplaçable dans les tests).
 typedef FonctionHorloge = DateTime Function();
@@ -336,12 +337,17 @@ class ClientHttpPoli {
         if (code >= 200 && code < 300) {
           return (reponse, chrono.elapsed);
         }
+        // Extrait nettoyé des données personnelles (une page d'erreur peut
+        // afficher l'adresse IP ou un jeton) : il est cité dans le message
+        // affiché et gardé à part pour le rapport d'erreur exportable.
+        final extrait = _extrait(reponse);
         derniereErreur = ErreurSource(
           url,
-          'Réponse HTTP $code : ${_extrait(reponse)}',
+          'Réponse HTTP $code : $extrait',
           codeStatut: code,
           octetsRecus: reponse.bodyBytes.length,
           duree: chrono.elapsed,
+          extraitReponse: extrait,
         );
         if (code == codeHttpTropDeRequetes) {
           // Le serveur dit combien de temps patienter : on lui obéit, sauf si
@@ -501,14 +507,10 @@ class ClientHttpPoli {
     return encodage.decode(reponse.bodyBytes);
   }
 
+  /// Début du corps de [reponse], nettoyé par `extraireDebutReponse`.
   String _extrait(http.Response reponse) {
-    final texte = utf8
-        .decode(reponse.bodyBytes, allowMalformed: true)
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-    if (texte.length <= longueurMaxExtraitReponse) {
-      return texte;
-    }
-    return '${texte.substring(0, longueurMaxExtraitReponse)}…';
+    return extraireDebutReponse(
+      utf8.decode(reponse.bodyBytes, allowMalformed: true),
+    );
   }
 }
