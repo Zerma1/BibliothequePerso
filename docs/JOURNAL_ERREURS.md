@@ -110,3 +110,18 @@ erreur qui semble déjà vue.
 - **Prévention** : pour tester avec les données réelles du client, le client lance lui-même
   l'application ; les essais de l'orchestrateur se font sur une base de test séparée.
 - **Statut** : connu, sans conséquence.
+
+### E9 — Build Android de publication : plantage de lint
+- **Date(s)** : 2026-11-16
+- **Symptôme** : `flutter build apk --release` échoue dans `AndroidLintWorkAction` :
+  « Unexpected failure during lint analysis of UrlLauncher.java », `NoSuchMethodError` dans
+  `JavaDocParser.parseDataItem`.
+- **Cause racine** : bug interne de l'outil lint d'Android (incompatibilité de version de son
+  analyseur de Javadoc) en analysant le code Java du plugin `url_launcher` ; la vérification lint
+  des builds de publication (`lintVitalRelease`) est bloquante par défaut. Le build debug n'est
+  pas concerné.
+- **Solution appliquée** : `lint { checkReleaseBuilds = false }` dans
+  `android/app/build.gradle.kts` (notre code Dart est vérifié par `flutter analyze`).
+- **Prévention** : réessayer de réactiver lint après une mise à jour de Flutter / de l'Android
+  Gradle Plugin ; ne pas retirer le réglage sans vérifier un build de publication.
+- **Statut** : contourné.

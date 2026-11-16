@@ -5,6 +5,13 @@ plugins {
 }
 
 android {
+    // L'analyse lint de publication plante sur le code Java d'un plugin
+    // (url_launcher, bug interne de lint : NoSuchMethodError dans JavaDocParser).
+    // Notre code est vérifié par `flutter analyze` ; voir E9 dans
+    // docs/JOURNAL_ERREURS.md.
+    lint {
+        checkReleaseBuilds = false
+    }
     namespace = "io.github.zerma1.bibliotheque_perso"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
