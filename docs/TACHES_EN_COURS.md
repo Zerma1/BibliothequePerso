@@ -12,10 +12,10 @@ au fur et à mesure ; ne pas commiter ; `flutter analyze` à 0 sur son périmèt
 ## Étape 5 — corrections de la relecture et décisions du client (2026-11-15)
 
 ### developpeur-donnees (`lib/modeles/`, `lib/donnees/`)
-- [ ] D1. `DepotTelechargements.reserverProchain()` atomique ; `reprendreApresInterruption({ancienneteMinimale})` ; `StockageTelechargements.nettoyerFichiersPartiels({ancienneteMinimale})` ; `DepotChapitres.chargerChapitresTelecharges({idTitre})`. (Probablement fait : vérifier et tester.)
-- [ ] D2. Migration 4 (ne pas modifier 1 à 3) : `chapitres.nom_archive TEXT NULL`, `chapitres.date_suppression_prevue INTEGER NULL`, `titres.langues_preferees TEXT NULL`. Champs `Chapitre.nomArchive`, `Chapitre.dateSuppressionPrevue`, `Titre.languesPreferees` (avec un moyen explicite de remettre à null dans `copierAvec`).
-- [ ] D3. `DepotChapitres.enregistrerArchive(id, String? nomArchive)`, `planifierSuppression(id, DateTime?)`, `chargerSuppressionsEchues(DateTime maintenant)` ; `DepotTitres.enregistrerLanguesPreferees(idTitre, String?)` (une actualisation du titre depuis le site ne l'écrase pas).
-- [ ] D4. Noms d'archive uniques : `ch<numero>.<langue>.zip`, et seulement en cas de collision `ch1.fr.2.zip`, `ch1.fr.3.zip`… ; `ouvrirEcriture` renvoie le chemin relatif retenu ; lecture / suppression par `nomArchive` (repli sur l'ancien calcul si null). Deux oneshots → deux archives.
+- [x] D1. `DepotTelechargements.reserverProchain()` atomique ; `reprendreApresInterruption({ancienneteMinimale})` ; `StockageTelechargements.nettoyerFichiersPartiels({ancienneteMinimale})` ; `DepotChapitres.chargerChapitresTelecharges({idTitre})`. (Probablement fait : vérifier et tester.)
+- [x] D2. Migration 4 (ne pas modifier 1 à 3) : `chapitres.nom_archive TEXT NULL`, `chapitres.date_suppression_prevue INTEGER NULL`, `titres.langues_preferees TEXT NULL`. Champs `Chapitre.nomArchive`, `Chapitre.dateSuppressionPrevue`, `Titre.languesPreferees` (avec un moyen explicite de remettre à null dans `copierAvec`).
+- [x] D3. `DepotChapitres.enregistrerArchive(id, String? nomArchive)`, `planifierSuppression(id, DateTime?)`, `chargerSuppressionsEchues(DateTime maintenant)` ; `DepotTitres.enregistrerLanguesPreferees(idTitre, String?)` (une actualisation du titre depuis le site ne l'écrase pas).
+- [x] D4. Noms d'archive uniques : `ch<numero>.<langue>.zip`, et seulement en cas de collision `ch1.fr.2.zip`, `ch1.fr.3.zip`… ; `ouvrirEcriture` renvoie le chemin relatif retenu ; lecture / suppression par `nomArchive` (repli sur l'ancien calcul si null). Deux oneshots → deux archives.
 
 ### developpeur-services (`lib/services/`)
 - [ ] S1. Corriger les erreurs de compilation (`service_bibliotheque.dart` ~289 : `titre` utilisé avant sa déclaration).
