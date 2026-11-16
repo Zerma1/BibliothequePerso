@@ -309,6 +309,92 @@ void main() {
       expect(plan.idsATelecharger, isEmpty);
       expect(plan.idsASupprimer, <int>[1]);
     });
+
+    test("un favori déjà lu garde l'anglais téléchargé, sans retélécharger "
+        'le français', () {
+      final chapitres = <Chapitre>[
+        const Chapitre(
+          id: 1,
+          urlChapitre: 'en1',
+          nom: 'en',
+          numero: 1,
+          langue: 'en',
+          estLu: true,
+          estTelecharge: true,
+        ),
+        const Chapitre(
+          id: 2,
+          urlChapitre: 'fr1',
+          nom: 'fr',
+          numero: 1,
+          langue: 'fr',
+        ),
+      ];
+      final plan = politique.calculer(
+        chapitres,
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(plan.idsVoulus, <int>{1});
+      expect(plan.idsATelecharger, isEmpty);
+      expect(plan.idsASupprimer, isEmpty);
+    });
+
+    test("un favori déjà lu sans version téléchargée prend toujours le "
+        'français', () {
+      final chapitres = <Chapitre>[
+        const Chapitre(
+          id: 1,
+          urlChapitre: 'en1',
+          nom: 'en',
+          numero: 1,
+          langue: 'en',
+          estLu: true,
+        ),
+        const Chapitre(
+          id: 2,
+          urlChapitre: 'fr1',
+          nom: 'fr',
+          numero: 1,
+          langue: 'fr',
+        ),
+      ];
+      final plan = politique.calculer(
+        chapitres,
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(plan.idsATelecharger, <int>[2]);
+    });
+
+    test('un favori déjà lu avec une version dans une langue non choisie '
+        "ne la garde pas", () {
+      final chapitres = <Chapitre>[
+        const Chapitre(
+          id: 1,
+          urlChapitre: 'ru1',
+          nom: 'ru',
+          numero: 1,
+          langue: 'ru',
+          estLu: true,
+          estTelecharge: true,
+        ),
+        const Chapitre(
+          id: 2,
+          urlChapitre: 'fr1',
+          nom: 'fr',
+          numero: 1,
+          langue: 'fr',
+        ),
+      ];
+      final plan = politique.calculer(
+        chapitres,
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(plan.idsATelecharger, <int>[2]);
+      expect(plan.idsASupprimer, <int>[1]);
+    });
   });
 
   group('langues non choisies par le client', () {

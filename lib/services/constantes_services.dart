@@ -43,3 +43,34 @@ const Duration delaiSuppressionDifferee = Duration(hours: 24);
 /// plus automatiquement (le client peut toujours le relancer à la main) :
 /// évite de solliciter sans fin un site qui refuse ce chapitre.
 const int nombreMaximalEchecsAutomatiques = 3;
+
+/// Nombre de blocs aléatoires de l'identifiant d'un service dans le verrou
+/// de la file : 4 × 32 bits rendent une collision entre deux isolats
+/// impossible en pratique.
+const int nombreBlocsIdentifiantVerrou = 4;
+
+/// Borne (exclue) d'un bloc aléatoire de l'identifiant : 2^32, la plus grande
+/// valeur acceptée par `Random.nextInt`.
+const int borneBlocIdentifiantVerrou = 1 << 32;
+
+/// Base d'écriture d'un bloc de l'identifiant (hexadécimal, plus court).
+const int baseBlocIdentifiantVerrou = 16;
+
+/// Largeur d'un bloc de l'identifiant : 8 chiffres hexadécimaux pour 32 bits,
+/// complétés par des zéros pour que tous les identifiants aient la même
+/// longueur.
+const int largeurBlocIdentifiantVerrou = 8;
+
+/// Le verrou de la file est renouvelé pendant un chapitre au plus une fois
+/// par tiers de sa durée : assez souvent pour qu'il n'expire jamais entre
+/// deux pages, sans écrire en base à chaque page.
+const int fractionRenouvellementVerrou = 3;
+
+/// Marge ajoutée à l'expiration d'un verrou avant un nouvel essai : on
+/// réessaie juste **après** l'expiration, pas pile dessus (sinon le verrou
+/// serait encore considéré comme pris).
+const Duration margeNouvelEssaiVerrou = Duration(seconds: 1);
+
+/// Attente minimale avant un nouvel essai de la file : évite de relire la
+/// base en boucle si le verrou de l'autre isolat expire tout de suite.
+const Duration attenteMinimaleNouvelEssai = Duration(seconds: 5);

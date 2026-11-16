@@ -167,6 +167,49 @@ void main() {
   Future<int> idListe(String nom) async =>
       (await depotListes.chargerListeParNom(nom))!.id!;
 
+  /// Second service sur la même base (dépôt, stockage ou horloge
+  /// remplacés), fermé à la fin du test.
+  ServiceTelechargement creerService({
+    DepotTelechargements? depot,
+    StockageTelechargements? stockageService,
+    String identifiant = 'application',
+    DateTime Function()? horloge,
+  }) {
+    final autre = ServiceTelechargement(
+      depotTelechargements: depot ?? depotTelechargements,
+      depotChapitres: depotChapitres,
+      depotTitres: depotTitres,
+      depotListes: depotListes,
+      depotSources: depotSources,
+      stockage: stockageService ?? stockage,
+      fabriqueSources: FabriqueSources(client),
+      client: client,
+      serviceParametres: parametres,
+      identifiantVerrou: identifiant,
+      horloge: horloge ?? () => DateTime.now().add(decalage),
+    );
+    addTearDown(autre.fermer);
+    return autre;
+  }
+
+  /// Attend (au plus 2 s) qu'une écriture lancée sans être attendue soit
+  /// visible en base.
+  Future<void> attendreQue(Future<bool> Function() condition) async {
+    for (var essai = 0; essai < 200; essai++) {
+      if (await condition()) return;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    fail('La condition attendue ne s\'est jamais réalisée.');
+  }
+
+  /// Empêche la file de tourner : un autre isolat tient le verrou.
+  Future<void> bloquerFile() => parametres.enregistrerVerrouTelechargement(
+    VerrouTelechargement(
+      proprietaire: 'tache-de-fond',
+      expiration: DateTime.now().toUtc().add(const Duration(days: 3)),
+    ),
+  );
+
   test(
     'télécharge un chapitre, le lit dans l\'archive et le signale',
     () async {
@@ -681,15 +724,9 @@ void main() {
   });
 
   group('suppression différée', () {
-    // La file ne tourne pas (verrou tenu ailleurs) : seuls les états en base
-    // comptent, les chapitres sont marqués téléchargés directement.
-    Future<void> bloquerFile() => parametres.enregistrerVerrouTelechargement(
-      VerrouTelechargement(
-        proprietaire: 'tache-de-fond',
-        expiration: DateTime.now().toUtc().add(const Duration(days: 3)),
-      ),
-    );
-
+    // La file ne tourne pas (verrou tenu ailleurs, voir bloquerFile) : seuls
+    // les états en base comptent, les chapitres sont marqués téléchargés
+    // directement.
     Future<int> preparerChapitre5HorsRegles() async {
       await bloquerFile();
       await parametres.enregistrerReglagesTelechargement(
@@ -776,6 +813,76 @@ void main() {
         isNull,
       );
     });
+
+    test("ouvrir un chapitre repousse sa suppression prévue en base, et la "
+        "tâche de fond ne l'efface plus à l'ancienne échéance", () async {
+      final id = await preparerChapitre5HorsRegles();
+      final premiere = (await depotChapitres.chargerChapitre(id))!
+          .dateSuppressionPrevue!;
+
+      decalage = const Duration(hours: 20);
+      service.protegerChapitre(id);
+      await attendreQue(
+        () async =>
+            (await depotChapitres.chargerChapitre(id))!.dateSuppressionPrevue !=
+            premiere,
+      );
+      final repoussee = (await depotChapitres.chargerChapitre(id))!
+          .dateSuppressionPrevue!;
+      expect(
+        repoussee.difference(premiere).inMinutes,
+        closeTo(const Duration(hours: 20).inMinutes, 2),
+      );
+
+      // La tâche de fond (autre isolat) ne voit pas la protection en
+      // mémoire : 25 h après la première date, elle ne doit rien effacer.
+      final tacheDeFond = creerService(
+        identifiant: 'tache-de-fond',
+        horloge: () => DateTime.now().add(const Duration(hours: 25)),
+      );
+      expect(await tacheDeFond.supprimerArchivesEchues(), 0);
+      expect((await depotChapitres.chargerChapitre(id))!.estTelecharge, isTrue);
+    });
+
+    test("ouvrir un chapitre sans suppression prévue n'en pose pas", () async {
+      await bloquerFile();
+      final id = (await chapitre(1)).id!;
+      await depotChapitres.marquerTelecharge(id);
+      service.protegerChapitre(id);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(
+        (await depotChapitres.chargerChapitre(id))!.dateSuppressionPrevue,
+        isNull,
+      );
+    });
+
+    test("une suppression échue n'est pas faite si les règles veulent de "
+        'nouveau le chapitre', () async {
+      final id = await preparerChapitre5HorsRegles();
+      // Réglage changé dans l'autre isolat : les règles de ce titre n'ont
+      // pas encore été réappliquées ici.
+      await parametres.enregistrerReglagesTelechargement(
+        const ReglagesTelechargement(suivisInitial: 10),
+      );
+      decalage = const Duration(hours: 25);
+
+      expect(await service.supprimerArchivesEchues(), 0);
+      final relu = (await depotChapitres.chargerChapitre(id))!;
+      expect(relu.estTelecharge, isTrue);
+      expect(relu.dateSuppressionPrevue, isNull);
+    });
+
+    test("une suppression échue n'est pas faite si le titre n'est plus ni "
+        'favori ni suivi', () async {
+      final id = await preparerChapitre5HorsRegles();
+      await depotListes.retirerTitre(await idListe(nomListeSuivis), titre.id!);
+      decalage = const Duration(hours: 25);
+
+      expect(await service.supprimerArchivesEchues(), 0);
+      final relu = (await depotChapitres.chargerChapitre(id))!;
+      expect(relu.estTelecharge, isTrue);
+      expect(relu.dateSuppressionPrevue, isNull);
+    });
   });
 
   group("nom d'archive enregistré", () {
@@ -839,6 +946,198 @@ void main() {
       final relu = await chapitre(1);
       expect(relu.estTelecharge, isFalse);
       expect(relu.nomArchive, isNull);
+      // La ligne « terminé » est retirée : les règles pourront remettre le
+      // chapitre en file.
+      expect(
+        await depotTelechargements.chargerParChapitre(premier.id!),
+        isNull,
+      );
+    });
+
+    test('au démarrage, un dossier racine absent (support démonté) ne '
+        'modifie aucun chapitre', () async {
+      final premier = await chapitre(1);
+      await service.telechargerChapitre(premier.id!);
+      await service.lancerTraitement();
+      final nomArchive = (await chapitre(1)).nomArchive;
+
+      final surSupportAbsent = creerService(
+        stockageService: StockageTelechargements('${dossier.path}/absent'),
+      );
+      expect(await surSupportAbsent.reparerArchivesManquantes(), 0);
+      final relu = await chapitre(1);
+      expect(relu.estTelecharge, isTrue);
+      expect(relu.nomArchive, nomArchive);
     });
   });
+
+  group('suppression et fin de téléchargement', () {
+    Future<List<Chapitre>> ajouterDeuxOneshots() async {
+      await depotChapitres.enregistrerChapitres(<Chapitre>[
+        for (final lettre in <String>['A', 'B'])
+          Chapitre(
+            idTitre: titre.id,
+            urlChapitre:
+                'https://mangadex.org/chapter/$_uuidChapitre?oneshot=$lettre',
+            nom: 'Oneshot $lettre',
+            numero: 0,
+            langue: 'fr',
+          ),
+      ]);
+      return (await depotChapitres.chargerChapitres(titre.id!))
+          .where((c) => c.numero == 0)
+          .toList()
+        ..sort((a, b) => a.id!.compareTo(b.id!));
+    }
+
+    test("annuler un oneshot en file ne touche pas l'archive d'un autre "
+        'oneshot', () async {
+      final oneshots = await ajouterDeuxOneshots();
+      final a = oneshots[0];
+      final b = oneshots[1];
+      await service.telechargerChapitre(a.id!);
+      await service.lancerTraitement();
+      final nomA = (await depotChapitres.chargerChapitre(a.id!))!.nomArchive;
+      expect(nomA, endsWith('/ch0.fr.zip'));
+
+      // B reste en file (jamais téléchargé) : son nom calculé serait aussi
+      // ch0.fr.zip.
+      await bloquerFile();
+      await service.telechargerChapitre(b.id!);
+      await service.supprimerTelechargement(b.id!);
+
+      expect(await depotTelechargements.chargerParChapitre(b.id!), isNull);
+      expect(await stockage.existeArchive(nomA!), isTrue);
+      expect(await service.compterPages(a.id!), nombreImages);
+      expect(
+        (await depotChapitres.chargerChapitre(a.id!))!.estTelecharge,
+        isTrue,
+      );
+    });
+
+    test("annuler un chapitre en file (autre groupe, même numéro) ne touche "
+        "pas l'archive du chapitre téléchargé", () async {
+      await depotChapitres.enregistrerChapitres(<Chapitre>[
+        Chapitre(
+          idTitre: titre.id,
+          urlChapitre: 'https://mangadex.org/chapter/$_uuidChapitre?groupe=2',
+          nom: 'Chapitre 1 (autre groupe)',
+          numero: 1,
+          langue: 'fr',
+        ),
+      ]);
+      final premier = await chapitre(1);
+      final autreGroupe = (await depotChapitres.chargerChapitres(titre.id!))
+          .firstWhere((c) => c.numero == 1 && c.id != premier.id);
+      await service.telechargerChapitre(premier.id!);
+      await service.lancerTraitement();
+
+      await bloquerFile();
+      await service.telechargerChapitre(autreGroupe.id!);
+      await service.supprimerTelechargement(autreGroupe.id!);
+
+      expect(await service.compterPages(premier.id!), nombreImages);
+    });
+
+    test("supprimerTelechargement retire la ligne de file avant d'effacer "
+        "l'archive", () async {
+      final premier = await chapitre(1);
+      await service.telechargerChapitre(premier.id!);
+      await service.lancerTraitement();
+
+      final lignesAuMomentDeLEffacement = <Object?>[];
+      final espion = _StockageEspion(dossier.path, (nomArchive) async {
+        lignesAuMomentDeLEffacement.add(
+          await depotTelechargements.chargerParChapitre(premier.id!),
+        );
+      });
+      await creerService(stockageService: espion)
+          .supprimerTelechargement(premier.id!);
+
+      expect(lignesAuMomentDeLEffacement, <Object?>[null]);
+      expect(archives(), isEmpty);
+      expect((await chapitre(1)).estTelecharge, isFalse);
+    });
+
+    test("une archive finie dont le statut ne s'enregistre pas est effacée "
+        '(pas de fichier orphelin)', () async {
+      final premier = await chapitre(1);
+      final serviceFragile = creerService(
+        depot: _DepotQuiEchoueAuTermine(base),
+      );
+      await serviceFragile.telechargerChapitre(premier.id!);
+      await serviceFragile.lancerTraitement();
+
+      final ligne = await depotTelechargements.chargerParChapitre(premier.id!);
+      expect(ligne!.statut, StatutTelechargement.echec);
+      expect(archives(), isEmpty);
+      final relu = await chapitre(1);
+      expect(relu.estTelecharge, isFalse);
+      expect(relu.nomArchive, isNull);
+    });
+
+    test("un verrou repris par l'autre isolat entre deux pages arrête le "
+        'chapitre sans toucher sa ligne de file', () async {
+      final premier = await chapitre(1);
+      avantImage = () async {
+        // Notre verrou a expiré (application en pause) et la tâche de fond
+        // l'a repris : le prochain renouvellement est dû et le constate.
+        decalage = const Duration(minutes: 2);
+        await parametres.enregistrerVerrouTelechargement(
+          VerrouTelechargement(
+            proprietaire: 'tache-de-fond',
+            expiration: DateTime.now().toUtc().add(const Duration(minutes: 10)),
+          ),
+        );
+      };
+      await service.telechargerChapitre(premier.id!);
+      await service.lancerTraitement();
+
+      expect(nombreImagesDemandees, 1);
+      final ligne = await depotTelechargements.chargerParChapitre(premier.id!);
+      expect(ligne!.statut, StatutTelechargement.enCours);
+      expect(ligne.nombrePagesFaites, 1);
+      expect(archives(), isEmpty);
+      expect((await chapitre(1)).estTelecharge, isFalse);
+      final verrou = await parametres.chargerVerrouTelechargement();
+      expect(verrou!.proprietaire, 'tache-de-fond');
+    });
+  });
+}
+
+/// Stockage qui prévient le test juste avant d'effacer une archive.
+class _StockageEspion extends StockageTelechargements {
+  _StockageEspion(super.dossierRacine, this._avantEffacement);
+
+  final Future<void> Function(String nomArchive) _avantEffacement;
+
+  @override
+  Future<bool> supprimerArchive(String nomArchive) async {
+    await _avantEffacement(nomArchive);
+    return super.supprimerArchive(nomArchive);
+  }
+}
+
+/// Dépôt dont l'enregistrement du statut « terminé » échoue (base occupée
+/// par l'autre isolat, disque plein…), après la finalisation de l'archive.
+class _DepotQuiEchoueAuTermine extends DepotTelechargements {
+  _DepotQuiEchoueAuTermine(super.base);
+
+  @override
+  Future<bool> enregistrerStatut(
+    int id,
+    StatutTelechargement statut, {
+    String? messageErreur,
+    String? nomArchive,
+  }) {
+    if (statut == StatutTelechargement.termine) {
+      throw StateError('Base occupée');
+    }
+    return super.enregistrerStatut(
+      id,
+      statut,
+      messageErreur: messageErreur,
+      nomArchive: nomArchive,
+    );
+  }
 }

@@ -116,6 +116,9 @@ class PlanTelechargement {
 /// gardée : la langue préférée du client (ordre de [languesPreferees]), puis
 /// la plus ancienne publication. Ainsi un chapitre traduit à la fois en
 /// français et en anglais n'est téléchargé qu'une fois, en français.
+/// Exception pour un favori : un numéro **déjà lu** dont une version (dans
+/// les langues du client) est téléchargée garde cette version, sans
+/// retéléchargement dans la langue préférée.
 ///
 /// Langues : quand [languesPreferees] n'est pas vide, une version dans une
 /// autre langue n'est **jamais** téléchargée par les règles (règle du
@@ -269,7 +272,7 @@ class PolitiqueTelechargement {
         if (numero.versions.any(estDansLesLangues))
           VersionRetenue(
             chapitre: _meilleureVersion(
-              numero.versions.where(estDansLesLangues).toList(),
+              _candidates(numero, estFavori: estFavori),
             ),
             versions: numero.versions,
           ),
@@ -362,6 +365,24 @@ class PolitiqueTelechargement {
       idsATelecharger: aTelecharger,
       idsASupprimer: aSupprimer,
     );
+  }
+
+  /// Versions d'un numéro parmi lesquelles choisir la version retenue :
+  /// celles dans les langues du client.
+  ///
+  /// Favori déjà lu : si une de ces versions est déjà téléchargée, seules
+  /// les versions téléchargées sont candidates. Le client a fini ce
+  /// chapitre : retélécharger le français pour remplacer l'anglais qu'il a
+  /// déjà sur l'appareil (et lu) solliciterait le site pour rien.
+  List<Chapitre> _candidates(VersionRetenue numero, {required bool estFavori}) {
+    final dansLesLangues = numero.versions.where(estDansLesLangues).toList();
+    if (estFavori && numero.estLu) {
+      final telechargees = dansLesLangues
+          .where((version) => version.estTelecharge)
+          .toList();
+      if (telechargees.isNotEmpty) return telechargees;
+    }
+    return dansLesLangues;
   }
 
   static int _positif(int valeur) => valeur < 0 ? 0 : valeur;
