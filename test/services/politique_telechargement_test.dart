@@ -1,5 +1,6 @@
 // Tests des règles de conservation des chapitres demandées par le client.
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
+import 'package:bibliotheque_perso/services/classement_listes.dart';
 import 'package:bibliotheque_perso/services/politique_telechargement.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -601,6 +602,111 @@ void main() {
           <int>[1, 2],
         ],
       );
+    });
+  });
+
+  group('chapitres hébergés sur un site externe (R4)', () {
+    Chapitre version(
+      int id,
+      double numero, {
+      String langue = 'fr',
+      bool externe = false,
+      bool estLu = false,
+      bool estTelecharge = false,
+    }) => Chapitre(
+      id: id,
+      urlChapitre: 'https://exemple.test/$id',
+      nom: 'Chapitre $numero',
+      numero: numero,
+      langue: langue,
+      estLu: estLu,
+      estTelecharge: estTelecharge,
+      urlExterne: externe ? 'https://mangaplus.shueisha.co.jp/viewer/$id' : null,
+    );
+
+    test("un favori n'en télécharge jamais aucun", () {
+      final plan = politique.calculer(
+        <Chapitre>[
+          version(1, 1, externe: true),
+          version(2, 2, externe: true),
+          version(3, 3),
+        ],
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(plan.idsATelecharger, <int>[3]);
+      expect(plan.idsVoulus, <int>{3});
+    });
+
+    test('la version hébergée passe avant une version externe, même dans '
+        'une langue préférée', () {
+      final chapitres = <Chapitre>[
+        version(1, 1, externe: true),
+        version(2, 1, langue: 'en'),
+      ];
+      final plan = politique.calculer(
+        chapitres,
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(plan.idsATelecharger, <int>[2]);
+      expect(politique.choisirVersions(chapitres).single.chapitre.id, 2);
+    });
+
+    test('une version externe reste affichée quand elle est la seule dans '
+        'les langues du client', () {
+      final chapitres = <Chapitre>[
+        version(1, 1, externe: true),
+        version(2, 1, langue: 'ru'),
+      ];
+      expect(politique.choisirVersions(chapitres).single.chapitre.id, 1);
+      expect(
+        politique
+            .calculer(chapitres, estFavori: true, estSuivi: false)
+            .idsATelecharger,
+        isEmpty,
+      );
+    });
+
+    test('les numéros seulement externes ne comptent pas dans la fenêtre '
+        'des suivis', () {
+      final plan = const PolitiqueTelechargement(
+        reglages: ReglagesTelechargement(suivisInitial: 2),
+        languesPreferees: <String>['fr'],
+      ).calculer(
+        <Chapitre>[
+          version(1, 1, externe: true),
+          version(2, 2),
+          version(3, 3),
+          version(4, 4),
+        ],
+        estFavori: false,
+        estSuivi: true,
+      );
+      expect(plan.idsATelecharger, <int>[2, 3]);
+    });
+
+    test("l'archive d'un chapitre devenu externe n'est jamais supprimée", () {
+      final plan = politique.calculer(
+        <Chapitre>[
+          version(1, 1, externe: true, estLu: true, estTelecharge: true),
+          version(2, 1, estTelecharge: false),
+          for (var n = 2; n <= 10; n++) version(n + 1, n.toDouble(), estLu: true),
+        ],
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(plan.idsASupprimer, isEmpty);
+    });
+
+    test("un titre dont les seuls chapitres dans les langues sont externes "
+        "n'est pas « en attente »", () {
+      final chapitres = <Chapitre>[version(1, 1, externe: true)];
+      expect(
+        ClassementListes.aChapitreDansLesLangues(chapitres, <String>['fr']),
+        isTrue,
+      );
+      expect(politique.estTelechargeable(chapitres.single), isFalse);
     });
   });
 }

@@ -490,13 +490,27 @@ class ServiceTelechargement {
     // avancé, titre retiré de Favoris et Suivis) sont retirés de la file ;
     // ceux que le client a demandés à la main restent.
     final idsChapitres = chapitres.map((c) => c.id).whereType<int>().toSet();
+    // Chapitres devenus externes (R4) : retirés de la file même s'ils avaient
+    // été demandés à la main (ils n'ont aucune page à télécharger). Les
+    // échecs aussi : sinon « Réessayer » resterait proposé.
+    final idsExternes = <int>{
+      for (final chapitre in chapitres)
+        if (chapitre.id != null && chapitre.estExterne) chapitre.id!,
+    };
     final file = await _depotTelechargements.chargerFile(
-      statuts: <StatutTelechargement>{StatutTelechargement.enAttente},
+      statuts: <StatutTelechargement>{
+        StatutTelechargement.enAttente,
+        StatutTelechargement.echec,
+      },
     );
     for (final telechargement in file) {
-      if (idsChapitres.contains(telechargement.idChapitre) &&
-          !plan.idsVoulus.contains(telechargement.idChapitre) &&
-          !_demandesManuelles.contains(telechargement.idChapitre)) {
+      final idChapitre = telechargement.idChapitre;
+      if (!idsChapitres.contains(idChapitre)) continue;
+      final plusVoulu =
+          telechargement.statut == StatutTelechargement.enAttente &&
+          !plan.idsVoulus.contains(idChapitre) &&
+          !_demandesManuelles.contains(idChapitre);
+      if (plusVoulu || idsExternes.contains(idChapitre)) {
         await _depotTelechargements.supprimerTelechargement(telechargement.id!);
       }
     }
@@ -656,7 +670,12 @@ class ServiceTelechargement {
     // Relu juste avant : l'autre isolat a pu le terminer depuis le calcul du
     // plan.
     final chapitre = await _depotChapitres.chargerChapitre(idChapitre);
-    if (chapitre == null || chapitre.estTelecharge) return;
+    // Chapitre hébergé ailleurs (R4) : jamais téléchargeable. La politique
+    // l'écarte déjà ; contrôle redit ici car il a pu devenir externe depuis
+    // le calcul du plan.
+    if (chapitre == null || chapitre.estTelecharge || chapitre.estExterne) {
+      return;
+    }
     final existant = await _depotTelechargements.chargerParChapitre(idChapitre);
     if (existant == null) {
       await _depotTelechargements.ajouterEnFile(idChapitre);
@@ -685,7 +704,18 @@ class ServiceTelechargement {
   /// Une demande manuelle relance aussi un chapitre que les règles ne
   /// relancent plus (trop d'échecs), et n'est pas retirée de la file par les
   /// règles pendant cette session.
+  ///
+  /// Lève une [ErreurService] pour un chapitre hébergé sur un site externe
+  /// (`Chapitre.estExterne`) : il se lit sur ce site et n'a aucune page à
+  /// télécharger (R4).
   Future<void> telechargerChapitre(int idChapitre) async {
+    final chapitre = await _depotChapitres.chargerChapitre(idChapitre);
+    if (chapitre != null && chapitre.estExterne) {
+      throw const ErreurService(
+        "Ce chapitre se lit sur le site de l'éditeur : il ne peut pas être "
+        'téléchargé.',
+      );
+    }
     _demandesManuelles.add(idChapitre);
     _echecs.remove(idChapitre);
     final existant = await _depotTelechargements.chargerParChapitre(idChapitre);
@@ -1094,7 +1124,9 @@ class ServiceTelechargement {
       _signaler();
 
       final contexte = await _chargerContexte(idChapitre);
-      if (contexte == null) {
+      // Chapitre disparu, ou devenu externe depuis sa mise en file (R4) :
+      // la ligne est retirée sans rien demander au site.
+      if (contexte == null || contexte.chapitre.estExterne) {
         await _depotTelechargements.supprimerTelechargement(id);
         return;
       }
@@ -1275,6 +1307,9 @@ class ServiceTelechargement {
           uri,
           userAgent: userAgentApplication,
           nouvellesTentatives: 0,
+          // Une page d'erreur HTML servie en 200 n'est pas une page du
+          // chapitre : signalée comme un échec, puis nœud renouvelé.
+          exigerImage: true,
         );
         unawaited(_signalement.signalerReussite(url, reponse));
         return reponse.octets;
@@ -1286,18 +1321,19 @@ class ServiceTelechargement {
     return _client.recupererOctets(
       uri,
       referer: contenu.urlReferer ?? contexte.source.urlBase,
-      userAgent: _estAdresseMangaDex(uri.host) ? userAgentApplication : null,
+      // MangaDex exige un User-Agent honnête sur tous ses serveurs
+      // (`uploads.mangadex.org`, nœuds `*.mangadex.network`…).
+      userAgent: SourceMangaDex.estServeurMangaDex(uri.host)
+          ? userAgentApplication
+          : null,
+      // Une page anti-robot HTML servie en 200 (E10) ne doit jamais être
+      // écrite dans l'archive comme une page du chapitre.
+      // LIMITE : un site qui servirait ses images sans `Content-Type`
+      // `image/*` (par exemple `application/octet-stream`) verrait ses
+      // téléchargements échouer (message « n'est pas une image » dans la
+      // file) ; il faudrait alors un contrôle des octets propre à ce site.
+      exigerImage: true,
     );
-  }
-
-  /// `true` si [hote] appartient à MangaDex (site, serveur d'images
-  /// `uploads.mangadex.org`, nœuds `*.mangadex.network`) : MangaDex exige un
-  /// User-Agent honnête sur tous ses serveurs.
-  static bool _estAdresseMangaDex(String hote) {
-    final h = hote.toLowerCase();
-    return SourceMangaDex.estHoteMangaDex(h) ||
-        h.endsWith('.mangadex.org') ||
-        h.endsWith('.mangadex.network');
   }
 
   /// `true` si un échec sur [url] justifie de redemander les adresses des
@@ -1313,7 +1349,7 @@ class ServiceTelechargement {
     final hote = Uri.tryParse(url)?.host ?? '';
     final estMangaDex =
         contexte.source.typeSource == TypeSource.mangaDex ||
-        _estAdresseMangaDex(hote);
+        SourceMangaDex.estServeurMangaDex(hote);
     return estMangaDex && erreur.codeStatut == 403;
   }
 

@@ -33,11 +33,16 @@ abstract final class ClassementListes {
   /// `true` si au moins un des [chapitres] est lisible dans les [langues] du
   /// client (même règle que les téléchargements : variante régionale
   /// acceptée, langue vide d'un site d'une seule langue acceptée).
+  ///
+  /// Un chapitre hébergé sur un site externe (`Chapitre.estExterne`) compte :
+  /// il est paru et le client peut le lire chez l'éditeur, le titre n'est
+  /// donc pas « en attente » même s'il n'a rien à télécharger (R4).
   static bool aChapitreDansLesLangues(
     Iterable<Chapitre> chapitres,
     List<String> langues,
   ) {
     final politique = PolitiqueTelechargement(languesPreferees: langues);
+    // `estDansLesLangues` et non `estTelechargeable` : voir ci-dessus.
     return chapitres.any(politique.estDansLesLangues);
   }
 

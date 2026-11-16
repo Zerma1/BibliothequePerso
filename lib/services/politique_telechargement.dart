@@ -127,6 +127,14 @@ class PlanTelechargement {
 /// positions), et une archive déjà présente dans une autre langue est à
 /// supprimer. Une version sans langue connue (site d'une seule langue) est
 /// acceptée.
+///
+/// Chapitres hébergés sur un site externe (`Chapitre.estExterne`, R4) : ils
+/// ne sont **jamais** à télécharger. Une version hébergée du même numéro
+/// dans les langues du client passe toujours avant eux ; un numéro dont les
+/// seules versions dans ces langues sont externes est ignoré comme un numéro
+/// d'une autre langue (il ne compte pas dans les positions). Une archive
+/// d'un chapitre devenu externe n'est jamais supprimée par les règles : elle
+/// ne pourrait plus être retéléchargée.
 class PolitiqueTelechargement {
   /// Crée la politique avec les [reglages] et les [languesPreferees] (codes
   /// ISO 639-1, par ordre de préférence).
@@ -230,15 +238,31 @@ class PolitiqueTelechargement {
   /// le client, ou aucune langue choisie).
   bool estDansLesLangues(Chapitre chapitre) => rangLangue(chapitre) != null;
 
+  /// `true` si les règles peuvent mettre [chapitre] en file : dans les
+  /// langues du client ([estDansLesLangues]) et hébergé par le site source
+  /// (pas `Chapitre.estExterne`).
+  bool estTelechargeable(Chapitre chapitre) =>
+      !chapitre.estExterne && estDansLesLangues(chapitre);
+
   Chapitre _meilleureVersion(List<Chapitre> versions) {
     // Les langues absentes des préférences passent en dernier : cet ordre
     // sert à l'affichage (toutes les versions restent visibles) ; les règles
     // de téléchargement les écartent avant (voir [calculer]).
     int rangLangue(Chapitre chapitre) =>
         this.rangLangue(chapitre) ?? languesPreferees.length + 1;
+    // Groupe avant la langue : une version hébergée dans les langues du
+    // client passe avant une version externe, même dans une langue préférée
+    // (R4 : la version externe ne se lit pas dans l'application). Une
+    // version externe dans ses langues passe encore avant une autre langue.
+    int groupe(Chapitre chapitre) {
+      if (this.rangLangue(chapitre) == null) return 2;
+      return chapitre.estExterne ? 1 : 0;
+    }
 
     final triees = List<Chapitre>.of(versions)
       ..sort((a, b) {
+        final parGroupe = groupe(a).compareTo(groupe(b));
+        if (parGroupe != 0) return parGroupe;
         final parLangue = rangLangue(a).compareTo(rangLangue(b));
         if (parLangue != 0) return parLangue;
         // Une version déjà téléchargée est préférée : inutile de la
@@ -265,11 +289,12 @@ class PolitiqueTelechargement {
     }
     // Toutes les versions servent à savoir ce qui est lu (le client a pu
     // lire en ligne un chapitre en russe) ; seules celles dans ses langues
-    // peuvent être retenues.
+    // et hébergées par le site peuvent être retenues (un numéro seulement
+    // externe est ignoré, R4).
     final toutes = choisirVersions(chapitres);
     final versions = <VersionRetenue>[
       for (final numero in toutes)
-        if (numero.versions.any(estDansLesLangues))
+        if (numero.versions.any(estTelechargeable))
           VersionRetenue(
             chapitre: _meilleureVersion(
               _candidates(numero, estFavori: estFavori),
@@ -352,10 +377,13 @@ class PolitiqueTelechargement {
         }
       }
     }
+    // Un chapitre téléchargé puis devenu externe (l'éditeur a repris ses
+    // droits) garde son archive : elle ne pourrait plus être retéléchargée.
     final aSupprimer = <int>[
       for (final chapitre in chapitres)
         if (chapitre.id != null &&
             chapitre.estTelecharge &&
+            !chapitre.estExterne &&
             !voulus.contains(chapitre.id) &&
             !gardes.contains(chapitre.id))
           chapitre.id!,
@@ -368,14 +396,15 @@ class PolitiqueTelechargement {
   }
 
   /// Versions d'un numéro parmi lesquelles choisir la version retenue :
-  /// celles dans les langues du client.
+  /// celles dans les langues du client et hébergées par le site
+  /// ([estTelechargeable]).
   ///
   /// Favori déjà lu : si une de ces versions est déjà téléchargée, seules
   /// les versions téléchargées sont candidates. Le client a fini ce
   /// chapitre : retélécharger le français pour remplacer l'anglais qu'il a
   /// déjà sur l'appareil (et lu) solliciterait le site pour rien.
   List<Chapitre> _candidates(VersionRetenue numero, {required bool estFavori}) {
-    final dansLesLangues = numero.versions.where(estDansLesLangues).toList();
+    final dansLesLangues = numero.versions.where(estTelechargeable).toList();
     if (estFavori && numero.estLu) {
       final telechargees = dansLesLangues
           .where((version) => version.estTelecharge)

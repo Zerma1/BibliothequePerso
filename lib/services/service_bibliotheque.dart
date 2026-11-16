@@ -304,6 +304,13 @@ class ServiceBibliotheque {
     }
   }
 
+  /// Nom lisible du site d'un chapitre externe (`Chapitre.urlExterne`), pour
+  /// le bouton « Lire sur `site` » : « MANGA Plus », « VIZ », sinon le nom
+  /// de domaine sans `www.`. Délègue à `SourceMangaDex.nomSiteExterne` :
+  /// l'interface n'importe pas `lib/sources`. Fonction pure.
+  static String nomSiteExterne(String urlExterne) =>
+      SourceMangaDex.nomSiteExterne(urlExterne);
+
   /// Sites configurés.
   Future<List<Source>> chargerSources() => _depotSources.chargerSources();
 
@@ -697,29 +704,151 @@ class ServiceBibliotheque {
   /// Octets de la couverture du titre, téléchargés une fois par session.
   ///
   /// Passe par `ClientHttpPoli` (seul accès réseau autorisé) plutôt que par
-  /// `Image.network`, pour respecter le délai par domaine. Les serveurs de
-  /// MangaDex exigent un User-Agent honnête. [referer] (en général l'URL de
-  /// base de la source) est envoyé car beaucoup de sites refusent les images
-  /// demandées sans lui (PLAYBOOK.md section 6).
+  /// `Image.network`, pour respecter le délai par domaine. Tous les serveurs
+  /// de MangaDex (`uploads.mangadex.org` compris) exigent un User-Agent
+  /// honnête. [referer] (en général l'URL de base de la source) est envoyé
+  /// car beaucoup de sites refusent les images demandées sans lui
+  /// (PLAYBOOK.md section 6).
+  ///
+  /// Lève une `ErreurSource` si le site ne répond pas ou si la réponse n'est
+  /// pas une image (`Content-Type` autre que `image/*`) ; un échec n'est pas
+  /// gardé en cache.
   Future<Uint8List> recupererCouverture(
     String urlCouverture, {
     String? referer,
   }) {
-    return _cacheCouvertures.putIfAbsent(urlCouverture, () async {
-      try {
-        final uri = Uri.parse(urlCouverture);
-        final estMangaDex = SourceMangaDex.estHoteMangaDex(uri.host);
-        return await _client.recupererOctets(
-          uri,
-          referer: referer,
-          userAgent: estMangaDex ? userAgentApplication : null,
-        );
-      } catch (_) {
-        // Un échec ne doit pas rester en cache : on pourra réessayer.
-        _cacheCouvertures.remove(urlCouverture);
-        rethrow;
-      }
-    });
+    final dejaDemandee = _cacheCouvertures[urlCouverture];
+    if (dejaDemandee != null) return dejaDemandee;
+    final demande = _telechargerCouverture(urlCouverture, referer);
+    _cacheCouvertures[urlCouverture] = demande;
+    // Un échec (réseau, adresse invalide ou réponse qui n'est pas une image)
+    // ne doit pas rester en cache : on pourra réessayer. Retiré après coup
+    // (et non dans la fonction de téléchargement) pour couvrir aussi une
+    // erreur levée avant que la demande ne soit mise en cache. Le futur
+    // dérivé ignore l'erreur : c'est l'appelant qui la reçoit.
+    demande.then<void>(
+      (_) {},
+      onError: (Object _) {
+        if (identical(_cacheCouvertures[urlCouverture], demande)) {
+          _cacheCouvertures.remove(urlCouverture);
+        }
+      },
+    );
+    return demande;
+  }
+
+  /// Téléchargement réel d'une couverture (voir [recupererCouverture]).
+  Future<Uint8List> _telechargerCouverture(
+    String urlCouverture,
+    String? referer,
+  ) async {
+    final uri = Uri.parse(urlCouverture);
+    // Sous-domaines compris : avec le User-Agent de navigateur,
+    // `uploads.mangadex.org` renvoie une page anti-robot HTML en 200
+    // (journal des erreurs, E10).
+    final estMangaDex = SourceMangaDex.estServeurMangaDex(uri.host);
+    return _client.recupererOctets(
+      uri,
+      referer: referer,
+      userAgent: estMangaDex ? userAgentApplication : null,
+      // Une page HTML (défi anti-robot, erreur) servie en 200 ne doit pas
+      // passer pour une image ni être enregistrée sur l'appareil.
+      exigerImage: true,
+    );
+  }
+
+  /// Adresse de la vignette d'une couverture : pour une couverture MangaDex
+  /// (`https://uploads.mangadex.org/covers/<id>/<fichier>`), la version de
+  /// 512 px obtenue en ajoutant [suffixeVignetteMangaDex] (documentation
+  /// MangaDex, « covers » ; environ 160 Ko au lieu de 1,5 Mo). Toute autre
+  /// adresse (autre site, déjà une vignette, adresse illisible) est renvoyée
+  /// telle quelle. Fonction pure.
+  static String adresseVignette(String urlCouverture) {
+    final texte = urlCouverture.trim();
+    final uri = Uri.tryParse(texte);
+    if (uri == null ||
+        !SourceMangaDex.estServeurMangaDex(uri.host) ||
+        !uri.path.startsWith('/covers/') ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      return texte;
+    }
+    final chemin = uri.path.toLowerCase();
+    // Déjà une vignette (512 ou 256 px) : ne pas empiler les suffixes.
+    if (chemin.endsWith(suffixeVignetteMangaDex) ||
+        chemin.endsWith('.256.jpg')) {
+      return texte;
+    }
+    return uri.replace(path: '${uri.path}$suffixeVignetteMangaDex').toString();
+  }
+
+  /// Suffixe de la vignette 512 px d'une couverture MangaDex.
+  static const String suffixeVignetteMangaDex = '.512.jpg';
+
+  /// Comme [recupererCouverture], mais pour la vignette de la couverture
+  /// ([adresseVignette]) : grille de la bibliothèque, cartes, onglet Mises
+  /// à jour. Hors MangaDex, c'est l'image d'origine.
+  ///
+  /// Si le site n'a pas de vignette pour cette couverture (404), l'image
+  /// d'origine est demandée à la place. Lève une `ErreurSource` sinon.
+  Future<Uint8List> recupererVignette(
+    String urlCouverture, {
+    String? referer,
+  }) async => (await _recupererVignetteAvecAdresse(
+    urlCouverture,
+    referer: referer,
+  )).$1;
+
+  /// Vignette et adresse réellement téléchargée (pour l'extension du
+  /// fichier enregistré : la vignette MangaDex est toujours un JPEG).
+  Future<(Uint8List, String)> _recupererVignetteAvecAdresse(
+    String urlCouverture, {
+    String? referer,
+  }) async {
+    final vignette = adresseVignette(urlCouverture);
+    if (vignette == urlCouverture.trim()) {
+      return (
+        await recupererCouverture(urlCouverture, referer: referer),
+        urlCouverture,
+      );
+    }
+    try {
+      return (await recupererCouverture(vignette, referer: referer), vignette);
+    } on ErreurSource catch (erreur) {
+      // Seule une vignette absente justifie une seconde requête : un site en
+      // panne ne doit pas être sollicité deux fois (PLAYBOOK.md section 10).
+      if (erreur.codeStatut != 404) rethrow;
+      return (
+        await recupererCouverture(urlCouverture, referer: referer),
+        urlCouverture,
+      );
+    }
+  }
+
+  /// `true` si [octets] ressemblent à une page web (HTML, XML) plutôt qu'à
+  /// une image : premier caractère visible `<`. Sert à écarter une
+  /// couverture enregistrée avant le contrôle du type de contenu (E10).
+  ///
+  /// Volontairement étroit : aucun format d'image ne commence par `<`, alors
+  /// qu'une liste de signatures d'images refuserait un format rare mais
+  /// valide. Fonction pure.
+  static bool ressembleAUnePageWeb(List<int> octets) {
+    // BOM UTF-8 éventuel, puis blancs (espace, tabulation, retours).
+    var index = 0;
+    if (octets.length >= 3 &&
+        octets[0] == 0xEF &&
+        octets[1] == 0xBB &&
+        octets[2] == 0xBF) {
+      index = 3;
+    }
+    while (index < octets.length &&
+        (octets[index] == 0x20 ||
+            octets[index] == 0x09 ||
+            octets[index] == 0x0A ||
+            octets[index] == 0x0D)) {
+      index++;
+    }
+    return index < octets.length && octets[index] == 0x3C;
   }
 
   /// `true` si [couverture] (valeur de `Titre.couvertureChoisie`) désigne une
@@ -740,18 +869,27 @@ class ServiceBibliotheque {
     }
   }
 
-  /// Couverture du titre pour l'affichage : celle enregistrée sur l'appareil
-  /// (lisible hors-ligne), sinon la couverture voulue
-  /// (`Titre.couvertureAffichee`) téléchargée puis enregistrée sur
-  /// l'appareil. Renvoie `null` si aucune n'est disponible.
+  /// Couverture du titre pour la grille, les cartes et l'onglet Mises à
+  /// jour : celle enregistrée sur l'appareil (lisible hors-ligne), sinon la
+  /// **vignette** de la couverture voulue (`Titre.couvertureAffichee`,
+  /// [adresseVignette]) téléchargée puis enregistrée sur l'appareil. Renvoie
+  /// `null` si aucune n'est disponible.
   ///
   /// Ne lève jamais : un échec est journalisé, et la même adresse n'est plus
   /// redemandée au site pendant cette session (la grille peut appeler cette
   /// méthode à chaque affichage sans solliciter le site).
+  ///
+  /// Pour la fiche d'un titre, utiliser [chargerCouvertureOriginale].
   Future<Uint8List?> chargerCouverture(Titre titre) async {
     try {
       final locale = await _stockage?.chargerCouverture(titre);
-      if (locale != null) return locale;
+      if (locale != null) {
+        if (!ressembleAUnePageWeb(locale)) return locale;
+        // Page anti-robot enregistrée par une version précédente (journal
+        // des erreurs, E10) : elle ne s'afficherait jamais. On l'efface pour
+        // retélécharger la vraie image ci-dessous.
+        await _stockage?.supprimerCouverture(titre);
+      }
     } on ErreurStockage catch (erreur) {
       debugPrint('Couverture locale de « ${titre.nom} » illisible : $erreur');
     }
@@ -761,13 +899,49 @@ class ServiceBibliotheque {
       final source = titre.idSource == null
           ? null
           : await _depotSources.chargerSource(titre.idSource!);
-      final octets = await _octetsCouverture(voulue, source);
-      await _enregistrerCouvertureSurAppareil(titre, octets, voulue);
+      final (octets, adresse) = await _octetsVignette(voulue, source);
+      await _enregistrerCouvertureSurAppareil(titre, octets, adresse);
       return octets;
     } catch (erreur) {
       _couverturesEnEchec.add(voulue);
       debugPrint('Couverture de « ${titre.nom} » indisponible : $erreur');
       return null;
+    }
+  }
+
+  /// Originales MangaDex dont le téléchargement a échoué pendant cette
+  /// session (voir [chargerCouvertureOriginale]).
+  final Set<String> _originalesEnEchec = <String>{};
+
+  /// Couverture du titre en pleine taille, pour la fiche d'un titre
+  /// (chargée à son ouverture).
+  ///
+  /// Seules les couvertures MangaDex ont une vignette distincte : leur image
+  /// d'origine est téléchargée (gardée pour la session, pas enregistrée sur
+  /// l'appareil, qui ne garde que la vignette). Pour les autres sites et les
+  /// images de l'appareil, c'est la même image que [chargerCouverture]. En
+  /// cas d'échec (hors-ligne…), la vignette est renvoyée à la place.
+  ///
+  /// Ne lève jamais ; renvoie `null` si aucune image n'est disponible.
+  Future<Uint8List?> chargerCouvertureOriginale(Titre titre) async {
+    final voulue = titre.couvertureAffichee;
+    if (voulue == null ||
+        estCouvertureLocale(voulue) ||
+        adresseVignette(voulue) == voulue.trim() ||
+        _originalesEnEchec.contains(voulue)) {
+      return chargerCouverture(titre);
+    }
+    try {
+      final source = titre.idSource == null
+          ? null
+          : await _depotSources.chargerSource(titre.idSource!);
+      return await recupererCouverture(voulue, referer: source?.urlBase);
+    } catch (erreur) {
+      // Une seule tentative par session : la fiche rouverte affiche
+      // directement la vignette, sans solliciter le site.
+      _originalesEnEchec.add(voulue);
+      debugPrint('Couverture originale de « ${titre.nom} » : $erreur');
+      return chargerCouverture(titre);
     }
   }
 
@@ -806,8 +980,11 @@ class ServiceBibliotheque {
     final titre = await _exigerTitre(idTitre);
     final source = await _exigerSource(titre);
     _couverturesEnEchec.remove(url);
-    final octets = await _octetsCouverture(url, source);
-    return _retenirCouverture(titre, octets, url, choix: url);
+    _originalesEnEchec.remove(url);
+    // L'appareil garde la vignette ; l'originale reste en cache de session
+    // si l'écran de choix l'a déjà affichée.
+    final (octets, adresse) = await _octetsVignette(url, source);
+    return _retenirCouverture(titre, octets, adresse, choix: url);
   }
 
   /// Choisit une image de l'appareil ([cheminImage]) comme couverture : une
@@ -844,8 +1021,9 @@ class ServiceBibliotheque {
     }
     final source = await _exigerSource(titre);
     _couverturesEnEchec.remove(url);
-    final octets = await _octetsCouverture(url, source);
-    return _retenirCouverture(titre, octets, url, choix: null);
+    _originalesEnEchec.remove(url);
+    final (octets, adresse) = await _octetsVignette(url, source);
+    return _retenirCouverture(titre, octets, adresse, choix: null);
   }
 
   /// Enregistre [octets] comme couverture sur l'appareil puis le [choix] en
@@ -895,8 +1073,8 @@ class ServiceBibliotheque {
           ancien.urlCouverture != titre.urlCouverture;
       if (dejaEnregistree && !siteAChange) return;
       _couverturesEnEchec.remove(voulue);
-      final octets = await _octetsCouverture(voulue, source);
-      await _enregistrerCouvertureSurAppareil(titre, octets, voulue);
+      final (octets, adresse) = await _octetsVignette(voulue, source);
+      await _enregistrerCouvertureSurAppareil(titre, octets, adresse);
     } catch (erreur) {
       // La couverture n'est qu'un confort : le titre est bien ajouté, et
       // l'affichage réessaiera ([chargerCouverture]).
@@ -904,13 +1082,19 @@ class ServiceBibliotheque {
     }
   }
 
-  /// Octets d'une couverture : image de l'appareil, ou téléchargement par
-  /// [recupererCouverture] (référent : le site du titre).
-  Future<Uint8List> _octetsCouverture(String couverture, Source? source) {
+  /// Octets à enregistrer sur l'appareil pour une couverture, avec leur
+  /// origine (pour l'extension du fichier) : image de l'appareil telle
+  /// quelle, sinon la vignette téléchargée par [recupererVignette] (référent :
+  /// le site du titre). L'appareil ne garde que la vignette : 10 fois plus
+  /// légère pour la grille (décision du client).
+  Future<(Uint8List, String)> _octetsVignette(
+    String couverture,
+    Source? source,
+  ) async {
     if (estCouvertureLocale(couverture)) {
-      return _lireImageLocale(couverture);
+      return (await _lireImageLocale(couverture), couverture);
     }
-    return recupererCouverture(couverture, referer: source?.urlBase);
+    return _recupererVignetteAvecAdresse(couverture, referer: source?.urlBase);
   }
 
   /// Écrit la couverture dans le dossier du titre (sans stockage : rien).

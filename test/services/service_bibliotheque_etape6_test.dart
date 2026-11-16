@@ -19,6 +19,7 @@ import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/services/service_ajout_site.dart';
 import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
+import 'package:bibliotheque_perso/sources/constantes_sources.dart';
 import 'package:bibliotheque_perso/sources/detecteur_type_site.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/sources/fabrique_sources.dart';
@@ -47,12 +48,20 @@ void main() {
   late StockageTelechargements stockage;
   late List<Uri> requetes;
   late bool siteEnPanne;
+  // En-têtes des requêtes de couverture, et réponse HTML au lieu de l'image.
+  late List<Map<String, String>> enTetesCouverture;
+  late bool couvertureEnHtml;
+  // Le serveur n'a pas de vignette 512 px (404).
+  late bool vignetteAbsente;
 
   setUp(() async {
+    vignetteAbsente = false;
     base = await ouvrirBaseDeTest();
     dossier = await Directory.systemTemp.createTemp('bibliotheque_etape6');
     requetes = <Uri>[];
     siteEnPanne = false;
+    enTetesCouverture = <Map<String, String>>[];
+    couvertureEnHtml = false;
     final fiche = lireExemple('exemples_json/manga_fiche.json');
     final couvertures = lireExemple('exemples_json/couvertures_liste.json');
     final recherche = lireExemple('exemples_json/manga_recherche_filtre.json');
@@ -62,7 +71,23 @@ void main() {
       if (siteEnPanne) return http.Response('panne', 503);
       final chemin = requete.url.path;
       if (requete.url.host == 'uploads.mangadex.org') {
-        return http.Response.bytes(<int>[9, 8, 7], 200);
+        enTetesCouverture.add(requete.headers);
+        if (vignetteAbsente && requete.url.path.endsWith('.512.jpg')) {
+          return http.Response('introuvable', 404);
+        }
+        if (couvertureEnHtml) {
+          // Page anti-robot servie en 200 (journal des erreurs, E10).
+          return http.Response(
+            '<!doctype html><title>challenge</title>',
+            200,
+            headers: <String, String>{'content-type': 'text/html'},
+          );
+        }
+        return http.Response.bytes(
+          <int>[9, 8, 7],
+          200,
+          headers: <String, String>{'content-type': 'image/jpeg'},
+        );
       }
       if (chemin.endsWith('/feed')) return reponseJson(flux);
       if (chemin == '/cover') return reponseJson(couvertures);
@@ -224,6 +249,35 @@ void main() {
       expect(lignes.last.dernierChapitre, isNull);
     });
 
+    test("un titre dont les seuls chapitres dans vos langues sont externes "
+        "n'est pas en attente, et ils comptent comme parus", () async {
+      final titre = await depotTitres.enregistrerTitre(
+        Titre(
+          idSource: idSource,
+          urlTitre: 'https://mangadex.org/title/externe',
+          nom: 'Ruri Dragon',
+        ),
+      );
+      await depotChapitres.enregistrerChapitres(<Chapitre>[
+        Chapitre(
+          idTitre: titre.id,
+          urlChapitre: 'https://mangadex.org/chapter/externe-1',
+          nom: 'Chapitre 1',
+          numero: 1,
+          langue: 'en',
+          datePublication: DateTime.utc(2026, 9, 1),
+          urlExterne: 'https://mangaplus.shueisha.co.jp/viewer/1',
+        ),
+      ]);
+      await depotListes.ajouterTitre(await idListe(nomListeSuivis), titre.id!);
+
+      expect(await service.classerEnAttente(titre.id!), isFalse);
+      expect(await listesDe(titre.id!), isNot(contains(nomListeEnAttente)));
+      final ligne = (await service.chargerDernieresParutions()).single;
+      expect(ligne.derniereParution, DateTime.utc(2026, 9, 1));
+      expect(ligne.dernierChapitre!.estExterne, isTrue);
+    });
+
     test('respecte les langues propres à un titre', () async {
       final titre = await titreAvec('Russe', <(double, String, DateTime)>[
         (1, 'ru', DateTime.utc(2026, 10, 1)),
@@ -325,6 +379,143 @@ void main() {
       final nombre = requetes.length;
       expect(await service.chargerCouverture(titre), isNull);
       expect(requetes.length, nombre);
+    });
+
+    test("la couverture est demandée à uploads.mangadex.org avec le "
+        "User-Agent de l'application (E10)", () async {
+      await service.recupererCouverture(
+        'https://uploads.mangadex.org/covers/x/y.jpg',
+        referer: 'https://mangadex.org',
+      );
+      expect(enTetesCouverture, hasLength(1));
+      expect(enTetesCouverture.single['user-agent'], userAgentApplication);
+    });
+
+    test("une réponse HTML est refusée et n'est gardée ni en cache ni sur "
+        "l'appareil", () async {
+      const url = 'https://uploads.mangadex.org/covers/x/y.jpg';
+      couvertureEnHtml = true;
+      await expectLater(
+        service.recupererCouverture(url),
+        throwsA(isA<ErreurSource>()),
+      );
+      // Pas en cache : la demande suivante repart vers le site, et reçoit
+      // cette fois la vraie image.
+      couvertureEnHtml = false;
+      expect(await service.recupererCouverture(url), <int>[9, 8, 7]);
+      expect(enTetesCouverture, hasLength(2));
+    });
+
+    test("une couverture HTML refusée à l'ajout n'est pas enregistrée sur "
+        "l'appareil", () async {
+      couvertureEnHtml = true;
+      final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
+      expect(await service.cheminCouvertureLocale(ajout.titre), isNull);
+      expect(await service.chargerCouverture(ajout.titre), isNull);
+    });
+
+    test("une page HTML enregistrée par une ancienne version est remplacée "
+        "par la vraie image à l'affichage", () async {
+      final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
+      await stockage.enregistrerCouverture(
+        ajout.titre,
+        utf8.encode('\n<!doctype html><title>challenge</title>'),
+        'jpg',
+      );
+      expect(await service.chargerCouverture(ajout.titre), <int>[9, 8, 7]);
+      final chemin = (await service.cheminCouvertureLocale(ajout.titre))!;
+      expect(File(chemin).readAsBytesSync(), <int>[9, 8, 7]);
+    });
+
+    test("l'adresse de vignette n'est calculée que pour les couvertures "
+        'MangaDex', () {
+      expect(
+        ServiceBibliotheque.adresseVignette(
+          'https://uploads.mangadex.org/covers/abc/def.png',
+        ),
+        'https://uploads.mangadex.org/covers/abc/def.png.512.jpg',
+      );
+      expect(
+        ServiceBibliotheque.adresseVignette(
+          'https://uploads.mangadex.org/covers/abc/def.png.512.jpg',
+        ),
+        'https://uploads.mangadex.org/covers/abc/def.png.512.jpg',
+      );
+      expect(
+        ServiceBibliotheque.adresseVignette('https://exemple.org/covers/a.jpg'),
+        'https://exemple.org/covers/a.jpg',
+      );
+      expect(ServiceBibliotheque.adresseVignette('C:/images/a.jpg'),
+          'C:/images/a.jpg');
+    });
+
+    test("la grille enregistre la vignette, la fiche demande l'originale",
+        () async {
+      final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
+      final couvertures = requetes
+          .where((uri) => uri.host == 'uploads.mangadex.org')
+          .toList();
+      expect(couvertures, hasLength(1));
+      expect(couvertures.single.path, endsWith('.512.jpg'));
+      expect(await service.cheminCouvertureLocale(ajout.titre), endsWith('.jpg'));
+
+      requetes.clear();
+      expect(
+        await service.chargerCouvertureOriginale(ajout.titre),
+        <int>[9, 8, 7],
+      );
+      final originale = requetes.single;
+      expect(originale.host, 'uploads.mangadex.org');
+      expect(originale.path, isNot(endsWith('.512.jpg')));
+    });
+
+    test("sans vignette sur le site (404), l'image d'origine est "
+        'enregistrée', () async {
+      vignetteAbsente = true;
+      final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
+      expect(await service.chargerCouverture(ajout.titre), <int>[9, 8, 7]);
+      expect(
+        requetes.where((uri) => uri.host == 'uploads.mangadex.org'),
+        hasLength(2),
+      );
+    });
+
+    test("l'originale indisponible : la fiche affiche la vignette, sans "
+        'redemander dans la session', () async {
+      final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
+      siteEnPanne = true;
+      requetes.clear();
+      expect(
+        await service.chargerCouvertureOriginale(ajout.titre),
+        <int>[9, 8, 7],
+      );
+      final nombre = requetes.length;
+      expect(
+        await service.chargerCouvertureOriginale(ajout.titre),
+        <int>[9, 8, 7],
+      );
+      expect(requetes.length, nombre);
+    });
+
+    test('donne le nom lisible du site externe', () {
+      expect(
+        ServiceBibliotheque.nomSiteExterne(
+          'https://mangaplus.shueisha.co.jp/viewer/1',
+        ),
+        'MANGA Plus',
+      );
+    });
+
+    test('reconnaît une page web parmi des octets de couverture', () {
+      expect(
+        ServiceBibliotheque.ressembleAUnePageWeb(utf8.encode(' <html>')),
+        isTrue,
+      );
+      expect(
+        ServiceBibliotheque.ressembleAUnePageWeb(<int>[0xFF, 0xD8, 0xFF]),
+        isFalse,
+      );
+      expect(ServiceBibliotheque.ressembleAUnePageWeb(<int>[]), isFalse);
     });
 
     test('supprimer un titre efface sa couverture enregistrée', () async {
