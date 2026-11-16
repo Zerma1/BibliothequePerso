@@ -5,6 +5,8 @@ import 'dart:convert';
 import 'package:bibliotheque_perso/donnees/depot_categories.dart';
 import 'package:bibliotheque_perso/donnees/depot_chapitres.dart';
 import 'package:bibliotheque_perso/donnees/depot_listes.dart';
+import 'package:bibliotheque_perso/donnees/depot_parametres.dart';
+import 'package:bibliotheque_perso/services/service_parametres.dart';
 import 'package:bibliotheque_perso/donnees/depot_sources.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
@@ -35,6 +37,7 @@ void main() {
   late ServiceAjoutSite serviceAjoutSite;
   late DepotListes depotListes;
   late List<Uri> requetes;
+  late ServiceParametres parametres;
 
   setUp(() async {
     base = await ouvrirBaseDeTest();
@@ -68,6 +71,7 @@ void main() {
       fabriqueSources: FabriqueSources(client),
       serviceAjoutSite: serviceAjoutSite,
       client: client,
+      serviceParametres: parametres = ServiceParametres(DepotParametres(base)),
     );
   });
 
@@ -161,5 +165,87 @@ void main() {
         throwsA(isA<ErreurService>()),
       );
     });
+  });
+
+  group('ServiceBibliotheque.chargerChapitre', () {
+    test(
+      "charge un chapitre par son identifiant, ou null s'il n'existe pas",
+      () async {
+        final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
+        final chapitres = await service.chargerChapitres(ajout.titre.id!);
+        final premier = chapitres.first;
+
+        final charge = await service.chargerChapitre(premier.id!);
+        expect(charge!.urlChapitre, premier.urlChapitre);
+        expect(await service.chargerChapitre(999999), isNull);
+      },
+    );
+  });
+
+  group('ServiceBibliotheque.languesPreferees', () {
+    Source source(String langues) => Source(
+      nom: 'Site',
+      urlBase: 'https://exemple.test',
+      typeSource: TypeSource.mangaDex,
+      langueParDefaut: langues,
+    );
+
+    test('découpe les langues du site dans leur ordre, sans doublon', () {
+      expect(
+        ServiceBibliotheque.languesPreferees(source(' EN, fr ,,en')),
+        <String>['en', 'fr'],
+      );
+    });
+
+    test('retombe sur les langues du client sans réglage du site', () {
+      final parDefaut = <String>['fr', 'en'];
+      expect(ServiceBibliotheque.languesPreferees(source('')), parDefaut);
+      expect(ServiceBibliotheque.languesPreferees(null), parDefaut);
+      expect(
+        ServiceBibliotheque.languesPreferees(
+          source(''),
+          general: <String>['es', 'en'],
+        ),
+        <String>['es', 'en'],
+      );
+    });
+  });
+
+  group('langues du réglage général', () {
+    List<String> languesDemandees() => requetes
+        .where((uri) => uri.path.endsWith('/feed'))
+        .expand(
+          (uri) =>
+              uri.queryParametersAll['translatedLanguage[]'] ??
+              const <String>[],
+        )
+        .toSet()
+        .toList();
+
+    test("MangaDex ajouté automatiquement suit le réglage général pour le flux et le titre", () async {
+      await parametres.enregistrerLangues(<String>['es']);
+      final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
+
+      final source = await service.chargerSource(ajout.titre.idSource!);
+      expect(source!.langueParDefaut, isEmpty);
+      expect(languesDemandees(), containsAll(<String>['es']));
+      expect(languesDemandees(), isNot(contains('fr')));
+      expect(await service.languesPourTitre(ajout.titre), <String>['es']);
+    });
+
+    test(
+      "le flux d'une source réglée couvre ses langues et le réglage général",
+      () async {
+        await parametres.enregistrerLangues(<String>['es']);
+        await serviceAjoutSite.ajouterSite(
+          'https://mangadex.org',
+          langueParDefaut: 'en',
+        );
+        final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
+
+        expect(languesDemandees(), containsAll(<String>['en', 'es']));
+        expect(await service.languesPourTitre(ajout.titre), <String>['en']);
+      },
+    );
   });
 }

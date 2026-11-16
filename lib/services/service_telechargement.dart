@@ -7,6 +7,7 @@ library;
 // ignore_for_file: prefer_initializing_formals
 
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -15,6 +16,7 @@ import '../donnees/depot_listes.dart';
 import '../donnees/depot_sources.dart';
 import '../donnees/depot_telechargements.dart';
 import '../donnees/depot_titres.dart';
+import '../donnees/erreur_stockage.dart';
 import '../donnees/stockage_telechargements.dart';
 import '../modeles/chapitre.dart';
 import '../modeles/constantes.dart';
@@ -31,8 +33,10 @@ import '../sources/source_mangadex.dart';
 import '../sources/source_site.dart';
 import 'erreur_service.dart';
 import 'politique_telechargement.dart';
+import 'constantes_services.dart';
 import 'service_bibliotheque.dart';
 import 'service_parametres.dart';
+import 'verrou_telechargement.dart';
 
 /// Chapitre avec son titre et sa source, tels qu'il faut les passer au
 /// stockage (la langue vide est remplacée par la langue de la source pour que
@@ -43,6 +47,12 @@ class _ContexteChapitre {
   final Chapitre chapitre;
   final Titre titre;
   final Source source;
+}
+
+/// Signal interne : le téléchargement a été annulé (ligne de file
+/// supprimée) pendant son exécution.
+class _Annulation implements Exception {
+  const _Annulation();
 }
 
 /// File de téléchargement persistante, lecture des archives et règles de
@@ -64,7 +74,13 @@ class ServiceTelechargement {
     required ClientHttpPoli client,
     required ServiceParametres serviceParametres,
     SignalementMangaDex? signalement,
-  }) : _depotTelechargements = depotTelechargements,
+    String? identifiantVerrou,
+    Duration dureeVerrou = dureeVerrouParDefaut,
+    DateTime Function()? horloge,
+  }) : _identifiantVerrou = identifiantVerrou ?? _genererIdentifiant(),
+       _dureeVerrou = dureeVerrou,
+       _horloge = horloge ?? DateTime.now,
+       _depotTelechargements = depotTelechargements,
        _depotChapitres = depotChapitres,
        _depotTitres = depotTitres,
        _depotListes = depotListes,
@@ -86,11 +102,45 @@ class ServiceTelechargement {
   final ServiceParametres _serviceParametres;
   final SignalementMangaDex _signalement;
 
+  final String _identifiantVerrou;
+  final Duration _dureeVerrou;
+  final DateTime Function() _horloge;
+
   final StreamController<void> _changements =
       StreamController<void>.broadcast();
 
   /// Traitement de la file en cours, partagé si on le redemande.
   Future<void>? _traitement;
+
+  /// Nouvel essai prévu quand le verrou était tenu par un autre isolat.
+  Timer? _relance;
+
+  /// Date du dernier renouvellement du verrou par ce service.
+  DateTime? _dernierRenouvellement;
+
+  /// Chapitres ouverts dans le lecteur, avec le nombre d'ouvertures (deux
+  /// écrans peuvent ouvrir le même chapitre).
+  final Map<int, int> _chapitresProteges = <int, int>{};
+
+  /// Chapitres demandés à la main pendant cette session : les règles ne les
+  /// retirent pas de la file.
+  // LIMITE : en mémoire seulement (le modèle Telechargement ne distingue pas
+  // une demande manuelle) ; après un redémarrage, une demande manuelle en
+  // attente sur un chapitre que les règles ne veulent pas peut être retirée
+  // de la file à la prochaine application des règles de ce titre.
+  final Set<int> _demandesManuelles = <int>{};
+
+  /// Nombre d'échecs par chapitre pendant cette session.
+  // LIMITE : en mémoire ; sur Android, chaque passage de la tâche de fond
+  // repart de zéro, soit au plus une relance par passage (quelques par jour).
+  final Map<int, int> _echecs = <int, int>{};
+
+  /// Durée de validité du verrou de la file s'il n'est pas renouvelé.
+  ///
+  /// Bien plus longue qu'une page (20 s d'attente maximale par requête dans
+  /// `ClientHttpPoli`, le verrou est renouvelé entre les pages), mais assez
+  /// courte pour qu'une application tuée ne bloque pas la file longtemps.
+  static const Duration dureeVerrouParDefaut = Duration(minutes: 3);
 
   /// Prévient l'interface à chaque changement de la file (ajout,
   /// progression, fin, suppression).
@@ -99,52 +149,215 @@ class ServiceTelechargement {
   /// `true` pendant que la file est traitée.
   bool get estEnCours => _traitement != null;
 
+  /// Identifiant de ce service dans le verrou partagé de la file.
+  String get identifiantVerrou => _identifiantVerrou;
+
   void _signaler() {
     if (!_changements.isClosed) {
       _changements.add(null);
     }
   }
 
+  static String _genererIdentifiant() {
+    Random generateur;
+    try {
+      generateur = Random.secure();
+    } on UnsupportedError {
+      generateur = Random();
+    }
+    final aleatoire = List<String>.generate(
+      4,
+      (_) => generateur.nextInt(1 << 32).toRadixString(16).padLeft(8, '0'),
+    ).join();
+    return '${DateTime.now().microsecondsSinceEpoch}-$aleatoire';
+  }
+
   // ------------------------------------------------------------ Démarrage
 
-  /// À appeler au démarrage : reprend les téléchargements interrompus, efface
-  /// les archives partielles, applique les règles puis traite la file.
+  /// À appeler au démarrage : contrôle que chaque chapitre marqué téléchargé
+  /// a bien son archive ([reparerArchivesManquantes]), applique les règles
+  /// (ce qui supprime aussi les archives dont la suppression prévue est
+  /// échue) puis traite la file.
+  ///
+  /// La reprise des téléchargements interrompus (statut « en cours » remis
+  /// en attente, archives partielles effacées) se fait au début de chaque
+  /// traitement, une fois le verrou de la file obtenu, et seulement pour les
+  /// éléments anciens : la faire ici sans verrou effacerait le `.zip.part`
+  /// que la tâche de fond Android est peut-être en train d'écrire.
   Future<void> demarrer() async {
-    await _depotTelechargements.reprendreApresInterruption();
-    await _stockage.nettoyerFichiersPartiels();
+    try {
+      await reparerArchivesManquantes();
+    } catch (erreur, pile) {
+      // Le contrôle sera refait au prochain démarrage ; il ne doit pas
+      // empêcher la file de tourner.
+      debugPrint('Contrôle des archives impossible : $erreur\n$pile');
+    }
     await appliquerReglesATous();
   }
 
-  /// Libère le service.
-  Future<void> fermer() => _changements.close();
+  /// Remet à « non téléchargé » les chapitres marqués téléchargés dont
+  /// l'archive n'est plus sur le disque (fichier effacé à la main, dossier
+  /// racine déplacé, chemin enregistré invalide) et renvoie leur nombre.
+  ///
+  /// Sans cela, le lecteur proposerait une lecture hors-ligne impossible et
+  /// les règles ne retéléchargeraient jamais ces chapitres. Aucun réseau :
+  /// une vérification d'existence de fichier par chapitre.
+  Future<int> reparerArchivesManquantes() async {
+    final telecharges = await _depotChapitres.chargerChapitresTelecharges();
+    var nombre = 0;
+    for (final chapitre in telecharges) {
+      final id = chapitre.id;
+      if (id == null) continue;
+      try {
+        final contexte = await _chargerContexte(id);
+        if (contexte == null) continue;
+        bool existe;
+        try {
+          existe = await _stockage.estTelecharge(
+            contexte.titre,
+            contexte.chapitre,
+          );
+        } on ErreurStockage {
+          // Chemin enregistré invalide : l'archive est introuvable.
+          existe = false;
+        }
+        if (!existe) {
+          await _depotChapitres.enregistrerArchive(id, null);
+          nombre++;
+        }
+      } catch (erreur) {
+        // Un chapitre illisible ne doit pas empêcher le contrôle des autres.
+        debugPrint('Contrôle de l\'archive du chapitre n°$id : $erreur');
+      }
+    }
+    if (nombre > 0) _signaler();
+    return nombre;
+  }
+
+  /// Libère le service (annule le nouvel essai prévu).
+  Future<void> fermer() {
+    _relance?.cancel();
+    _relance = null;
+    return _changements.close();
+  }
+
+  // ------------------------------------------- Protection pendant la lecture
+
+  /// Protège un chapitre ouvert dans le lecteur : les règles de conservation
+  /// ne suppriment pas son archive tant qu'il n'est pas libéré par
+  /// [libererChapitre] (appeler autant de fois l'une que l'autre).
+  ///
+  /// LIMITE : la protection est en mémoire, donc propre à cet isolat ; sur
+  /// Android, la tâche de fond (autre isolat) l'ignore et peut supprimer un
+  /// chapitre lu à ce moment-là si la lecture a avancé au-delà des réglages.
+  void protegerChapitre(int idChapitre) {
+    _chapitresProteges.update(
+      idChapitre,
+      (nombre) => nombre + 1,
+      ifAbsent: () => 1,
+    );
+  }
+
+  /// Retire la protection posée par [protegerChapitre]. Le chapitre sera
+  /// supprimé à la prochaine application des règles s'il n'est plus voulu.
+  void libererChapitre(int idChapitre) {
+    final nombre = _chapitresProteges[idChapitre];
+    if (nombre == null) return;
+    if (nombre <= 1) {
+      _chapitresProteges.remove(idChapitre);
+    } else {
+      _chapitresProteges[idChapitre] = nombre - 1;
+    }
+  }
+
+  /// `true` si le chapitre est ouvert dans le lecteur (voir
+  /// [protegerChapitre]).
+  bool estProtege(int idChapitre) => _chapitresProteges.containsKey(idChapitre);
 
   // ------------------------------------------------- Règles de conservation
 
   /// Applique les règles à tous les titres favoris et suivis, puis lance le
   /// traitement de la file (sans l'attendre).
+  ///
+  /// Un titre en erreur est journalisé et n'empêche pas les autres ; la file
+  /// est lancée même si la lecture des listes échoue (l'erreur remonte alors
+  /// à l'appelant).
   Future<void> appliquerReglesATous() async {
-    final ids = <int>{};
-    for (final nomListe in <String>[nomListeFavoris, nomListeSuivis]) {
-      final liste = await _depotListes.chargerListeParNom(nomListe);
-      if (liste?.id == null) continue;
-      final titres = await _depotTitres.chargerTitres(idListe: liste!.id);
-      ids.addAll(titres.map((titre) => titre.id).whereType<int>());
+    try {
+      final ids = <int>{};
+      for (final nomListe in <String>[nomListeFavoris, nomListeSuivis]) {
+        final liste = await _depotListes.chargerListeParNom(nomListe);
+        if (liste?.id == null) continue;
+        final titres = await _depotTitres.chargerTitres(idListe: liste!.id);
+        ids.addAll(titres.map((titre) => titre.id).whereType<int>());
+      }
+      for (final idTitre in ids) {
+        try {
+          await _appliquerRegles(idTitre, supprimerEchues: false);
+        } catch (erreur, pile) {
+          // Par exemple une écriture refusée pendant que l'autre isolat
+          // écrit : ce titre sera repris à la prochaine application.
+          debugPrint(
+            'Règles du titre n°$idTitre non appliquées : $erreur\n$pile',
+          );
+        }
+      }
+    } finally {
+      // Une seule passe pour tous les titres (et même si la lecture des
+      // listes a échoué) : les échéances concernent aussi des titres sortis
+      // de Favoris et Suivis entre-temps.
+      await _supprimerArchivesEchuesSansErreur();
+      unawaited(lancerTraitement());
     }
-    for (final idTitre in ids) {
-      await _appliquerRegles(idTitre);
-    }
-    lancerTraitement();
   }
 
   /// Applique les règles à un titre (après une lecture, un changement de
   /// liste ou de réglages), puis lance le traitement de la file.
+  ///
+  /// Un titre retiré de Favoris et de Suivis perd ses téléchargements en
+  /// attente (sauf ceux demandés à la main pendant cette session) ; ses
+  /// archives déjà présentes sont gardées (et leurs suppressions prévues
+  /// annulées).
+  ///
+  /// Les archives qui ne sont plus voulues ne sont pas effacées tout de
+  /// suite : leur suppression est prévue dans 24 heures
+  /// ([delaiSuppressionDifferee], `Chapitre.dateSuppressionPrevue`), et
+  /// annulée si le chapitre redevient voulu entre-temps. Les suppressions
+  /// échues (de tous les titres) sont faites à la fin.
   Future<PlanTelechargement> appliquerRegles(int idTitre) async {
-    final plan = await _appliquerRegles(idTitre);
-    lancerTraitement();
-    return plan;
+    try {
+      return await _appliquerRegles(idTitre, supprimerEchues: true);
+    } finally {
+      unawaited(lancerTraitement());
+    }
   }
 
-  Future<PlanTelechargement> _appliquerRegles(int idTitre) async {
+  /// Enregistre les langues propres à un titre ([langues] `null` ou vide :
+  /// retour au réglage général) puis applique les règles de ce titre : les
+  /// archives dans une langue retirée passent en suppression différée, les
+  /// chapitres d'une langue ajoutée sont mis en file.
+  ///
+  /// Les chapitres d'une langue ajoutée ne sont connus qu'après une
+  /// actualisation du titre (`ServiceBibliotheque.actualiserTitre`, qui
+  /// demande au site les langues du titre) : l'interface l'appelle ensuite,
+  /// puis [appliquerRegles]. Lève une `ErreurService` si le titre n'existe
+  /// plus.
+  Future<PlanTelechargement> modifierLanguesTitre(
+    int idTitre,
+    List<String>? langues,
+  ) async {
+    await ServiceBibliotheque.enregistrerLanguesTitre(
+      _depotTitres,
+      idTitre,
+      langues,
+    );
+    return appliquerRegles(idTitre);
+  }
+
+  Future<PlanTelechargement> _appliquerRegles(
+    int idTitre, {
+    required bool supprimerEchues,
+  }) async {
     final titre = await _depotTitres.chargerTitre(idTitre);
     final idSource = titre?.idSource;
     if (titre == null || idSource == null) {
@@ -155,7 +368,14 @@ class ServiceTelechargement {
     final noms = listes.map((liste) => liste.nom).toSet();
     final politique = PolitiqueTelechargement(
       reglages: await _serviceParametres.chargerReglagesTelechargement(),
-      languesPreferees: _languesPreferees(source),
+      // Même résolution que ServiceBibliotheque.languesPourTitre : langues
+      // propres au titre, sinon de la source si réglées, sinon réglage
+      // général du client.
+      languesPreferees: ServiceBibliotheque.languesPreferees(
+        source,
+        general: await _serviceParametres.chargerLangues(),
+        titre: titre,
+      ),
     );
     final chapitres = await _depotChapitres.chargerChapitres(idTitre);
     final plan = politique.calculer(
@@ -164,28 +384,17 @@ class ServiceTelechargement {
       estSuivi: noms.contains(nomListeSuivis),
     );
 
-    for (final idChapitre in plan.idsASupprimer) {
-      await supprimerTelechargement(idChapitre, signalerChangement: false);
-    }
-    // Un chapitre voulu dont le téléchargement avait échoué est relancé.
+    // Ordre : mise en file d'abord, suppressions ensuite. Si une étape
+    // échoue au milieu, le client garde ses archives et la file est déjà
+    // complète ; l'inverse pourrait laisser un trou dans sa lecture.
+    // LIMITE : pas de transaction commune (les dépôts ouvrent chacune la
+    // leur) ; une application suivante des règles termine le travail.
     for (final idChapitre in plan.idsATelecharger) {
-      final existant = await _depotTelechargements.chargerParChapitre(
-        idChapitre,
-      );
-      if (existant == null) {
-        await _depotTelechargements.ajouterEnFile(idChapitre);
-      } else if (existant.statut == StatutTelechargement.echec ||
-          existant.statut == StatutTelechargement.termine) {
-        // « terminé » alors que le chapitre n'est pas marqué téléchargé :
-        // l'archive a disparu, on la refait.
-        await _depotTelechargements.enregistrerStatut(
-          existant.id!,
-          StatutTelechargement.enAttente,
-        );
-      }
+      await _mettreEnFileAutomatiquement(idChapitre);
     }
     // Les téléchargements en attente qui ne sont plus voulus (lecture qui a
-    // avancé entre-temps) sont retirés de la file.
+    // avancé, titre retiré de Favoris et Suivis) sont retirés de la file ;
+    // ceux que le client a demandés à la main restent.
     final idsChapitres = chapitres.map((c) => c.id).whereType<int>().toSet();
     final file = await _depotTelechargements.chargerFile(
       statuts: <StatutTelechargement>{StatutTelechargement.enAttente},
@@ -193,23 +402,143 @@ class ServiceTelechargement {
     for (final telechargement in file) {
       if (idsChapitres.contains(telechargement.idChapitre) &&
           !plan.idsVoulus.contains(telechargement.idChapitre) &&
-          (noms.contains(nomListeFavoris) || noms.contains(nomListeSuivis))) {
+          !_demandesManuelles.contains(telechargement.idChapitre)) {
         await _depotTelechargements.supprimerTelechargement(telechargement.id!);
       }
+    }
+    // Suppression différée (décision du client) : une date est posée pour
+    // les archives qui ne sont plus voulues, et retirée pour celles qui le
+    // redeviennent. Une date déjà posée n'est pas repoussée : sinon chaque
+    // application des règles relancerait le compte à rebours affiché.
+    final aSupprimer = plan.idsASupprimer.toSet();
+    final gardes = await _serviceParametres.chargerChapitresGardes();
+    final echeance = _maintenant().add(delaiSuppressionDifferee);
+    for (final chapitre in chapitres) {
+      final id = chapitre.id;
+      if (id == null || !chapitre.estTelecharge) continue;
+      // Choix « Garder » du client : jamais supprimé par les règles. Un
+      // téléchargement manuel hors des règles (autre langue, chapitre
+      // ancien) n'est pas exempté : le compte à rebours affiché laisse 24 h
+      // au client pour le garder.
+      final voulu = !aSupprimer.contains(id) || gardes.contains(id);
+      if (!voulu && chapitre.dateSuppressionPrevue == null) {
+        await _depotChapitres.planifierSuppression(id, echeance);
+      } else if (voulu && chapitre.dateSuppressionPrevue != null) {
+        await _depotChapitres.planifierSuppression(id, null);
+      }
+    }
+    if (supprimerEchues) {
+      await _supprimerArchivesEchuesSansErreur(signalerChangement: false);
     }
     _signaler();
     return plan;
   }
 
-  static List<String> _languesPreferees(Source? source) {
-    final langues = SourceMangaDex.languesIsoDepuisPreference(
-      source?.langueParDefaut ?? '',
+  // ---------------------------------------------------- Suppression différée
+
+  /// Supprime les archives dont la suppression prévue est échue (tous
+  /// titres) et renvoie leur nombre.
+  ///
+  /// Appelée au démarrage, à chaque application des règles et en fin de
+  /// file ; l'interface peut aussi l'appeler régulièrement (par exemple au
+  /// retour au premier plan). Un chapitre ouvert dans le lecteur
+  /// ([protegerChapitre]) ou gardé par le client est épargné. Un chapitre en
+  /// erreur est journalisé et n'empêche pas les autres.
+  Future<int> supprimerArchivesEchues() async {
+    final nombre = await _supprimerArchivesEchues();
+    if (nombre > 0) _signaler();
+    return nombre;
+  }
+
+  Future<int> _supprimerArchivesEchues() async {
+    final echues = await _depotChapitres.chargerSuppressionsEchues(
+      _maintenant(),
     );
-    return langues.isEmpty
-        ? SourceMangaDex.languesIsoDepuisPreference(
-            ServiceBibliotheque.languesParDefaut,
-          )
-        : langues;
+    if (echues.isEmpty) return 0;
+    final gardes = await _serviceParametres.chargerChapitresGardes();
+    var nombre = 0;
+    for (final chapitre in echues) {
+      final id = chapitre.id;
+      // Chapitre lu en ce moment : supprimé au prochain passage, une fois le
+      // lecteur fermé (effacer l'archive ferait échouer les pages suivantes).
+      if (id == null || estProtege(id)) continue;
+      try {
+        if (gardes.contains(id)) {
+          // Gardé par le client dans l'autre isolat : la date n'aurait pas
+          // dû rester.
+          await _depotChapitres.planifierSuppression(id, null);
+          continue;
+        }
+        await supprimerTelechargement(id, signalerChangement: false);
+        nombre++;
+      } catch (erreur) {
+        debugPrint('Suppression prévue du chapitre n°$id impossible : $erreur');
+      }
+    }
+    return nombre;
+  }
+
+  /// Comme [supprimerArchivesEchues], sans jamais lever (appel depuis les
+  /// règles ou la file, qui ne doivent pas échouer pour si peu).
+  Future<void> _supprimerArchivesEchuesSansErreur({
+    bool signalerChangement = true,
+  }) async {
+    try {
+      final nombre = await _supprimerArchivesEchues();
+      if (nombre > 0 && signalerChangement) _signaler();
+    } catch (erreur, pile) {
+      debugPrint('Suppressions prévues non faites : $erreur\n$pile');
+    }
+  }
+
+  /// Supprime tout de suite l'archive d'un chapitre (bouton « Supprimer
+  /// maintenant » d'une suppression prévue, ou suppression demandée par le
+  /// client) : même effet que [supprimerTelechargement].
+  Future<void> supprimerMaintenant(int idChapitre) =>
+      supprimerTelechargement(idChapitre);
+
+  /// Annule la suppression prévue d'un chapitre (bouton « Garder ») : les
+  /// règles ne le suppriment plus jamais automatiquement ; seul le client
+  /// peut encore le supprimer. Sans effet visible si aucune suppression
+  /// n'était prévue (le chapitre est simplement marqué gardé).
+  Future<void> annulerSuppression(int idChapitre) async {
+    final gardes = await _serviceParametres.chargerChapitresGardes();
+    // Retiré puis ajouté : le plus récent passe en fin de liste et survit à
+    // la borne de ServiceParametres.nombreMaximalChapitresGardes.
+    gardes
+      ..remove(idChapitre)
+      ..add(idChapitre);
+    await _serviceParametres.enregistrerChapitresGardes(gardes);
+    await _depotChapitres.planifierSuppression(idChapitre, null);
+    _signaler();
+  }
+
+  /// Chapitres gardés par le client ([annulerSuppression]) : l'interface
+  /// peut l'indiquer à côté du chapitre.
+  Future<Set<int>> chargerChapitresGardes() =>
+      _serviceParametres.chargerChapitresGardes();
+
+  /// Met un chapitre voulu par les règles en file, ou relance son échec.
+  Future<void> _mettreEnFileAutomatiquement(int idChapitre) async {
+    // Relu juste avant : l'autre isolat a pu le terminer depuis le calcul du
+    // plan.
+    final chapitre = await _depotChapitres.chargerChapitre(idChapitre);
+    if (chapitre == null || chapitre.estTelecharge) return;
+    final existant = await _depotTelechargements.chargerParChapitre(idChapitre);
+    if (existant == null) {
+      await _depotTelechargements.ajouterEnFile(idChapitre);
+      return;
+    }
+    // Seul un échec est relancé : « en attente » et « en cours » sont déjà
+    // pris en charge, et « terminé » signifie qu'un autre traitement vient de
+    // finir (l'état du chapitre sera à jour au prochain calcul).
+    if (existant.statut != StatutTelechargement.echec) return;
+    // Pas de relance sans fin d'un chapitre que le site refuse.
+    if ((_echecs[idChapitre] ?? 0) >= nombreMaximalEchecsAutomatiques) return;
+    await _depotTelechargements.enregistrerStatut(
+      existant.id!,
+      StatutTelechargement.enAttente,
+    );
   }
 
   // ------------------------------------------------- Actions du client
@@ -219,7 +548,13 @@ class ServiceTelechargement {
       _depotTelechargements.chargerFile();
 
   /// Ajoute un chapitre à la file (téléchargement manuel) et lance la file.
+  ///
+  /// Une demande manuelle relance aussi un chapitre que les règles ne
+  /// relancent plus (trop d'échecs), et n'est pas retirée de la file par les
+  /// règles pendant cette session.
   Future<void> telechargerChapitre(int idChapitre) async {
+    _demandesManuelles.add(idChapitre);
+    _echecs.remove(idChapitre);
     final existant = await _depotTelechargements.chargerParChapitre(idChapitre);
     if (existant == null) {
       await _depotTelechargements.ajouterEnFile(idChapitre);
@@ -230,27 +565,68 @@ class ServiceTelechargement {
       );
     }
     _signaler();
-    lancerTraitement();
+    unawaited(lancerTraitement());
+  }
+
+  /// Supprime un titre de la bibliothèque avec ses archives : à utiliser à
+  /// la place de `ServiceBibliotheque.supprimerTitre`, qui laisserait les
+  /// fichiers `.zip` sur l'appareil.
+  ///
+  /// Les archives sont effacées d'abord (et leurs chapitres marqués non
+  /// téléchargés) : si une suppression de fichier échoue, l'erreur remonte
+  /// et le titre reste, pour pouvoir réessayer sans perdre la trace des
+  /// fichiers. Un téléchargement en cours pour ce titre s'arrête à la page
+  /// suivante (sa ligne de file disparaît avec le titre).
+  Future<void> supprimerTitre(int idTitre) async {
+    final chapitres = await _depotChapitres.chargerChapitres(idTitre);
+    for (final chapitre in chapitres) {
+      final id = chapitre.id;
+      if (id != null && chapitre.estTelecharge) {
+        await supprimerTelechargement(id, signalerChangement: false);
+      }
+    }
+    await _depotTitres.supprimerTitre(idTitre);
+    _signaler();
   }
 
   /// Supprime l'archive d'un chapitre et sa ligne de file.
+  ///
+  /// Si le chapitre est en cours de téléchargement, ce dernier s'arrête à la
+  /// page suivante et son archive partielle est effacée (annulation).
   Future<void> supprimerTelechargement(
     int idChapitre, {
     bool signalerChangement = true,
   }) async {
     final contexte = await _chargerContexte(idChapitre);
     if (contexte != null) {
+      // Archive retrouvée par son nom enregistré (`nomArchive`), sinon par
+      // l'ancien calcul (chapitres téléchargés avant la migration 4).
       await _stockage.supprimerChapitre(contexte.titre, contexte.chapitre);
     }
-    await _depotChapitres.marquerTelecharge(idChapitre, estTelecharge: false);
+    // Efface aussi le nom d'archive et la suppression prévue.
+    await _depotChapitres.enregistrerArchive(idChapitre, null);
     final ligne = await _depotTelechargements.chargerParChapitre(idChapitre);
     if (ligne?.id != null) {
       await _depotTelechargements.supprimerTelechargement(ligne!.id!);
+    }
+    // Un chapitre supprimé n'a plus à être « gardé » : s'il est retéléchargé,
+    // les règles s'appliquent à nouveau normalement.
+    final gardes = await _serviceParametres.chargerChapitresGardes();
+    if (gardes.remove(idChapitre)) {
+      await _serviceParametres.enregistrerChapitresGardes(gardes);
     }
     if (signalerChangement) {
       _signaler();
     }
   }
+
+  /// Doublons téléchargés d'un titre : groupes de chapitres de même numéro
+  /// et même langue (voir `PolitiqueTelechargement.trouverDoublons`), à
+  /// montrer au client pour qu'il choisisse lesquels supprimer.
+  Future<List<List<Chapitre>>> chargerDoublons(int idTitre) async =>
+      PolitiqueTelechargement.trouverDoublons(
+        await _depotChapitres.chargerChapitres(idTitre),
+      );
 
   /// Retire de la file les téléchargements terminés (l'archive reste).
   Future<int> viderTermines() async {
@@ -297,10 +673,12 @@ class ServiceTelechargement {
     final source = await _depotSources.chargerSource(idSource);
     if (source == null) return null;
     // Même nom d'archive à l'écriture et à la lecture : une langue vide est
-    // remplacée par la première langue de la source (PLAYBOOK.md section 5).
-    final langues = SourceMangaDex.languesIsoDepuisPreference(
-      source.langueParDefaut,
-    );
+    // remplacée par la première langue de la source (PLAYBOOK.md section 5),
+    // sinon par la langue par défaut fixe (« fr ») et non par le réglage
+    // général : changer ce réglage ne doit pas rendre une archive
+    // introuvable (le nom d'archive enregistré de la migration 4 réglera ce
+    // point).
+    final langues = ServiceBibliotheque.languesPreferees(source);
     final chapitrePourChemin = chapitre.langue.isEmpty && langues.isNotEmpty
         ? chapitre.copierAvec(langue: langues.first)
         : chapitre;
@@ -313,11 +691,19 @@ class ServiceTelechargement {
 
   /// Lance le traitement de la file s'il n'est pas déjà en cours. Renvoie le
   /// traitement (déjà en cours ou nouveau) : les tests peuvent l'attendre.
+  ///
+  /// Si un autre isolat (tâche de fond Android ou application ouverte) tient
+  /// le verrou de la file, rien n'est traité : un nouvel essai est prévu à
+  /// l'expiration de ce verrou, et tout appel suivant réessaie aussi. Ne lève
+  /// jamais d'erreur (elles sont journalisées) : l'appel peut être lancé sans
+  /// être attendu.
   Future<void> lancerTraitement() {
     final enCours = _traitement;
     if (enCours != null) {
       return enCours;
     }
+    _relance?.cancel();
+    _relance = null;
     final nouveau = _traiterFile().whenComplete(() {
       _traitement = null;
       _signaler();
@@ -330,31 +716,220 @@ class ServiceTelechargement {
     // Rend la main avant de commencer : `_traitement` est affecté avant
     // qu'une fin immédiate ne le remette à null.
     await Future<void>.value();
-    while (!_changements.isClosed) {
-      final suivant = await _depotTelechargements.chargerProchainEnAttente();
-      if (suivant == null) {
+    try {
+      final verrou = await _prendreVerrou();
+      if (verrou != null) {
+        _planifierRelance(verrou);
         return;
       }
-      await _telecharger(suivant);
+      try {
+        await _reprendreApresInterruption();
+        while (!_changements.isClosed) {
+          // Renouvelé avant chaque chapitre ; si un autre isolat a repris le
+          // verrou entre-temps (le nôtre avait expiré), on lui laisse la file
+          // plutôt que d'écrire les mêmes archives que lui.
+          if (!await _renouvelerVerrou(verifier: true)) {
+            return;
+          }
+          // Réservation atomique (en attente → en cours) : même si les deux
+          // isolats se croient propriétaires du verrou (voir la LIMITE
+          // ci-dessous), un chapitre n'est jamais pris par les deux.
+          final suivant = await _depotTelechargements.reserverProchain();
+          if (suivant == null) {
+            // File vide : les suppressions prévues échues pendant le
+            // traitement (qui peut durer longtemps) sont faites maintenant.
+            await _supprimerArchivesEchuesSansErreur();
+            await _planifierRepriseSiNecessaire();
+            return;
+          }
+          await _telecharger(suivant);
+        }
+      } finally {
+        await _libererVerrou();
+      }
+    } catch (erreur, pile) {
+      // Une erreur de base (par exemple une écriture concurrente de l'autre
+      // isolat) ne doit pas remonter jusqu'à l'interface : la file sera
+      // reprise au prochain lancement.
+      debugPrint('Traitement de la file interrompu : $erreur\n$pile');
     }
   }
 
-  Future<void> _telecharger(Telechargement telechargement) async {
-    final id = telechargement.id!;
-    await _depotTelechargements.enregistrerStatut(
-      id,
-      StatutTelechargement.enCours,
+  /// Remet en attente les téléchargements « en cours » et efface les
+  /// archives partielles, **anciens** seulement (rien d'écrit depuis une
+  /// durée de verrou). Appelé avec le verrou : un « en cours » ancien ne
+  /// peut venir que d'un traitement interrompu (application tuée, tâche de
+  /// fond arrêtée par Android). Un « en cours » récent peut être celui de
+  /// l'autre isolat dans la fenêtre de course du verrou (voir la LIMITE plus
+  /// bas) : sa progression est écrite à chaque page, il n'est donc pas
+  /// touché.
+  Future<void> _reprendreApresInterruption() async {
+    await _depotTelechargements.reprendreApresInterruption(
+      ancienneteMinimale: _dureeVerrou,
     );
-    _signaler();
+    try {
+      await _stockage.nettoyerFichiersPartiels(
+        ancienneteMinimale: _dureeVerrou,
+      );
+    } catch (erreur) {
+      // Un fichier partiel impossible à effacer ne doit pas bloquer la file :
+      // l'écriture du même chapitre repartira de zéro.
+      debugPrint('Nettoyage des archives partielles impossible : $erreur');
+    }
+  }
 
-    final contexte = await _chargerContexte(telechargement.idChapitre);
-    if (contexte == null) {
-      await _depotTelechargements.supprimerTelechargement(id);
+  // ------------------------------------------------- Verrou entre isolats
+
+  // LIMITE : DepotParametres n'offre pas de compare-and-set atomique. La
+  // prise du verrou se fait donc en trois temps : lecture, écriture, relecture
+  // de contrôle. Fenêtre de course : si les deux isolats lisent le verrou
+  // libre avant que l'un ou l'autre ne l'écrive, et que la relecture du
+  // premier se fait avant l'écriture du second, les deux se croient
+  // propriétaires. Le perdant s'en aperçoit au renouvellement suivant (avant
+  // le chapitre suivant) et s'arrête. Un même chapitre n'est jamais pris par
+  // les deux (DepotTelechargements.reserverProchain est atomique), et la
+  // reprise après interruption ne touche que les « en cours » et `.zip.part`
+  // anciens (rien d'écrit depuis une durée de verrou) : le chapitre en cours
+  // de l'autre n'est donc ni remis en attente ni effacé. La fenêtre ne dure
+  // que quelques millisecondes et ne s'ouvre que si la tâche de fond démarre
+  // pile au lancement d'un traitement dans l'application.
+
+  /// Essaie de prendre le verrou de la file. Renvoie `null` en cas de succès,
+  /// sinon le verrou de l'autre propriétaire.
+  Future<VerrouTelechargement?> _prendreVerrou() async {
+    final actuel = await _serviceParametres.chargerVerrouTelechargement();
+    if (actuel != null &&
+        !actuel.estLibrePour(_identifiantVerrou, _maintenant())) {
+      return actuel;
+    }
+    await _renouvelerVerrou(verifier: false);
+    // Relecture de contrôle : si l'autre isolat a écrit juste après nous,
+    // c'est lui qui garde la file.
+    final relu = await _serviceParametres.chargerVerrouTelechargement();
+    if (relu != null && relu.proprietaire != _identifiantVerrou) {
+      return relu;
+    }
+    return null;
+  }
+
+  /// Repousse l'expiration du verrou. Avec [verifier], s'assure d'abord que
+  /// le verrou est toujours à nous (ou libre) et renvoie `false` sinon.
+  Future<bool> _renouvelerVerrou({required bool verifier}) async {
+    if (verifier) {
+      final actuel = await _serviceParametres.chargerVerrouTelechargement();
+      if (actuel != null && actuel.proprietaire != _identifiantVerrou) {
+        return false;
+      }
+    }
+    final maintenant = _maintenant();
+    await _serviceParametres.enregistrerVerrouTelechargement(
+      VerrouTelechargement(
+        proprietaire: _identifiantVerrou,
+        expiration: maintenant.add(_dureeVerrou),
+      ),
+    );
+    _dernierRenouvellement = maintenant;
+    return true;
+  }
+
+  /// Renouvelle le verrou pendant un long chapitre (entre deux pages), au
+  /// plus une fois par tiers de sa durée pour ne pas écrire en base à chaque
+  /// page.
+  // LIMITE : ce renouvellement ne vérifie pas le propriétaire : interrompre
+  // un chapitre au milieu laisserait une archive partielle. Le contrôle se
+  // fait avant le chapitre suivant.
+  Future<void> _renouvelerVerrouSiNecessaire() async {
+    final dernier = _dernierRenouvellement;
+    if (dernier != null &&
+        _maintenant().difference(dernier) < _dureeVerrou ~/ 3) {
       return;
     }
+    try {
+      await _renouvelerVerrou(verifier: false);
+    } catch (erreur) {
+      // Un renouvellement manqué ne doit pas faire échouer le chapitre : le
+      // verrou reste valable jusqu'à son expiration.
+      debugPrint('Renouvellement du verrou impossible : $erreur');
+    }
+  }
 
+  /// Libère le verrou s'il est toujours à nous.
+  Future<void> _libererVerrou() async {
+    _dernierRenouvellement = null;
+    try {
+      final actuel = await _serviceParametres.chargerVerrouTelechargement();
+      if (actuel?.proprietaire == _identifiantVerrou) {
+        await _serviceParametres.supprimerVerrouTelechargement();
+      }
+    } catch (erreur) {
+      // Le verrou expirera de lui-même.
+      debugPrint('Libération du verrou de téléchargement impossible : $erreur');
+    }
+  }
+
+  /// Prévoit un seul nouvel essai à l'expiration du verrou de l'autre
+  /// isolat (au moins 5 s plus tard, au plus une durée de verrou) : l'autre
+  /// a pu être tué, et la file ne doit pas rester bloquée jusqu'à la
+  /// prochaine action du client. Une lecture en base par essai, sans réseau.
+  void _planifierRelance(VerrouTelechargement verrou) {
+    _planifierNouvelEssai(
+      verrou.expiration.difference(_maintenant()) + const Duration(seconds: 1),
+    );
+  }
+
+  /// Après une file vidée : s'il reste des téléchargements « en cours » trop
+  /// récents pour être repris (application tuée juste avant ce démarrage,
+  /// ou chapitre de l'autre isolat), un seul nouvel essai est prévu une
+  /// durée de verrou plus tard, quand ils seront assez anciens pour être
+  /// repris s'ils sont vraiment abandonnés. Lecture en base seulement.
+  Future<void> _planifierRepriseSiNecessaire() async {
+    try {
+      final enCours = await _depotTelechargements.chargerFile(
+        statuts: <StatutTelechargement>{StatutTelechargement.enCours},
+      );
+      if (enCours.isNotEmpty) {
+        _planifierNouvelEssai(_dureeVerrou + const Duration(seconds: 1));
+      }
+    } catch (erreur) {
+      debugPrint('Contrôle des téléchargements en cours impossible : $erreur');
+    }
+  }
+
+  /// Prévoit un seul nouvel essai de traitement après [attente] (ramenée
+  /// entre 5 s et une durée de verrou un peu dépassée).
+  void _planifierNouvelEssai(Duration demandee) {
+    if (_changements.isClosed) return;
+    const minimum = Duration(seconds: 5);
+    final maximum = _dureeVerrou + const Duration(seconds: 1);
+    final attente = demandee < minimum
+        ? minimum
+        : (demandee > maximum ? maximum : demandee);
+    _relance?.cancel();
+    _relance = Timer(attente, () {
+      _relance = null;
+      if (!_changements.isClosed) {
+        unawaited(lancerTraitement());
+      }
+    });
+  }
+
+  DateTime _maintenant() => _horloge().toUtc();
+
+  /// Télécharge un chapitre de la file. Ne lève jamais : toute erreur met le
+  /// téléchargement en échec (ou est journalisée si même cela échoue).
+  Future<void> _telecharger(Telechargement telechargement) async {
+    final id = telechargement.id!;
+    final idChapitre = telechargement.idChapitre;
     EcritureChapitre? ecriture;
     try {
+      // Déjà « en cours » : la ligne a été réservée par reserverProchain().
+      _signaler();
+
+      final contexte = await _chargerContexte(idChapitre);
+      if (contexte == null) {
+        await _depotTelechargements.supprimerTelechargement(id);
+        return;
+      }
       final adaptateur = _fabriqueSources.creer(contexte.source);
       var contenu = await adaptateur.recupererContenu(
         contexte.chapitre.urlChapitre,
@@ -384,35 +959,69 @@ class ServiceTelechargement {
           contenu = contenuAJour;
           await ecriture.ajouterPage(
             octets,
-            extension: StockageTelechargements.extensionDepuisUrl(url) ?? 'jpg',
+            extension:
+                StockageTelechargements.extensionDepuisUrl(url) ??
+                extensionImageParDefaut,
           );
-          await _depotTelechargements.enregistrerProgression(
+          // La ligne a disparu (le client a annulé ou supprimé le titre) :
+          // on s'arrête sans solliciter le site pour les pages restantes.
+          if (!await _depotTelechargements.enregistrerProgression(
             id,
             nombrePagesFaites: index + 1,
-          );
+          )) {
+            throw const _Annulation();
+          }
+          await _renouvelerVerrouSiNecessaire();
           _signaler();
         }
       }
+      // Nom réellement retenu par le stockage (`ch1.fr.2.zip` en cas de
+      // doublon) : enregistré avec le statut, dans la même transaction, pour
+      // que la lecture et la suppression retrouvent toujours cette archive.
+      final nomArchive = ecriture.nomArchive;
       await ecriture.finaliser();
       ecriture = null;
-      await _depotTelechargements.enregistrerStatut(
+      if (!await _depotTelechargements.enregistrerStatut(
         id,
         StatutTelechargement.termine,
-      );
+        nomArchive: nomArchive,
+      )) {
+        // Annulé pendant la toute dernière page : l'archive finie n'est
+        // plus voulue et ne serait suivie par aucune ligne en base.
+        await _stockage.supprimerArchive(nomArchive);
+        return;
+      }
+      _echecs.remove(idChapitre);
+    } on _Annulation {
+      await _abandonner(ecriture);
     } catch (erreur, pile) {
       debugPrint('Téléchargement n°$id en échec : $erreur\n$pile');
+      await _abandonner(ecriture);
+      _echecs.update(idChapitre, (n) => n + 1, ifAbsent: () => 1);
       try {
-        await ecriture?.abandonner();
-      } catch (_) {
-        // L'archive partielle sera effacée au prochain démarrage.
+        await _depotTelechargements.enregistrerStatut(
+          id,
+          StatutTelechargement.echec,
+          messageErreur: _messageErreur(erreur),
+        );
+      } catch (erreurStatut) {
+        // La ligne restera « en cours » et sera reprise au prochain
+        // traitement.
+        debugPrint(
+          'Statut du téléchargement n°$id non enregistré : $erreurStatut',
+        );
       }
-      await _depotTelechargements.enregistrerStatut(
-        id,
-        StatutTelechargement.echec,
-        messageErreur: _messageErreur(erreur),
-      );
+    } finally {
+      _signaler();
     }
-    _signaler();
+  }
+
+  static Future<void> _abandonner(EcritureChapitre? ecriture) async {
+    try {
+      await ecriture?.abandonner();
+    } catch (_) {
+      // L'archive partielle sera effacée au début du prochain traitement.
+    }
   }
 
   /// Télécharge une page. Sur MangaDex, une adresse d'images expirée (403
@@ -425,15 +1034,16 @@ class ServiceTelechargement {
     _ContexteChapitre contexte,
   ) async {
     var contenuCourant = contenu;
-    for (var essai = 0; essai < 2; essai++) {
+    for (var essai = 0; essai < nombreEssaisParPage; essai++) {
       final url = contenuCourant.urlsImages[index];
       try {
         final octets = await _recupererImage(url, contenuCourant, contexte);
         return (octets, url, contenuCourant);
       } on ErreurSource catch (erreur) {
-        final peutRenouveler =
-            essai == 0 && SignalementMangaDex.estServeurMangaDexAtHome(url);
-        if (!peutRenouveler) rethrow;
+        final dernierEssai = essai >= nombreEssaisParPage - 1;
+        if (dernierEssai || !_peutRenouvelerAdresse(url, erreur, contexte)) {
+          rethrow;
+        }
         contenuCourant = await adaptateur.recupererContenu(
           contexte.chapitre.urlChapitre,
         );
@@ -472,12 +1082,38 @@ class ServiceTelechargement {
         rethrow;
       }
     }
-    final estMangaDex = SourceMangaDex.estHoteMangaDex(uri.host);
     return _client.recupererOctets(
       uri,
       referer: contenu.urlReferer ?? contexte.source.urlBase,
-      userAgent: estMangaDex ? userAgentApplication : null,
+      userAgent: _estAdresseMangaDex(uri.host) ? userAgentApplication : null,
     );
+  }
+
+  /// `true` si [hote] appartient à MangaDex (site, serveur d'images
+  /// `uploads.mangadex.org`, nœuds `*.mangadex.network`) : MangaDex exige un
+  /// User-Agent honnête sur tous ses serveurs.
+  static bool _estAdresseMangaDex(String hote) {
+    final h = hote.toLowerCase();
+    return SourceMangaDex.estHoteMangaDex(h) ||
+        h.endsWith('.mangadex.org') ||
+        h.endsWith('.mangadex.network');
+  }
+
+  /// `true` si un échec sur [url] justifie de redemander les adresses des
+  /// images : tout échec d'un nœud MangaDex@Home (nœud en panne), ou un 403
+  /// sur une autre adresse MangaDex (adresse expirée). Les autres sites ne
+  /// renouvellent pas leurs adresses : réessayer serait inutile.
+  static bool _peutRenouvelerAdresse(
+    String url,
+    ErreurSource erreur,
+    _ContexteChapitre contexte,
+  ) {
+    if (SignalementMangaDex.estServeurMangaDexAtHome(url)) return true;
+    final hote = Uri.tryParse(url)?.host ?? '';
+    final estMangaDex =
+        contexte.source.typeSource == TypeSource.mangaDex ||
+        _estAdresseMangaDex(hote);
+    return estMangaDex && erreur.codeStatut == 403;
   }
 
   static String _messageErreur(Object erreur) {

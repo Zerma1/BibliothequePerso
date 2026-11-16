@@ -310,4 +310,211 @@ void main() {
       expect(plan.idsASupprimer, <int>[1]);
     });
   });
+
+  group('langues non choisies par le client', () {
+    Chapitre version(
+      int id,
+      double numero,
+      String langue, {
+      bool estTelecharge = false,
+      bool estLu = false,
+    }) => Chapitre(
+      id: id,
+      urlChapitre: 'https://exemple.test/$id',
+      nom: '$langue $numero',
+      numero: numero,
+      langue: langue,
+      estTelecharge: estTelecharge,
+      estLu: estLu,
+    );
+
+    test('seules les versions fr et en sont voulues parmi ru, ja, en, fr', () {
+      final chapitres = <Chapitre>[
+        version(1, 1, 'ru'),
+        version(2, 1, 'ja'),
+        version(3, 1, 'en'),
+        version(4, 2, 'ru'),
+        version(5, 2, 'fr'),
+        version(6, 3, 'ja'),
+        version(7, 3, 'en'),
+        version(8, 3, 'fr'),
+      ];
+      final plan = politique.calculer(
+        chapitres,
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(plan.idsVoulus, <int>{3, 5, 8});
+      expect(plan.idsATelecharger, <int>[3, 5, 8]);
+    });
+
+    test('un numéro disponible seulement en russe est ignoré', () {
+      final chapitres = <Chapitre>[
+        version(1, 1, 'fr'),
+        version(2, 2, 'ru'),
+        version(3, 3, 'fr'),
+      ];
+      for (final (favori, suivi) in <(bool, bool)>[
+        (true, false),
+        (false, true),
+      ]) {
+        final plan = politique.calculer(
+          chapitres,
+          estFavori: favori,
+          estSuivi: suivi,
+        );
+        expect(plan.idsVoulus, <int>{1, 3});
+      }
+    });
+
+    test('une archive en russe déjà téléchargée est à supprimer', () {
+      final chapitres = <Chapitre>[
+        version(1, 1, 'ru', estTelecharge: true),
+        version(2, 1, 'fr'),
+        version(3, 2, 'ru', estTelecharge: true),
+      ];
+      final plan = politique.calculer(
+        chapitres,
+        estFavori: true,
+        estSuivi: false,
+      );
+      // Même en attendant le français, le russe n'est pas gardé.
+      expect(plan.idsASupprimer, <int>[1, 3]);
+      expect(plan.idsATelecharger, <int>[2]);
+    });
+
+    test('une variante régionale compte comme sa langue', () {
+      const portugais = PolitiqueTelechargement(
+        languesPreferees: <String>['pt'],
+      );
+      final plan = portugais.calculer(
+        <Chapitre>[version(1, 1, 'pt-br'), version(2, 2, 'es')],
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(plan.idsVoulus, <int>{1});
+    });
+
+    test('lire un numéro ignoré fait quand même avancer la fenêtre', () {
+      final chapitres = <Chapitre>[
+        for (var n = 1; n <= 20; n++) version(n, n.toDouble(), 'fr'),
+        version(99, 15.5, 'ru', estLu: true),
+      ];
+      const reglee = PolitiqueTelechargement(
+        reglages: ReglagesTelechargement(
+          suivisInitial: 2,
+          suivisAvant: 1,
+          suivisApres: 1,
+        ),
+        languesPreferees: <String>['fr'],
+      );
+      final plan = reglee.calculer(chapitres, estFavori: false, estSuivi: true);
+      expect(plan.idsVoulus, <int>{15, 16});
+    });
+  });
+
+  group('fenêtre des suivis', () {
+    test('la fenêtre initiale reste en position absolue (initial 10, avant et après 2)', () {
+      const reglee = PolitiqueTelechargement(
+        reglages: ReglagesTelechargement(
+          suivisInitial: 10,
+          suivisAvant: 2,
+          suivisApres: 2,
+        ),
+      );
+      expect(
+        reglee
+            .calculer(_chapitres(30, lus: 4), estFavori: false, estSuivi: true)
+            .idsVoulus,
+        _intervalle(3, 10),
+      );
+      expect(
+        reglee
+            .calculer(_chapitres(30, lus: 9), estFavori: false, estSuivi: true)
+            .idsVoulus,
+        _intervalle(8, 11),
+      );
+    });
+
+    test('avant et après valent au moins 1', () {
+      const reglee = PolitiqueTelechargement(
+        reglages: ReglagesTelechargement(
+          suivisInitial: 0,
+          suivisAvant: 0,
+          suivisApres: 0,
+        ),
+      );
+      expect(
+        reglee
+            .calculer(_chapitres(30, lus: 5), estFavori: false, estSuivi: true)
+            .idsVoulus,
+        <int>{5, 6},
+      );
+    });
+  });
+
+  group('oneshots et doublons', () {
+    Chapitre chapitre(
+      int id,
+      double numero, {
+      String langue = 'fr',
+      bool estTelecharge = false,
+    }) => Chapitre(
+      id: id,
+      urlChapitre: 'https://exemple.test/$id',
+      nom: 'Chapitre $id',
+      numero: numero,
+      langue: langue,
+      estTelecharge: estTelecharge,
+    );
+
+    test('chaque oneshot de numéro 0 est un chapitre distinct', () {
+      final plan = politique.calculer(
+        <Chapitre>[chapitre(1, 0), chapitre(2, 0), chapitre(3, 1)],
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(plan.idsVoulus, <int>{1, 2, 3});
+      expect(
+        politique.choisirVersions(<Chapitre>[chapitre(1, 0), chapitre(2, 0)]),
+        hasLength(2),
+      );
+    });
+
+    test(
+      "les règles ne suppriment pas un doublon de même numéro et même langue",
+      () {
+        final plan = politique.calculer(
+          <Chapitre>[
+            chapitre(1, 1, estTelecharge: true),
+            chapitre(2, 1, estTelecharge: true),
+            chapitre(3, 1, langue: 'en', estTelecharge: true),
+          ],
+          estFavori: true,
+          estSuivi: false,
+        );
+        expect(plan.idsVoulus, <int>{1});
+        // Le doublon français reste ; l'anglais, remplacé, est supprimé.
+        expect(plan.idsASupprimer, <int>[3]);
+      },
+    );
+
+    test('trouve les doublons téléchargés, sans regrouper les oneshots', () {
+      final doublons = PolitiqueTelechargement.trouverDoublons(<Chapitre>[
+        chapitre(1, 1, estTelecharge: true),
+        chapitre(2, 1, estTelecharge: true),
+        chapitre(3, 1, langue: 'en', estTelecharge: true),
+        chapitre(4, 2, estTelecharge: true),
+        chapitre(5, 2),
+        chapitre(6, 0, estTelecharge: true),
+        chapitre(7, 0, estTelecharge: true),
+      ]);
+      expect(
+        doublons.map((groupe) => groupe.map((c) => c.id).toList()).toList(),
+        <List<int>>[
+          <int>[1, 2],
+        ],
+      );
+    });
+  });
 }

@@ -18,6 +18,8 @@ import 'package:bibliotheque_perso/modeles/titre.dart';
 import 'package:bibliotheque_perso/services/politique_telechargement.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
 import 'package:bibliotheque_perso/services/service_telechargement.dart';
+import 'package:bibliotheque_perso/services/verrou_telechargement.dart';
+import 'package:bibliotheque_perso/sources/client_http_poli.dart';
 import 'package:bibliotheque_perso/sources/fabrique_sources.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -40,28 +42,58 @@ void main() {
   late int nombre403Restants;
   late int nombreImages;
   late Titre titre;
+  late DepotSources depotSources;
+  late DepotTitres depotTitres;
+  late StockageTelechargements stockage;
+  late ClientHttpPoli client;
+  // Action lancée une fois, à la première demande d'image (simule ce que
+  // fait l'autre isolat pendant un téléchargement).
+  Future<void> Function()? avantImage;
+  // Serveur d'images renvoyé par /at-home/server (null = celui enregistré,
+  // un nœud MangaDex@Home).
+  String? baseUrlImages;
+  late int nombreImagesDemandees;
+  // Avance de l'horloge du service, pour faire passer le délai de 24 h des
+  // suppressions prévues sans attendre.
+  late Duration decalage;
 
   setUp(() async {
+    decalage = Duration.zero;
     base = await ouvrirBaseDeTest();
     dossier = await Directory.systemTemp.createTemp('telechargements_test');
     requetes = <http.Request>[];
     nombre403Restants = 0;
+    avantImage = null;
+    baseUrlImages = null;
+    nombreImagesDemandees = 0;
     final atHome = lireExemple('exemples_json/at_home_serveur.json');
     nombreImages =
         (((jsonDecode(atHome) as Map<String, Object?>)['chapter']!
                     as Map<String, Object?>)['data']!
                 as List<Object?>)
             .length;
-    final client = creerClientTest((http.Request requete) async {
+    client = creerClientTest((http.Request requete) async {
       requetes.add(requete);
       final url = requete.url;
       if (url.host == 'api.mangadex.network') {
         return http.Response('', 200);
       }
       if (url.path.startsWith('/at-home/server/')) {
-        return reponseJson(atHome);
+        final serveur = baseUrlImages;
+        if (serveur == null) return reponseJson(atHome);
+        final json = jsonDecode(atHome) as Map<String, Object?>;
+        return reponseJson(
+          jsonEncode(<String, Object?>{...json, 'baseUrl': serveur}),
+        );
       }
-      if (url.host.endsWith('.mangadex.network')) {
+      if (url.host.endsWith('.mangadex.network') ||
+          url.host == 'uploads.mangadex.org') {
+        nombreImagesDemandees++;
+        final action = avantImage;
+        if (action != null) {
+          avantImage = null;
+          await action();
+        }
         if (nombre403Restants > 0) {
           nombre403Restants--;
           return http.Response('expiré', 403);
@@ -71,22 +103,25 @@ void main() {
       return http.Response('introuvable', 404);
     }, HorlogeFactice());
 
-    final depotSources = DepotSources(base);
-    final depotTitres = DepotTitres(base);
+    depotSources = DepotSources(base);
+    depotTitres = DepotTitres(base);
     depotChapitres = DepotChapitres(base);
     depotListes = DepotListes(base);
     depotTelechargements = DepotTelechargements(base);
     parametres = ServiceParametres(DepotParametres(base));
+    stockage = StockageTelechargements(dossier.path);
     service = ServiceTelechargement(
       depotTelechargements: depotTelechargements,
       depotChapitres: depotChapitres,
       depotTitres: depotTitres,
       depotListes: depotListes,
       depotSources: depotSources,
-      stockage: StockageTelechargements(dossier.path),
+      stockage: stockage,
       fabriqueSources: FabriqueSources(client),
       client: client,
       serviceParametres: parametres,
+      identifiantVerrou: 'application',
+      horloge: () => DateTime.now().add(decalage),
     );
 
     final source = await depotSources.enregistrerSource(
@@ -234,8 +269,21 @@ void main() {
               .map((c) => c.numero.toInt())
               .toList()
             ..sort();
-      // Dernier lu = 4 : on garde 3 et 4, on télécharge 5 et 6.
-      expect(telecharges, <int>[3, 4, 5, 6]);
+      // Dernier lu = 4 : on garde 3 et 4, on télécharge 5 et 6 ; 1 et 2
+      // attendent 24 h avant d'être supprimés.
+      expect(telecharges, <int>[1, 2, 3, 4, 5, 6]);
+      expect((await chapitre(1)).dateSuppressionPrevue, isNotNull);
+      expect((await chapitre(3)).dateSuppressionPrevue, isNull);
+
+      decalage = const Duration(hours: 25);
+      expect(await service.supprimerArchivesEchues(), 2);
+      final restants =
+          (await depotChapitres.chargerChapitres(titre.id!))
+              .where((c) => c.estTelecharge)
+              .map((c) => c.numero.toInt())
+              .toList()
+            ..sort();
+      expect(restants, <int>[3, 4, 5, 6]);
       final archives = dossier
           .listSync(recursive: true)
           .whereType<File>()
@@ -250,13 +298,23 @@ void main() {
     });
   });
 
-  test('reprend au démarrage un téléchargement interrompu', () async {
-    final premier = await chapitre(1);
-    final ligne = await depotTelechargements.ajouterEnFile(premier.id!);
-    await depotTelechargements.enregistrerStatut(
+  /// Marque le chapitre « en cours » comme si son dernier enregistrement
+  /// datait de [il y a] (dépôt avec une horloge dans le passé).
+  Future<void> marquerEnCoursDepuis(int idChapitre, Duration ilYA) async {
+    final depotAncien = DepotTelechargements(
+      base,
+      horloge: () => DateTime.now().toUtc().subtract(ilYA),
+    );
+    final ligne = await depotAncien.ajouterEnFile(idChapitre);
+    await depotAncien.enregistrerStatut(
       ligne.id!,
       StatutTelechargement.enCours,
     );
+  }
+
+  test('reprend au démarrage un téléchargement interrompu', () async {
+    final premier = await chapitre(1);
+    await marquerEnCoursDepuis(premier.id!, const Duration(minutes: 10));
     await service.demarrer();
     await service.lancerTraitement();
 
@@ -264,5 +322,523 @@ void main() {
       (await depotTelechargements.chargerParChapitre(premier.id!))!.statut,
       StatutTelechargement.termine,
     );
+  });
+
+  test("ne reprend pas un téléchargement en cours récent (celui de l'autre isolat)", () async {
+    final premier = await chapitre(1);
+    await marquerEnCoursDepuis(premier.id!, const Duration(seconds: 10));
+    await service.demarrer();
+    await service.lancerTraitement();
+
+    expect(
+      (await depotTelechargements.chargerParChapitre(premier.id!))!.statut,
+      StatutTelechargement.enCours,
+    );
+    expect(requetes, isEmpty);
+  });
+
+  group('verrou partagé entre isolats', () {
+    ServiceTelechargement creerAutreService() => ServiceTelechargement(
+      depotTelechargements: depotTelechargements,
+      depotChapitres: depotChapitres,
+      depotTitres: depotTitres,
+      depotListes: depotListes,
+      depotSources: depotSources,
+      stockage: StockageTelechargements(dossier.path),
+      fabriqueSources: FabriqueSources(client),
+      client: client,
+      serviceParametres: parametres,
+      identifiantVerrou: 'tache-de-fond',
+    );
+
+    Future<void> poserVerrouAutre(DateTime expiration) =>
+        parametres.enregistrerVerrouTelechargement(
+          VerrouTelechargement(
+            proprietaire: 'tache-de-fond',
+            expiration: expiration,
+          ),
+        );
+
+    test('ne traite rien quand un autre isolat tient le verrou', () async {
+      await poserVerrouAutre(
+        DateTime.now().toUtc().add(const Duration(minutes: 2)),
+      );
+      final premier = await chapitre(1);
+      await service.telechargerChapitre(premier.id!);
+      await service.lancerTraitement();
+
+      final ligne = await depotTelechargements.chargerParChapitre(premier.id!);
+      expect(ligne!.statut, StatutTelechargement.enAttente);
+      expect(requetes, isEmpty);
+      final verrou = await parametres.chargerVerrouTelechargement();
+      expect(verrou!.proprietaire, 'tache-de-fond');
+    });
+
+    test(
+      "reprend un verrou expiré, nettoie l'interruption et libère le verrou",
+      () async {
+        await poserVerrouAutre(DateTime.utc(2000));
+        // L'autre isolat a été tué en plein téléchargement.
+        final premier = await chapitre(1);
+        await marquerEnCoursDepuis(premier.id!, const Duration(minutes: 10));
+        final partiel = File('${dossier.path}/abandon.zip.part');
+        await partiel.writeAsBytes(<int>[0]);
+        await partiel.setLastModified(
+          DateTime.now().subtract(const Duration(minutes: 10)),
+        );
+        // Un .zip.part récent peut être l'écriture de l'autre isolat : il
+        // n'est pas effacé.
+        final recent = File('${dossier.path}/recent.zip.part');
+        await recent.writeAsBytes(<int>[0]);
+
+        await service.lancerTraitement();
+
+        expect(
+          (await depotTelechargements.chargerParChapitre(premier.id!))!.statut,
+          StatutTelechargement.termine,
+        );
+        expect(await partiel.exists(), isFalse);
+        expect(await recent.exists(), isTrue);
+        expect(await parametres.chargerVerrouTelechargement(), isNull);
+      },
+    );
+
+    test(
+      "un second service refuse la file tant que le premier la traite",
+      () async {
+        final autre = creerAutreService();
+        addTearDown(autre.fermer);
+        final premier = await chapitre(1);
+        final verrous = <VerrouTelechargement?>[];
+        avantImage = () async {
+          // Le premier service télécharge : la tâche de fond essaie à son
+          // tour et doit s'abstenir.
+          await autre.lancerTraitement();
+          verrous.add(await parametres.chargerVerrouTelechargement());
+        };
+        await service.telechargerChapitre(premier.id!);
+        await service.lancerTraitement();
+
+        expect(verrous.single!.proprietaire, 'application');
+        expect(
+          (await depotTelechargements.chargerParChapitre(premier.id!))!.statut,
+          StatutTelechargement.termine,
+        );
+        final appelsAtHome = requetes
+            .where((r) => r.url.path.startsWith('/at-home/server/'))
+            .length;
+        expect(appelsAtHome, 1);
+      },
+    );
+
+    test(
+      "s'arrête avant le chapitre suivant si un autre isolat a pris le verrou",
+      () async {
+        final premier = await chapitre(1);
+        final second = await chapitre(2);
+        avantImage = () => poserVerrouAutre(
+          DateTime.now().toUtc().add(const Duration(minutes: 2)),
+        );
+        await depotTelechargements.ajouterEnFile(premier.id!);
+        await depotTelechargements.ajouterEnFile(second.id!);
+        await service.lancerTraitement();
+
+        expect(
+          (await depotTelechargements.chargerParChapitre(premier.id!))!.statut,
+          StatutTelechargement.termine,
+        );
+        expect(
+          (await depotTelechargements.chargerParChapitre(second.id!))!.statut,
+          StatutTelechargement.enAttente,
+        );
+        // Le verrou de l'autre n'est pas effacé en partant.
+        final verrou = await parametres.chargerVerrouTelechargement();
+        expect(verrou!.proprietaire, 'tache-de-fond');
+      },
+    );
+  });
+
+  group('protection du chapitre en cours de lecture', () {
+    Future<List<int>> numerosTelecharges() async {
+      final chapitres = await depotChapitres.chargerChapitres(titre.id!);
+      return chapitres
+          .where((c) => c.estTelecharge)
+          .map((c) => c.numero.toInt())
+          .toList()
+        ..sort();
+    }
+
+    test("les règles ne suppriment pas un chapitre ouvert, puis le suppriment une fois libéré", () async {
+      await parametres.enregistrerReglagesTelechargement(
+        const ReglagesTelechargement(
+          suivisInitial: 4,
+          suivisAvant: 2,
+          suivisApres: 2,
+        ),
+      );
+      await depotListes.ajouterTitre(await idListe(nomListeSuivis), titre.id!);
+      await service.appliquerRegles(titre.id!);
+      await service.lancerTraitement();
+
+      final idPremier = (await chapitre(1)).id!;
+      service.protegerChapitre(idPremier);
+      for (var n = 1; n <= 4; n++) {
+        await depotChapitres.marquerLu((await chapitre(n)).id!);
+      }
+      await service.appliquerRegles(titre.id!);
+      await service.lancerTraitement();
+      decalage = const Duration(hours: 25);
+      await service.supprimerArchivesEchues();
+      expect(await numerosTelecharges(), <int>[1, 3, 4, 5, 6]);
+      expect(await service.compterPages(idPremier), nombreImages);
+
+      service.libererChapitre(idPremier);
+      expect(service.estProtege(idPremier), isFalse);
+      await service.appliquerRegles(titre.id!);
+      await service.lancerTraitement();
+      expect(await numerosTelecharges(), <int>[3, 4, 5, 6]);
+    });
+
+    test('la protection compte les ouvertures', () {
+      service.protegerChapitre(7);
+      service.protegerChapitre(7);
+      service.libererChapitre(7);
+      expect(service.estProtege(7), isTrue);
+      service.libererChapitre(7);
+      expect(service.estProtege(7), isFalse);
+      // Libérer un chapitre non protégé est sans effet.
+      service.libererChapitre(7);
+      expect(service.estProtege(7), isFalse);
+    });
+  });
+
+  List<File> archives() => dossier
+      .listSync(recursive: true)
+      .whereType<File>()
+      .where((f) => f.path.endsWith('.zip') || f.path.endsWith('.zip.part'))
+      .toList();
+
+  int appelsAtHome() =>
+      requetes.where((r) => r.url.path.startsWith('/at-home/server/')).length;
+
+  test("redemande les adresses après un 403 d'uploads.mangadex.org, sans signalement", () async {
+    baseUrlImages = 'https://uploads.mangadex.org';
+    nombre403Restants = 1;
+    final premier = await chapitre(1);
+    await service.telechargerChapitre(premier.id!);
+    await service.lancerTraitement();
+
+    final ligne = await depotTelechargements.chargerParChapitre(premier.id!);
+    expect(ligne!.statut, StatutTelechargement.termine);
+    expect(appelsAtHome(), 2);
+    expect(
+      requetes.where((r) => r.url.host == 'api.mangadex.network'),
+      isEmpty,
+    );
+  });
+
+  test("annuler un téléchargement en cours l'arrête à la page suivante sans laisser d'archive", () async {
+    final premier = await chapitre(1);
+    avantImage = () => service.supprimerTelechargement(premier.id!);
+    await service.telechargerChapitre(premier.id!);
+    await service.lancerTraitement();
+
+    expect(nombreImagesDemandees, 1);
+    expect(await depotTelechargements.chargerParChapitre(premier.id!), isNull);
+    expect((await chapitre(1)).estTelecharge, isFalse);
+    expect(archives(), isEmpty);
+  });
+
+  test('supprimer un titre efface ses archives puis le titre', () async {
+    final premier = await chapitre(1);
+    await service.telechargerChapitre(premier.id!);
+    await service.lancerTraitement();
+    expect(archives(), isNotEmpty);
+
+    await service.supprimerTitre(titre.id!);
+
+    expect(archives(), isEmpty);
+    expect(await depotTitres.chargerTitre(titre.id!), isNull);
+  });
+
+  group('règles et file', () {
+    Future<void> suivreAvec(ReglagesTelechargement reglages) async {
+      await parametres.enregistrerReglagesTelechargement(reglages);
+      await depotListes.ajouterTitre(await idListe(nomListeSuivis), titre.id!);
+    }
+
+    test("après 3 échecs, les règles ne relancent plus le chapitre ; le client le peut encore", () async {
+      nombre403Restants = 1 << 30;
+      await suivreAvec(
+        const ReglagesTelechargement(
+          suivisInitial: 1,
+          suivisAvant: 1,
+          suivisApres: 1,
+        ),
+      );
+      for (var essai = 0; essai < 5; essai++) {
+        await service.appliquerRegles(titre.id!);
+        await service.lancerTraitement();
+      }
+      // Chaque essai demande deux fois les adresses (essai + renouvellement).
+      expect(appelsAtHome(), 3 * 2);
+
+      await service.telechargerChapitre((await chapitre(1)).id!);
+      await service.lancerTraitement();
+      expect(appelsAtHome(), 4 * 2);
+    });
+
+    test('retirer un titre de Suivis retire ses téléchargements en attente, sauf les demandes manuelles', () async {
+      // La file reste en attente : un autre isolat tient le verrou.
+      await parametres.enregistrerVerrouTelechargement(
+        VerrouTelechargement(
+          proprietaire: 'tache-de-fond',
+          expiration: DateTime.now().toUtc().add(const Duration(minutes: 2)),
+        ),
+      );
+      await suivreAvec(const ReglagesTelechargement(suivisInitial: 3));
+      await service.appliquerRegles(titre.id!);
+      final manuel = await chapitre(20);
+      await service.telechargerChapitre(manuel.id!);
+      expect(await depotTelechargements.chargerFile(), hasLength(4));
+
+      await depotListes.retirerTitre(await idListe(nomListeSuivis), titre.id!);
+      await service.appliquerRegles(titre.id!);
+
+      final file = await depotTelechargements.chargerFile();
+      expect(file.map((t) => t.idChapitre), <int>[manuel.id!]);
+    });
+
+    test(
+      'une archive dans une langue non choisie est supprimée par les règles',
+      () async {
+        await depotChapitres.enregistrerChapitres(<Chapitre>[
+          Chapitre(
+            idTitre: titre.id,
+            urlChapitre: 'https://mangadex.org/chapter/$_uuidChapitre?ru=1',
+            nom: 'Глава 1',
+            numero: 1,
+            langue: 'ru',
+          ),
+        ]);
+        final russe = (await depotChapitres.chargerChapitres(titre.id!))
+            .firstWhere((c) => c.langue == 'ru');
+        await service.telechargerChapitre(russe.id!);
+        await service.lancerTraitement();
+        expect(
+          (await depotChapitres.chargerChapitre(russe.id!))!.estTelecharge,
+          isTrue,
+        );
+
+        await depotListes.ajouterTitre(
+          await idListe(nomListeFavoris),
+          titre.id!,
+        );
+        await service.appliquerRegles(titre.id!);
+        await service.lancerTraitement();
+        // Suppression différée de 24 h, puis faite à l'échéance.
+        final planifie = await depotChapitres.chargerChapitre(russe.id!);
+        expect(planifie!.estTelecharge, isTrue);
+        expect(planifie.dateSuppressionPrevue, isNotNull);
+        decalage = const Duration(hours: 25);
+        await service.appliquerRegles(titre.id!);
+
+        expect(
+          (await depotChapitres.chargerChapitre(russe.id!))!.estTelecharge,
+          isFalse,
+        );
+        final chapitres = await depotChapitres.chargerChapitres(titre.id!);
+        expect(
+          chapitres.where((c) => c.estTelecharge).map((c) => c.langue).toSet(),
+          <String>{'fr'},
+        );
+      },
+    );
+
+    test('chargerDoublons renvoie les chapitres téléchargés de même numéro et langue', () async {
+      await depotChapitres.enregistrerChapitres(<Chapitre>[
+        Chapitre(
+          idTitre: titre.id,
+          urlChapitre: 'https://mangadex.org/chapter/$_uuidChapitre?autre=1',
+          nom: 'Chapitre 1 (autre groupe)',
+          numero: 1,
+          langue: 'fr',
+        ),
+      ]);
+      final versions = (await depotChapitres.chargerChapitres(titre.id!))
+          .where((c) => c.numero == 1)
+          .toList();
+      for (final version in versions) {
+        await depotChapitres.marquerTelecharge(version.id!);
+      }
+
+      final doublons = await service.chargerDoublons(titre.id!);
+      expect(
+        doublons.single.map((c) => c.id).toSet(),
+        versions.map((c) => c.id).toSet(),
+      );
+    });
+  });
+
+  group('suppression différée', () {
+    // La file ne tourne pas (verrou tenu ailleurs) : seuls les états en base
+    // comptent, les chapitres sont marqués téléchargés directement.
+    Future<void> bloquerFile() => parametres.enregistrerVerrouTelechargement(
+      VerrouTelechargement(
+        proprietaire: 'tache-de-fond',
+        expiration: DateTime.now().toUtc().add(const Duration(days: 3)),
+      ),
+    );
+
+    Future<int> preparerChapitre5HorsRegles() async {
+      await bloquerFile();
+      await parametres.enregistrerReglagesTelechargement(
+        const ReglagesTelechargement(suivisInitial: 2),
+      );
+      await depotListes.ajouterTitre(await idListe(nomListeSuivis), titre.id!);
+      final id = (await chapitre(5)).id!;
+      await depotChapitres.marquerTelecharge(id);
+      await service.appliquerRegles(titre.id!);
+      return id;
+    }
+
+    test(
+      "pose une échéance à 24 h sans la repousser à chaque application",
+      () async {
+        final id = await preparerChapitre5HorsRegles();
+        final premiere = (await depotChapitres.chargerChapitre(id))!
+            .dateSuppressionPrevue;
+        expect(premiere, isNotNull);
+        final attendu = DateTime.now().toUtc().add(const Duration(hours: 24));
+        expect(premiere!.difference(attendu).inMinutes.abs(), lessThan(2));
+
+        decalage = const Duration(hours: 1);
+        await service.appliquerRegles(titre.id!);
+        expect(
+          (await depotChapitres.chargerChapitre(id))!.dateSuppressionPrevue,
+          premiere,
+        );
+      },
+    );
+
+    test('« Garder » annule la suppression, même après l\'échéance', () async {
+      final id = await preparerChapitre5HorsRegles();
+      await service.annulerSuppression(id);
+      expect(await service.chargerChapitresGardes(), contains(id));
+
+      decalage = const Duration(hours: 25);
+      await service.appliquerRegles(titre.id!);
+      await service.supprimerArchivesEchues();
+      final garde = (await depotChapitres.chargerChapitre(id))!;
+      expect(garde.estTelecharge, isTrue);
+      expect(garde.dateSuppressionPrevue, isNull);
+    });
+
+    test(
+      'un chapitre qui redevient voulu perd sa suppression prévue',
+      () async {
+        final id = await preparerChapitre5HorsRegles();
+        await parametres.enregistrerReglagesTelechargement(
+          const ReglagesTelechargement(suivisInitial: 10),
+        );
+        await service.appliquerRegles(titre.id!);
+        expect(
+          (await depotChapitres.chargerChapitre(id))!.dateSuppressionPrevue,
+          isNull,
+        );
+      },
+    );
+
+    test('modifierLanguesTitre prévoit la suppression des autres langues, '
+        'puis le retour au réglage général l\'annule', () async {
+      await bloquerFile();
+      await depotListes.ajouterTitre(await idListe(nomListeFavoris), titre.id!);
+      final id = (await chapitre(1)).id!;
+      await depotChapitres.marquerTelecharge(id);
+
+      await service.modifierLanguesTitre(titre.id!, <String>['en']);
+      expect(
+        (await depotTitres.chargerTitre(titre.id!))!.languesPreferees,
+        'en',
+      );
+      expect(
+        (await depotChapitres.chargerChapitre(id))!.dateSuppressionPrevue,
+        isNotNull,
+      );
+
+      await service.modifierLanguesTitre(titre.id!, null);
+      expect(
+        (await depotTitres.chargerTitre(titre.id!))!.languesPreferees,
+        isNull,
+      );
+      expect(
+        (await depotChapitres.chargerChapitre(id))!.dateSuppressionPrevue,
+        isNull,
+      );
+    });
+  });
+
+  group("nom d'archive enregistré", () {
+    test('supprimerMaintenant efface tout de suite archive et nom', () async {
+      final premier = await chapitre(1);
+      await service.telechargerChapitre(premier.id!);
+      await service.lancerTraitement();
+      expect((await chapitre(1)).nomArchive, isNotNull);
+
+      await service.supprimerMaintenant(premier.id!);
+      final relu = await chapitre(1);
+      expect(relu.estTelecharge, isFalse);
+      expect(relu.nomArchive, isNull);
+      expect(archives(), isEmpty);
+    });
+
+    test(
+      'deux versions de même numéro et langue ont deux archives distinctes',
+      () async {
+        await depotChapitres.enregistrerChapitres(<Chapitre>[
+          Chapitre(
+            idTitre: titre.id,
+            urlChapitre: 'https://mangadex.org/chapter/$_uuidChapitre?autre=1',
+            nom: 'Chapitre 1 (autre groupe)',
+            numero: 1,
+            langue: 'fr',
+          ),
+        ]);
+        final versions = (await depotChapitres.chargerChapitres(titre.id!))
+            .where((c) => c.numero == 1)
+            .toList();
+        for (final version in versions) {
+          await service.telechargerChapitre(version.id!);
+        }
+        await service.lancerTraitement();
+
+        final noms = <String?>[
+          for (final version in versions)
+            (await depotChapitres.chargerChapitre(version.id!))!.nomArchive,
+        ];
+        expect(noms[0], endsWith('/ch1.fr.zip'));
+        expect(noms[1], endsWith('/ch1.fr.2.zip'));
+        expect(await service.lirePage(versions[1].id!, 0), <int>[1, 2, 3, 4]);
+
+        // Supprimer le doublon laisse l'autre archive lisible.
+        await service.supprimerTelechargement(versions[1].id!);
+        expect(await service.compterPages(versions[0].id!), nombreImages);
+        expect(archives(), hasLength(1));
+      },
+    );
+
+    test("au démarrage, un chapitre sans archive sur le disque redevient non téléchargé", () async {
+      final premier = await chapitre(1);
+      await service.telechargerChapitre(premier.id!);
+      await service.lancerTraitement();
+      for (final fichier in archives()) {
+        await fichier.delete();
+      }
+
+      expect(await service.reparerArchivesManquantes(), 1);
+      final relu = await chapitre(1);
+      expect(relu.estTelecharge, isFalse);
+      expect(relu.nomArchive, isNull);
+    });
   });
 }

@@ -5,15 +5,21 @@
 library;
 
 import '../modeles/chapitre.dart';
+import 'constantes_services.dart';
 
 /// Limites réglables dans l'écran Paramètres.
+///
+/// Les valeurs sont gardées telles quelles ; la politique applique les
+/// bornes au calcul (négatif ramené à 0, [suivisAvant] et [suivisApres] au
+/// moins [minimumSuivisAvantApres]) et `ServiceParametres` les applique à
+/// l'enregistrement.
 class ReglagesTelechargement {
   /// Crée les réglages (valeurs par défaut choisies par le client).
   const ReglagesTelechargement({
-    this.favorisLusConserves = 10,
-    this.suivisInitial = 10,
-    this.suivisAvant = 5,
-    this.suivisApres = 5,
+    this.favorisLusConserves = favorisLusConservesParDefaut,
+    this.suivisInitial = suivisInitialParDefaut,
+    this.suivisAvant = suivisAvantParDefaut,
+    this.suivisApres = suivisApresParDefaut,
   });
 
   /// Favoris : nombre de chapitres déjà lus gardés sur l'appareil (les plus
@@ -25,10 +31,11 @@ class ReglagesTelechargement {
   final int suivisInitial;
 
   /// Suivis : nombre de chapitres gardés jusqu'au dernier lu (inclus).
-  /// Ceux d'avant sont supprimés.
+  /// Ceux d'avant sont supprimés. Au moins [minimumSuivisAvantApres].
   final int suivisAvant;
 
-  /// Suivis : nombre de chapitres téléchargés après le dernier lu.
+  /// Suivis : nombre de chapitres téléchargés après le dernier lu. Au moins
+  /// [minimumSuivisAvantApres].
   final int suivisApres;
 
   /// Copie avec certaines valeurs changées.
@@ -109,6 +116,14 @@ class PlanTelechargement {
 /// gardée : la langue préférée du client (ordre de [languesPreferees]), puis
 /// la plus ancienne publication. Ainsi un chapitre traduit à la fois en
 /// français et en anglais n'est téléchargé qu'une fois, en français.
+///
+/// Langues : quand [languesPreferees] n'est pas vide, une version dans une
+/// autre langue n'est **jamais** téléchargée par les règles (règle du
+/// client : pas de russe ni de japonais s'il a choisi « fr,en »). Un numéro
+/// sans version dans ces langues est ignoré (il ne compte pas dans les
+/// positions), et une archive déjà présente dans une autre langue est à
+/// supprimer. Une version sans langue connue (site d'une seule langue) est
+/// acceptée.
 class PolitiqueTelechargement {
   /// Crée la politique avec les [reglages] et les [languesPreferees] (codes
   /// ISO 639-1, par ordre de préférence).
@@ -128,17 +143,28 @@ class PolitiqueTelechargement {
   /// Un numéro est considéré comme lu si **une** de ses versions est lue (le
   /// client a pu lire la version anglaise d'un chapitre aussi traduit en
   /// français).
+  ///
+  /// Les chapitres de numéro 0 (oneshots, chapitres sans numéro) ne sont pas
+  /// regroupés : chacun est un chapitre distinct (décision du client), placé
+  /// en tête dans l'ordre des identifiants.
   List<VersionRetenue> choisirVersions(List<Chapitre> chapitres) {
     final parNumero = <double, List<Chapitre>>{};
+    final sansNumero = <Chapitre>[];
     for (final chapitre in chapitres) {
-      if (chapitre.id != null) {
+      if (chapitre.id == null) continue;
+      if (chapitre.numero == 0) {
+        sansNumero.add(chapitre);
+      } else {
         parNumero
             .putIfAbsent(chapitre.numero, () => <Chapitre>[])
             .add(chapitre);
       }
     }
+    sansNumero.sort((a, b) => a.id!.compareTo(b.id!));
     final numeros = parNumero.keys.toList()..sort();
     return <VersionRetenue>[
+      for (final chapitre in sansNumero)
+        VersionRetenue(chapitre: chapitre, versions: <Chapitre>[chapitre]),
       for (final numero in numeros)
         VersionRetenue(
           chapitre: _meilleureVersion(parNumero[numero]!),
@@ -147,11 +173,66 @@ class PolitiqueTelechargement {
     ];
   }
 
-  Chapitre _meilleureVersion(List<Chapitre> versions) {
-    int rangLangue(Chapitre chapitre) {
-      final rang = languesPreferees.indexOf(chapitre.langue.toLowerCase());
-      return rang < 0 ? languesPreferees.length : rang;
+  /// Langue normalisée d'un chapitre (minuscules, sans espaces), pour
+  /// comparer deux versions.
+  static String _langue(Chapitre chapitre) =>
+      chapitre.langue.trim().toLowerCase();
+
+  /// Doublons parmi les chapitres **téléchargés** : groupes d'au moins deux
+  /// chapitres de même numéro et même langue (deux groupes de traduction,
+  /// par exemple). Les oneshots (numéro 0) ne sont jamais des doublons
+  /// entre eux. Les règles n'en suppriment aucun : c'est le client qui
+  /// choisit.
+  static List<List<Chapitre>> trouverDoublons(List<Chapitre> chapitres) {
+    final groupes = <(double, String), List<Chapitre>>{};
+    for (final chapitre in chapitres) {
+      if (chapitre.id == null || !chapitre.estTelecharge) continue;
+      if (chapitre.numero == 0) continue;
+      groupes
+          .putIfAbsent((chapitre.numero, _langue(chapitre)), () => <Chapitre>[])
+          .add(chapitre);
     }
+    final doublons =
+        groupes.values.where((groupe) => groupe.length > 1).toList()
+          ..sort((a, b) => a.first.numero.compareTo(b.first.numero));
+    for (final groupe in doublons) {
+      groupe.sort((a, b) => a.id!.compareTo(b.id!));
+    }
+    return doublons;
+  }
+
+  /// Rang de la langue de [chapitre] dans [languesPreferees] (0 = la
+  /// préférée), ou `null` si elle n'en fait pas partie.
+  ///
+  /// Une variante régionale compte comme sa langue (« pt-br » pour « pt »),
+  /// comme pour le filtre des chapitres de MangaDex. Une langue vide
+  /// (inconnue) ou une liste de préférences vide est acceptée au dernier
+  /// rang.
+  int? rangLangue(Chapitre chapitre) {
+    final langue = chapitre.langue.trim().toLowerCase();
+    if (languesPreferees.isEmpty || langue.isEmpty) {
+      return languesPreferees.length;
+    }
+    var rang = languesPreferees.indexOf(langue);
+    if (rang < 0) {
+      final tiret = langue.indexOf('-');
+      if (tiret > 0) {
+        rang = languesPreferees.indexOf(langue.substring(0, tiret));
+      }
+    }
+    return rang < 0 ? null : rang;
+  }
+
+  /// `true` si les règles peuvent télécharger [chapitre] (langue choisie par
+  /// le client, ou aucune langue choisie).
+  bool estDansLesLangues(Chapitre chapitre) => rangLangue(chapitre) != null;
+
+  Chapitre _meilleureVersion(List<Chapitre> versions) {
+    // Les langues absentes des préférences passent en dernier : cet ordre
+    // sert à l'affichage (toutes les versions restent visibles) ; les règles
+    // de téléchargement les écartent avant (voir [calculer]).
+    int rangLangue(Chapitre chapitre) =>
+        this.rangLangue(chapitre) ?? languesPreferees.length + 1;
 
     final triees = List<Chapitre>.of(versions)
       ..sort((a, b) {
@@ -179,8 +260,29 @@ class PolitiqueTelechargement {
     if (!estFavori && !estSuivi) {
       return PlanTelechargement.vide;
     }
-    final versions = choisirVersions(chapitres);
-    final indexDernierLu = versions.lastIndexWhere((v) => v.estLu);
+    // Toutes les versions servent à savoir ce qui est lu (le client a pu
+    // lire en ligne un chapitre en russe) ; seules celles dans ses langues
+    // peuvent être retenues.
+    final toutes = choisirVersions(chapitres);
+    final versions = <VersionRetenue>[
+      for (final numero in toutes)
+        if (numero.versions.any(estDansLesLangues))
+          VersionRetenue(
+            chapitre: _meilleureVersion(
+              numero.versions.where(estDansLesLangues).toList(),
+            ),
+            versions: numero.versions,
+          ),
+    ];
+    // Dernier lu en numéro de chapitre, ramené aux positions retenues : lire
+    // un numéro ignoré (autre langue) fait quand même avancer la fenêtre.
+    double? numeroDernierLu;
+    for (final numero in toutes) {
+      if (numero.estLu) numeroDernierLu = numero.chapitre.numero;
+    }
+    final indexDernierLu = numeroDernierLu == null
+        ? -1
+        : versions.lastIndexWhere((v) => v.chapitre.numero <= numeroDernierLu!);
 
     final voulus = <int>{};
     if (estFavori) {
@@ -196,8 +298,8 @@ class PolitiqueTelechargement {
         }
       }
     } else {
-      final avant = _positif(reglages.suivisAvant);
-      final apres = _positif(reglages.suivisApres);
+      final avant = _auMoins(reglages.suivisAvant, minimumSuivisAvantApres);
+      final apres = _auMoins(reglages.suivisApres, minimumSuivisAvantApres);
       final initial = _positif(reglages.suivisInitial);
       // Fenêtre [debut, fin] en positions de chapitres (0 = premier).
       // Sans lecture : les `initial` premiers. Ensuite, la fenêtre glisse
@@ -206,7 +308,9 @@ class PolitiqueTelechargement {
           ? 0
           : (indexDernierLu - avant + 1).clamp(0, versions.length);
       final finGlissante = indexDernierLu + apres;
-      final finInitiale = debut + initial - 1;
+      // Position absolue : la fenêtre initiale couvre toujours les chapitres
+      // 1 à `initial`, elle ne se décale pas avec le début de la fenêtre.
+      final finInitiale = initial - 1;
       final fin = indexDernierLu < 0 || finInitiale > finGlissante
           ? finInitiale
           : finGlissante;
@@ -225,18 +329,32 @@ class PolitiqueTelechargement {
     // l'appareil : une autre version déjà téléchargée de ce numéro (par
     // exemple l'anglais, en attendant le français) est gardée jusqu'à ce que
     // la version retenue soit téléchargée, pour ne jamais laisser de trou.
-    final numerosEnRemplacement = <double>{
-      for (final version in versions)
-        if (voulus.contains(version.chapitre.id) &&
-            !version.chapitre.estTelecharge)
-          version.chapitre.numero,
-    };
+    // Une version dans une langue non choisie n'est jamais gardée, même en
+    // remplacement : le client ne veut pas la voir sur l'appareil.
+    // Doublons : une autre version téléchargée de même langue qu'une version
+    // retenue voulue (deux groupes de traduction) n'est jamais supprimée
+    // automatiquement ; le client choisit laquelle garder.
+    final gardes = <int>{};
+    for (final version in versions) {
+      if (!voulus.contains(version.chapitre.id)) continue;
+      for (final autre in version.versions) {
+        if (autre.id == version.chapitre.id ||
+            !autre.estTelecharge ||
+            !estDansLesLangues(autre)) {
+          continue;
+        }
+        if (!version.chapitre.estTelecharge ||
+            _langue(autre) == _langue(version.chapitre)) {
+          gardes.add(autre.id!);
+        }
+      }
+    }
     final aSupprimer = <int>[
       for (final chapitre in chapitres)
         if (chapitre.id != null &&
             chapitre.estTelecharge &&
             !voulus.contains(chapitre.id) &&
-            !numerosEnRemplacement.contains(chapitre.numero))
+            !gardes.contains(chapitre.id))
           chapitre.id!,
     ];
     return PlanTelechargement(
@@ -247,6 +365,9 @@ class PolitiqueTelechargement {
   }
 
   static int _positif(int valeur) => valeur < 0 ? 0 : valeur;
+
+  static int _auMoins(int valeur, int minimum) =>
+      valeur < minimum ? minimum : valeur;
 }
 
 /// Version gardée pour un numéro de chapitre.

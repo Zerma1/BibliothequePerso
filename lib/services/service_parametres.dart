@@ -3,8 +3,11 @@
 library;
 
 import '../donnees/depot_parametres.dart';
+import 'constantes_services.dart';
+import 'erreur_service.dart';
 import 'planification_mises_a_jour.dart';
 import 'politique_telechargement.dart';
+import 'verrou_telechargement.dart';
 
 /// Lecture et écriture des réglages, avec leurs valeurs par défaut.
 class ServiceParametres {
@@ -32,6 +35,22 @@ class ServiceParametres {
   /// Clé : date (UTC, ISO 8601) de la dernière recherche de mises à jour.
   static const String cleDerniereVerification = 'mises_a_jour.derniere';
 
+  /// Clé : langues de lecture du client (« fr,en »).
+  static const String cleLangues = 'langues.preferees';
+
+  /// Langues de lecture tant que le client n'a rien choisi.
+  static const List<String> languesParDefaut = languesParDefautClient;
+
+  /// Nombre maximal de langues retenues (borne raisonnable : au-delà, le
+  /// filtre de MangaDex n'a plus d'intérêt).
+  static const int nombreMaximalLangues = 10;
+
+  /// Clé : verrou de la file de téléchargement (propriétaire et expiration),
+  /// partagé entre l'application et la tâche de fond Android. Ce n'est pas un
+  /// réglage du client mais la table `parametres` est le seul stockage commun
+  /// aux deux isolats.
+  static const String cleVerrouTelechargement = 'telechargement.verrou';
+
   /// Valeur maximale acceptée pour une limite, pour éviter qu'une faute de
   /// frappe (1000 au lieu de 10) ne lance des centaines de téléchargements.
   static const int limiteMaximale = 500;
@@ -40,9 +59,9 @@ class ServiceParametres {
   /// ou si une valeur est illisible).
   Future<ReglagesTelechargement> chargerReglagesTelechargement() async {
     const defaut = ReglagesTelechargement();
-    Future<int> lire(String cle, int valeurParDefaut) async {
+    Future<int> lire(String cle, int valeurParDefaut, {int minimum = 0}) async {
       final valeur = await _depot.chargerEntier(cle);
-      if (valeur == null || valeur < 0 || valeur > limiteMaximale) {
+      if (valeur == null || valeur < minimum || valeur > limiteMaximale) {
         return valeurParDefaut;
       }
       return valeur;
@@ -54,17 +73,28 @@ class ServiceParametres {
         defaut.favorisLusConserves,
       ),
       suivisInitial: await lire(cleSuivisInitial, defaut.suivisInitial),
-      suivisAvant: await lire(cleSuivisAvant, defaut.suivisAvant),
-      suivisApres: await lire(cleSuivisApres, defaut.suivisApres),
+      suivisAvant: await lire(
+        cleSuivisAvant,
+        defaut.suivisAvant,
+        minimum: minimumSuivisAvantApres,
+      ),
+      suivisApres: await lire(
+        cleSuivisApres,
+        defaut.suivisApres,
+        minimum: minimumSuivisAvantApres,
+      ),
     );
   }
 
   /// Enregistre les réglages de téléchargement. Les valeurs sont ramenées
-  /// entre 0 et [limiteMaximale].
+  /// entre 0 et [limiteMaximale] ; « avant » et « après » des suivis valent
+  /// au moins [minimumSuivisAvantApres].
   Future<void> enregistrerReglagesTelechargement(
     ReglagesTelechargement reglages,
   ) async {
     int borner(int valeur) => valeur.clamp(0, limiteMaximale);
+    int bornerAvantApres(int valeur) =>
+        valeur.clamp(minimumSuivisAvantApres, limiteMaximale);
     await _depot.enregistrerEntier(
       cleFavorisLusConserves,
       borner(reglages.favorisLusConserves),
@@ -75,11 +105,11 @@ class ServiceParametres {
     );
     await _depot.enregistrerEntier(
       cleSuivisAvant,
-      borner(reglages.suivisAvant),
+      bornerAvantApres(reglages.suivisAvant),
     );
     await _depot.enregistrerEntier(
       cleSuivisApres,
-      borner(reglages.suivisApres),
+      bornerAvantApres(reglages.suivisApres),
     );
   }
 
@@ -120,6 +150,95 @@ class ServiceParametres {
   /// Planification correspondant au réglage enregistré.
   Future<PlanificationMisesAJour> chargerPlanification() async =>
       PlanificationMisesAJour(await chargerVerificationsParJour());
+
+  /// Langues de lecture du client (codes ISO 639-1 par ordre de préférence,
+  /// la première étant la langue favorite). Jamais vide : [languesParDefaut]
+  /// si rien n'est enregistré ou si la valeur est illisible.
+  Future<List<String>> chargerLangues() async {
+    final langues = nettoyerLangues(
+      (await _depot.chargerTexte(cleLangues) ?? '').split(','),
+    );
+    return langues.isEmpty ? List<String>.of(languesParDefaut) : langues;
+  }
+
+  /// Enregistre les langues de lecture du client (nettoyées, sans doublon,
+  /// au plus [nombreMaximalLangues]).
+  ///
+  /// Lève une [ErreurService] si aucune langue valable ne reste : le client
+  /// doit toujours lire dans au moins une langue.
+  Future<void> enregistrerLangues(List<String> langues) async {
+    final propres = nettoyerLangues(langues);
+    if (propres.isEmpty) {
+      throw const ErreurService('Choisissez au moins une langue de lecture.');
+    }
+    await _depot.enregistrerTexte(cleLangues, propres.join(','));
+  }
+
+  /// Nettoie une liste de codes de langue : minuscules, sans espaces, codes
+  /// invalides et doublons retirés (le premier garde sa place), au plus
+  /// [nombreMaximalLangues]. « pt-br » est accepté (variante régionale).
+  static List<String> nettoyerLangues(Iterable<String> langues) {
+    final propres = <String>[];
+    for (final langue in langues) {
+      final code = langue.trim().toLowerCase();
+      if (!_motifLangue.hasMatch(code) || propres.contains(code)) continue;
+      propres.add(code);
+      if (propres.length >= nombreMaximalLangues) break;
+    }
+    return propres;
+  }
+
+  static final RegExp _motifLangue = RegExp(r'^[a-z]{2,3}(-[a-z0-9]{2,4})?$');
+
+  /// Clé : chapitres que le client a choisi de garder (« Garder » sur une
+  /// suppression prévue), identifiants séparés par des virgules.
+  // LIMITE : stocké dans `parametres` faute de colonne dédiée dans
+  // `chapitres` ; une colonne (migration) serait plus propre et éviterait la
+  // lecture-écriture non atomique entre deux isolats (le dernier qui écrit
+  // gagne ; le risque est de perdre un « Garder » fait au même instant).
+  static const String cleChapitresGardes = 'telechargement.gardes';
+
+  /// Nombre maximal de chapitres gardés mémorisés : borne la taille du texte
+  /// enregistré (les plus anciens sont oubliés au-delà).
+  static const int nombreMaximalChapitresGardes = 5000;
+
+  /// Chapitres que les règles ne doivent jamais supprimer automatiquement
+  /// (choix « Garder » du client). Valeurs illisibles ignorées.
+  Future<Set<int>> chargerChapitresGardes() async {
+    final texte = await _depot.chargerTexte(cleChapitresGardes) ?? '';
+    return <int>{
+      for (final morceau in texte.split(',')) ?int.tryParse(morceau.trim()),
+    };
+  }
+
+  /// Enregistre les chapitres gardés (au plus
+  /// [nombreMaximalChapitresGardes], les derniers ajoutés étant conservés).
+  Future<void> enregistrerChapitresGardes(Iterable<int> ids) async {
+    final liste = ids.toSet().toList();
+    final bornee = liste.length > nombreMaximalChapitresGardes
+        ? liste.sublist(liste.length - nombreMaximalChapitresGardes)
+        : liste;
+    if (bornee.isEmpty) {
+      await _depot.supprimer(cleChapitresGardes);
+    } else {
+      await _depot.enregistrerTexte(cleChapitresGardes, bornee.join(','));
+    }
+  }
+
+  /// Verrou de la file de téléchargement, ou `null` s'il est libre (ou
+  /// illisible).
+  Future<VerrouTelechargement?> chargerVerrouTelechargement() async =>
+      VerrouTelechargement.depuisTexte(
+        await _depot.chargerTexte(cleVerrouTelechargement),
+      );
+
+  /// Enregistre (prend ou renouvelle) le verrou de la file.
+  Future<void> enregistrerVerrouTelechargement(VerrouTelechargement verrou) =>
+      _depot.enregistrerTexte(cleVerrouTelechargement, verrou.versTexte());
+
+  /// Libère le verrou de la file.
+  Future<void> supprimerVerrouTelechargement() =>
+      _depot.supprimer(cleVerrouTelechargement);
 
   /// Date de la dernière recherche de mises à jour, ou `null`.
   Future<DateTime?> chargerDerniereVerification() async {
