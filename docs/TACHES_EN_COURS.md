@@ -92,3 +92,22 @@ Décisions de l'orchestrateur (autonomie accordée par le client jusqu'au vendre
 - [x] R7. **Export des liens** (demande du client, 2026-11-16) : exporter dans un fichier les sites configurés et chaque titre (nom, lien du titre sur chaque site, listes, catégories, langues propres, couverture choisie, dernier chapitre lu). Deux formats : JSON (complet, réimportable plus tard) et Markdown lisible (titres groupés par liste, liens cliquables). Fichiers dans `<dossier racine>/exports/`, nom daté. developpeur-services (`ServiceExport`), puis bouton dans Paramètres et partage du fichier (developpeur-interface). L'import du JSON suivra (R8).
 - [x] R8. **Scan-Manga** (demande du client, 2026-11-16) : adaptateur `SourceScanManga` (type `scanManga`, reconnu par le domaine scan-manga.com). Les pages de titre sont du HTML lisible (titre, couverture, résumé, auteur, catégories, liste des chapitres) ; les pages de chapitre cachent leurs images derrière un script brouillé (atob + eval) : **aucun décodage** (PLAYBOOK §10), chaque chapitre est enregistré avec `urlExterne` = sa page de lecture (« Lire sur Scan-Manga »), jamais téléchargé. Recherche par le moteur du site si une page de résultats HTML existe.
 - [x] R9. **Sources par défaut** : MangaDex et Scan-Manga présents dès le premier lancement (et ajoutés s'ils manquent), sans écraser les réglages du client.
+
+## Étape 8 — plusieurs sites pour un même titre (R5, priorité du client)
+
+Décisions de l'orchestrateur :
+- Un titre garde **un site principal** (celui d'ajout : fiche, couverture, résumé) et peut avoir
+  des **sites secondaires** (bouton « Ajouter un autre site » sur la fiche, adresse du même titre
+  sur l'autre site ; plus tard, proposition automatique par titres alternatifs).
+- Les chapitres de chaque site sont enregistrés avec leur site d'origine ; un même numéro peut
+  donc exister sur plusieurs sites. La politique de téléchargement choisit **une version par
+  numéro** : langue préférée d'abord, puis version **téléchargeable** (hébergée) plutôt que
+  « lecture sur le site », puis site principal, puis la plus ancienne.
+- Les mises à jour vérifient tous les sites d'un titre (une requête par site, toujours 1 s par
+  domaine) ; un site en panne n'empêche pas les autres.
+- Retirer un site secondaire supprime ses chapitres non lus et non téléchargés ; les archives
+  déjà téléchargées suivent la règle des 24 h.
+
+- [ ] M1. developpeur-donnees : migration 7 — table `titres_sources(id, id_titre → titres CASCADE, id_source → sources, url_titre, est_principale, date_ajout, UNIQUE(id_titre, id_source), UNIQUE(url_titre))` remplie depuis `titres.id_source/url_titre` pour les titres existants ; colonne `chapitres.id_source` (NULL = site principal pour les anciennes lignes, remplie par la migration) ; dépôt `DepotTitresSources` ; `DepotChapitres` filtre par source.
+- [ ] M2. developpeur-services : ajout / retrait d'un site à un titre (vérifie que l'adresse est bien un titre du site, sans le dupliquer ailleurs), actualisation sur tous les sites, politique multi-sites (ordre ci-dessus), mises à jour multi-sites, export (tous les liens).
+- [ ] M3. developpeur-interface : fiche — section « Sites » (principal + secondaires, ajouter, retirer, définir comme principal), chapitres avec le nom du site, légende ; filtre « site » dans la liste des chapitres.
