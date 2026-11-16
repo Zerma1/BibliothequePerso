@@ -771,6 +771,75 @@ void main() {
       expect(garde.dateSuppressionPrevue, isNull);
     });
 
+    test('« Garder » est enregistré dans le chapitre et non plus dans les '
+        'paramètres', () async {
+      final id = await preparerChapitre5HorsRegles();
+      await service.annulerSuppression(id);
+      expect((await depotChapitres.chargerChapitre(id))!.estGarde, isTrue);
+      expect(await parametres.chargerChapitresGardes(), isEmpty);
+    });
+
+    test("les chapitres gardés par l'ancienne version sont repris au "
+        'démarrage puis la clé est supprimée', () async {
+      await bloquerFile();
+      final id = (await chapitre(5)).id!;
+      await depotChapitres.marquerTelecharge(id);
+      await depotChapitres.planifierSuppression(
+        id,
+        DateTime.now().toUtc().add(const Duration(hours: 3)),
+      );
+      await parametres.enregistrerChapitresGardes(<int>[id, 999999]);
+
+      await service.demarrer();
+
+      final relu = (await depotChapitres.chargerChapitre(id))!;
+      expect(relu.estGarde, isTrue);
+      expect(relu.dateSuppressionPrevue, isNull);
+      expect(await parametres.chargerChapitresGardes(), isEmpty);
+    });
+
+    test("retirer « Garder » prévoit de nouveau la suppression d'un chapitre "
+        "qui n'est plus voulu", () async {
+      final id = await preparerChapitre5HorsRegles();
+      await service.annulerSuppression(id);
+      await service.retirerGarde(id);
+      final relu = (await depotChapitres.chargerChapitre(id))!;
+      expect(relu.estGarde, isFalse);
+      expect(relu.dateSuppressionPrevue, isNotNull);
+    });
+
+    test("liste les suppressions prévues de tous les titres ou d'un seul", () async {
+      final id = await preparerChapitre5HorsRegles();
+      expect(
+        (await service.chargerSuppressionsPrevues()).map((c) => c.id),
+        <int>[id],
+      );
+      expect(
+        await service.chargerSuppressionsPrevues(idTitre: titre.id! + 1),
+        isEmpty,
+      );
+    });
+
+    test('supprimer un chapitre gardé retire aussi le choix « Garder »', () async {
+      final id = await preparerChapitre5HorsRegles();
+      await service.annulerSuppression(id);
+      await service.supprimerMaintenant(id);
+      expect((await depotChapitres.chargerChapitre(id))!.estGarde, isFalse);
+    });
+
+    test('supprimer un titre efface aussi sa couverture enregistrée', () async {
+      await bloquerFile();
+      final chemin = await stockage.enregistrerCouverture(
+        titre,
+        <int>[1, 2, 3],
+        'jpg',
+      );
+      expect(File(chemin).existsSync(), isTrue);
+      await service.supprimerTitre(titre.id!);
+      expect(File(chemin).existsSync(), isFalse);
+      expect(await depotTitres.chargerTitre(titre.id!), isNull);
+    });
+
     test(
       'un chapitre qui redevient voulu perd sa suppression prévue',
       () async {

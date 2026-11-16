@@ -4,14 +4,17 @@ import 'dart:async';
 import 'package:bibliotheque_perso/donnees/depot_categories.dart';
 import 'package:bibliotheque_perso/donnees/depot_chapitres.dart';
 import 'package:bibliotheque_perso/donnees/depot_listes.dart';
+import 'package:bibliotheque_perso/donnees/depot_parametres.dart';
 import 'package:bibliotheque_perso/donnees/depot_sources.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres.dart';
+import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
 import 'package:bibliotheque_perso/services/service_ajout_site.dart';
 import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
 import 'package:bibliotheque_perso/services/service_mises_a_jour.dart';
+import 'package:bibliotheque_perso/services/service_parametres.dart';
 import 'package:bibliotheque_perso/sources/detecteur_type_site.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/sources/fabrique_sources.dart';
@@ -210,4 +213,111 @@ void main() {
       expect(service.estEnCours, isFalse);
     },
   );
+
+  group('listes Planifié et En attente', () {
+    Future<void> ajouterChapitreFr(Titre titre) =>
+        DepotChapitres(base).enregistrerChapitres(<Chapitre>[
+          Chapitre(
+            idTitre: titre.id,
+            urlChapitre: '${titre.urlTitre}/ch1',
+            nom: 'Chapitre 1',
+            numero: 1,
+            langue: 'fr',
+          ),
+        ]);
+
+    test("un titre seulement planifié est vérifié mais n'apparaît pas dans "
+        'le bilan', () async {
+      final source = await creerSource('a.test');
+      final planifie = await creerTitre(source, 'planifié', suivi: false);
+      await ajouterChapitreFr(planifie);
+      final idPlanifie = (await depotListes.chargerListeParNom(
+        nomListePlanifie,
+      ))!.id!;
+      await depotListes.ajouterTitre(idPlanifie, planifie.id!);
+      final suivi = await creerTitre(source, 'suivi');
+      await ajouterChapitreFr(suivi);
+      bibliotheque.nouveauxParTitre.addAll(<String, int>{
+        'planifié': 4,
+        'suivi': 1,
+      });
+
+      final rapport = await service.verifierTitresSuivis();
+
+      expect(
+        bibliotheque.ordreAppels,
+        unorderedEquals(<String>['planifié', 'suivi']),
+      );
+      expect(rapport.resultats, hasLength(2));
+      expect(rapport.nombreNouveauxChapitres, 1);
+      expect(rapport.titresAvecNouveautes.single.titre.nom, 'suivi');
+    });
+
+    test('la vérification « En attente » ne vérifie que les titres sans '
+        'chapitre dans les langues du client', () async {
+      final source = await creerSource('a.test');
+      final lisible = await creerTitre(source, 'lisible');
+      await ajouterChapitreFr(lisible);
+      await creerTitre(source, 'en attente');
+
+      final rapport = await service.verifierTitresEnAttente();
+
+      expect(rapport.estEnAttenteSeulement, isTrue);
+      expect(bibliotheque.ordreAppels, <String>['en attente']);
+    });
+
+    test("à l'heure pleine, seule la vérification « En attente » est due "
+        'après une vérification complète', () async {
+      final parametres = ServiceParametres(DepotParametres(base));
+      var maintenant = DateTime.utc(2026, 11, 16, 12, 10);
+      final avecReglages = ServiceMisesAJour(
+        depotTitres: depotTitres,
+        depotListes: depotListes,
+        depotSources: depotSources,
+        serviceBibliotheque: bibliotheque,
+        serviceParametres: parametres,
+        maintenant: () => maintenant,
+      );
+      final source = await creerSource('a.test');
+      final lisible = await creerTitre(source, 'lisible');
+      await ajouterChapitreFr(lisible);
+      await creerTitre(source, 'en attente');
+
+      final complete = await avecReglages.verifierSiEcheancePassee();
+      expect(complete!.estEnAttenteSeulement, isFalse);
+      expect(await avecReglages.verifierSiEcheancePassee(), isNull);
+      expect(
+        await avecReglages.chargerProchaineEcheance(maintenant),
+        DateTime.utc(2026, 11, 16, 13),
+      );
+
+      bibliotheque.ordreAppels.clear();
+      maintenant = DateTime.utc(2026, 11, 16, 13, 1);
+      final enAttente = await avecReglages.verifierSiEcheancePassee();
+      expect(enAttente!.estEnAttenteSeulement, isTrue);
+      expect(bibliotheque.ordreAppels, <String>['en attente']);
+    });
+
+    test('une vérification complète demandée pendant une vérification « En '
+        'attente » démarre juste après', () async {
+      final source = await creerSource('a.test');
+      final lisible = await creerTitre(source, 'lisible');
+      await ajouterChapitreFr(lisible);
+      await creerTitre(source, 'en attente');
+      bibliotheque.verrou = Completer<void>();
+
+      final enAttente = service.verifierTitresEnAttente();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      final complete = service.verifierTitresSuivis();
+      bibliotheque.verrou!.complete();
+
+      expect((await enAttente).estEnAttenteSeulement, isTrue);
+      expect((await complete).estEnAttenteSeulement, isFalse);
+      expect(bibliotheque.ordreAppels.first, 'en attente');
+      expect(
+        bibliotheque.ordreAppels.skip(1),
+        unorderedEquals(<String>['lisible', 'en attente']),
+      );
+    });
+  });
 }

@@ -3,6 +3,7 @@
 library;
 
 import '../donnees/depot_parametres.dart';
+import '../modeles/constantes.dart';
 import 'constantes_services.dart';
 import 'erreur_service.dart';
 import 'planification_mises_a_jour.dart';
@@ -151,6 +152,103 @@ class ServiceParametres {
   Future<PlanificationMisesAJour> chargerPlanification() async =>
       PlanificationMisesAJour(await chargerVerificationsParJour());
 
+  /// Clé : écart en heures entre deux vérifications des titres « En
+  /// attente ».
+  static const String cleHeuresEnAttente = 'mises_a_jour.en_attente.heures';
+
+  /// Clé : date (UTC, ISO 8601) de la dernière vérification des titres « En
+  /// attente ».
+  static const String cleDerniereVerificationEnAttente =
+      'mises_a_jour.en_attente.derniere';
+
+  /// Écart maximal (en heures) accepté pour les titres « En attente » avec
+  /// [verificationsParJour] vérifications normales par jour : l'intervalle
+  /// normal, au moins 1 h (décision de l'étape 6 : la surveillance accrue
+  /// n'est jamais plus lente que la normale).
+  static int maximumHeuresEnAttente(int verificationsParJour) {
+    final parJour = verificationsParJour.clamp(
+      PlanificationMisesAJour.minimumParJour,
+      PlanificationMisesAJour.maximumParJour,
+    );
+    final heures = Duration.hoursPerDay ~/ parJour;
+    return heures < 1 ? 1 : heures;
+  }
+
+  /// Écart en heures entre deux vérifications des titres « En attente » (1
+  /// par défaut : à chaque heure pleine), ramené entre 1 et l'intervalle
+  /// normal ([maximumHeuresEnAttente]) : si le client réduit ensuite
+  /// l'intervalle normal, la valeur suit.
+  Future<int> chargerHeuresEnAttente() async {
+    final maximum = maximumHeuresEnAttente(await chargerVerificationsParJour());
+    final valeur = await _depot.chargerEntier(cleHeuresEnAttente);
+    if (valeur == null || valeur < 1) {
+      return heuresEnAttenteParDefaut.clamp(1, maximum);
+    }
+    return valeur > maximum ? maximum : valeur;
+  }
+
+  /// Enregistre l'écart des vérifications « En attente » (ramené entre 1 et
+  /// l'intervalle normal).
+  Future<void> enregistrerHeuresEnAttente(int heures) async {
+    final maximum = maximumHeuresEnAttente(await chargerVerificationsParJour());
+    await _depot.enregistrerEntier(cleHeuresEnAttente, heures.clamp(1, maximum));
+  }
+
+  /// Planification des vérifications des titres « En attente » (toutes les
+  /// [chargerHeuresEnAttente] heures pleines).
+  Future<PlanificationMisesAJour> chargerPlanificationEnAttente() async =>
+      PlanificationMisesAJour.toutesLesHeures(await chargerHeuresEnAttente());
+
+  /// Date de la dernière vérification des titres « En attente », ou `null`.
+  Future<DateTime?> chargerDerniereVerificationEnAttente() async {
+    final texte = await _depot.chargerTexte(cleDerniereVerificationEnAttente);
+    return texte == null ? null : DateTime.tryParse(texte)?.toUtc();
+  }
+
+  /// Enregistre la date de la dernière vérification des titres « En
+  /// attente ».
+  Future<void> enregistrerDerniereVerificationEnAttente(DateTime date) =>
+      _depot.enregistrerTexte(
+        cleDerniereVerificationEnAttente,
+        date.toUtc().toIso8601String(),
+      );
+
+  /// Clé : niveaux de contenu affichés dans la bibliothèque et demandés à la
+  /// recherche (« safe,suggestive,erotica »).
+  static const String cleNiveauxContenu = 'bibliotheque.niveaux_contenu';
+
+  /// Niveaux de contenu choisis par le client, dans l'ordre de
+  /// `niveauxContenu` (du plus sage au plus explicite). Par défaut
+  /// `niveauxContenuParDefaut` (tout sauf `pornographic`). Les valeurs
+  /// inconnues sont ignorées ; une liste vide enregistrée reste vide (le
+  /// client n'affiche alors que les titres sans niveau connu).
+  Future<List<String>> chargerNiveauxContenu() async {
+    final texte = await _depot.chargerTexte(cleNiveauxContenu);
+    if (texte == null) return List<String>.of(niveauxContenuParDefaut);
+    return nettoyerNiveauxContenu(texte.split(','));
+  }
+
+  /// Enregistre les niveaux de contenu choisis (valeurs inconnues ignorées).
+  Future<void> enregistrerNiveauxContenu(Iterable<String> niveaux) =>
+      _depot.enregistrerTexte(
+        cleNiveauxContenu,
+        nettoyerNiveauxContenu(niveaux).join(','),
+      );
+
+  /// Remet le filtre de niveau de contenu à sa valeur par défaut.
+  Future<void> reinitialiserNiveauxContenu() =>
+      _depot.supprimer(cleNiveauxContenu);
+
+  /// Garde les niveaux connus (`niveauxContenu`), sans doublon, dans l'ordre
+  /// du plus sage au plus explicite.
+  static List<String> nettoyerNiveauxContenu(Iterable<String> niveaux) {
+    final choisis = niveaux.map((n) => n.trim().toLowerCase()).toSet();
+    return <String>[
+      for (final niveau in niveauxContenu)
+        if (choisis.contains(niveau)) niveau,
+    ];
+  }
+
   /// Langues de lecture du client (codes ISO 639-1 par ordre de préférence,
   /// la première étant la langue favorite). Jamais vide : [languesParDefaut]
   /// si rien n'est enregistré ou si la valeur est illisible.
@@ -192,18 +290,18 @@ class ServiceParametres {
 
   /// Clé : chapitres que le client a choisi de garder (« Garder » sur une
   /// suppression prévue), identifiants séparés par des virgules.
-  // LIMITE : stocké dans `parametres` faute de colonne dédiée dans
-  // `chapitres` ; une colonne (migration) serait plus propre et éviterait la
-  // lecture-écriture non atomique entre deux isolats (le dernier qui écrit
-  // gagne ; le risque est de perdre un « Garder » fait au même instant).
+  ///
+  /// Ancien stockage (avant la migration 5) : le choix est désormais la
+  /// colonne `chapitres.est_garde`. `ServiceTelechargement` reprend ces
+  /// identifiants une fois puis supprime la clé ; rien n'y est plus écrit.
   static const String cleChapitresGardes = 'telechargement.gardes';
 
   /// Nombre maximal de chapitres gardés mémorisés : borne la taille du texte
   /// enregistré (les plus anciens sont oubliés au-delà).
   static const int nombreMaximalChapitresGardes = 5000;
 
-  /// Chapitres que les règles ne doivent jamais supprimer automatiquement
-  /// (choix « Garder » du client). Valeurs illisibles ignorées.
+  /// Chapitres gardés mémorisés par l'ancien stockage ([cleChapitresGardes]),
+  /// à reprendre dans `chapitres.est_garde`. Valeurs illisibles ignorées.
   Future<Set<int>> chargerChapitresGardes() async {
     final texte = await _depot.chargerTexte(cleChapitresGardes) ?? '';
     return <int>{
@@ -211,8 +309,14 @@ class ServiceParametres {
     };
   }
 
-  /// Enregistre les chapitres gardés (au plus
+  /// Supprime l'ancien stockage des chapitres gardés, une fois repris en
+  /// base.
+  Future<void> supprimerChapitresGardes() => _depot.supprimer(cleChapitresGardes);
+
+  /// Enregistre les chapitres gardés dans l'ancien stockage (au plus
   /// [nombreMaximalChapitresGardes], les derniers ajoutés étant conservés).
+  ///
+  /// Gardé pour les tests de la reprise : le service n'y écrit plus.
   Future<void> enregistrerChapitresGardes(Iterable<int> ids) async {
     final liste = ids.toSet().toList();
     final bornee = liste.length > nombreMaximalChapitresGardes

@@ -74,3 +74,23 @@ const Duration margeNouvelEssaiVerrou = Duration(seconds: 1);
 /// Attente minimale avant un nouvel essai de la file : évite de relire la
 /// base en boucle si le verrou de l'autre isolat expire tout de suite.
 const Duration attenteMinimaleNouvelEssai = Duration(seconds: 5);
+
+/// Titres « En attente » : vérifiés toutes les N heures pleines, par défaut
+/// à chaque heure (décision de l'étape 6 : surveillance accrue des titres
+/// qui n'ont encore aucun chapitre dans les langues du client).
+const int heuresEnAttenteParDefaut = 1;
+
+/// Nom du sous-dossier des rapports d'erreur exportés, dans le dossier
+/// racine de l'application (`Documents/bibliotheque_perso/rapports/`).
+const String nomDossierRapports = 'rapports';
+
+/// Nombre maximal de rapports d'erreur gardés sur l'appareil : les plus
+/// anciens sont effacés au-delà, pour que le dossier ne grossisse pas sans
+/// fin.
+const int nombreMaximalRapports = 50;
+
+/// Préfixe du nom d'un rapport d'erreur (`rapport_20261116_143000.txt`).
+const String prefixeFichierRapport = 'rapport_';
+
+/// Extension des rapports d'erreur exportés.
+const String extensionFichierRapport = 'txt';

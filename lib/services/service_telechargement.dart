@@ -186,8 +186,8 @@ class ServiceTelechargement {
 
   /// À appeler au démarrage : contrôle que chaque chapitre marqué téléchargé
   /// a bien son archive ([reparerArchivesManquantes]), applique les règles
-  /// (ce qui supprime aussi les archives dont la suppression prévue est
-  /// échue) puis traite la file.
+  /// (ce qui reprend aussi les anciens chapitres gardés et supprime les
+  /// archives dont la suppression prévue est échue) puis traite la file.
   ///
   /// La reprise des téléchargements interrompus (statut « en cours » remis
   /// en attente, archives partielles effacées) se fait au début de chaque
@@ -261,6 +261,28 @@ class ServiceTelechargement {
     return nombre;
   }
 
+  /// Reprise des chapitres gardés mémorisés avant la migration 5 (faite une
+  /// fois par service, partagée si on la redemande).
+  Future<void>? _repriseGardes;
+
+  /// Reprend dans `chapitres.est_garde` les chapitres gardés que l'ancienne
+  /// version mémorisait dans `parametres`, puis supprime cette clé. Ne lève
+  /// jamais : en cas d'échec, la clé reste et la reprise sera refaite au
+  /// prochain démarrage (elle est idempotente).
+  Future<void> _reprendreAnciensGardes() => _repriseGardes ??= () async {
+    try {
+      final anciens = await _serviceParametres.chargerChapitresGardes();
+      if (anciens.isEmpty) return;
+      // Base d'abord, clé ensuite : un arrêt entre les deux refait
+      // seulement la reprise (sans effet la seconde fois).
+      await _depotChapitres.marquerGardes(anciens);
+      await _serviceParametres.supprimerChapitresGardes();
+    } catch (erreur, pile) {
+      debugPrint('Reprise des chapitres gardés impossible : $erreur\n$pile');
+      _repriseGardes = null;
+    }
+  }();
+
   /// Libère le service (annule le nouvel essai prévu).
   Future<void> fermer() {
     _relance?.cancel();
@@ -297,17 +319,15 @@ class ServiceTelechargement {
   /// protection en mémoire.
   Future<void> _repousserSuppressionPrevue(int idChapitre) async {
     try {
-      final chapitre = await _depotChapitres.chargerChapitre(idChapitre);
-      if (chapitre?.dateSuppressionPrevue == null) return;
-      // LIMITE : lecture puis écriture sans transaction ; si le client
-      // choisit « Garder » entre les deux, la date est reposée, mais le
-      // chapitre étant gardé, aucune suppression n'est faite et la date est
-      // retirée à la prochaine application des règles.
-      await _depotChapitres.planifierSuppression(
+      // Une seule requête conditionnelle (date existante et plus proche) :
+      // pas de course avec « Garder » ni avec l'autre isolat, et une
+      // suppression jamais créée pour un chapitre qui n'en avait pas.
+      if (await _depotChapitres.repousserSuppressionPrevue(
         idChapitre,
         _maintenant().add(delaiSuppressionDifferee),
-      );
-      _signaler();
+      )) {
+        _signaler();
+      }
     } catch (erreur) {
       debugPrint(
         'Suppression prévue du chapitre n°$idChapitre non repoussée : $erreur',
@@ -340,6 +360,9 @@ class ServiceTelechargement {
   /// est lancée même si la lecture des listes échoue (l'erreur remonte alors
   /// à l'appelant).
   Future<void> appliquerReglesATous() async {
+    // Avant les règles : un chapitre gardé avec l'ancienne version ne doit
+    // pas recevoir de suppression prévue.
+    await _reprendreAnciensGardes();
     try {
       final ids = <int>{};
       for (final nomListe in <String>[nomListeFavoris, nomListeSuivis]) {
@@ -482,16 +505,15 @@ class ServiceTelechargement {
     // redeviennent. Une date déjà posée n'est pas repoussée : sinon chaque
     // application des règles relancerait le compte à rebours affiché.
     final aSupprimer = plan.idsASupprimer.toSet();
-    final gardes = await _serviceParametres.chargerChapitresGardes();
     final echeance = _maintenant().add(delaiSuppressionDifferee);
     for (final chapitre in chapitres) {
       final id = chapitre.id;
       if (id == null || !chapitre.estTelecharge) continue;
-      // Choix « Garder » du client : jamais supprimé par les règles. Un
-      // téléchargement manuel hors des règles (autre langue, chapitre
-      // ancien) n'est pas exempté : le compte à rebours affiché laisse 24 h
-      // au client pour le garder.
-      final voulu = !aSupprimer.contains(id) || gardes.contains(id);
+      // Choix « Garder » du client (`est_garde`) : jamais supprimé par les
+      // règles. Un téléchargement manuel hors des règles (autre langue,
+      // chapitre ancien) n'est pas exempté : le compte à rebours affiché
+      // laisse 24 h au client pour le garder.
+      final voulu = !aSupprimer.contains(id) || chapitre.estGarde;
       if (!voulu && chapitre.dateSuppressionPrevue == null) {
         await _depotChapitres.planifierSuppression(id, echeance);
       } else if (voulu && chapitre.dateSuppressionPrevue != null) {
@@ -529,7 +551,6 @@ class ServiceTelechargement {
       _maintenant(),
     );
     if (echues.isEmpty) return 0;
-    final gardes = await _serviceParametres.chargerChapitresGardes();
     // Chapitres encore à supprimer selon les règles, par titre (un calcul
     // par titre concerné, pas par chapitre).
     final aSupprimerParTitre = <int, Set<int>>{};
@@ -554,9 +575,10 @@ class ServiceTelechargement {
               (await _calculerPlan(idTitre))?.plan.idsASupprimer.toSet() ??
               const <int>{};
         }
-        if (gardes.contains(id) || !aSupprimer.contains(id)) {
-          // Gardé par le client (peut-être dans l'autre isolat), ou plus à
-          // supprimer : la date n'a plus lieu d'être.
+        // Les chapitres gardés sont déjà exclus par la requête des échéances
+        // (`est_garde`), même gardés dans l'autre isolat.
+        if (!aSupprimer.contains(id)) {
+          // Plus à supprimer : la date n'a plus lieu d'être.
           await _depotChapitres.planifierSuppression(id, null);
           annulees++;
           continue;
@@ -597,21 +619,37 @@ class ServiceTelechargement {
   /// peut encore le supprimer. Sans effet visible si aucune suppression
   /// n'était prévue (le chapitre est simplement marqué gardé).
   Future<void> annulerSuppression(int idChapitre) async {
-    final gardes = await _serviceParametres.chargerChapitresGardes();
-    // Retiré puis ajouté : le plus récent passe en fin de liste et survit à
-    // la borne de ServiceParametres.nombreMaximalChapitresGardes.
-    gardes
-      ..remove(idChapitre)
-      ..add(idChapitre);
-    await _serviceParametres.enregistrerChapitresGardes(gardes);
-    await _depotChapitres.planifierSuppression(idChapitre, null);
+    // Une seule requête : le chapitre est marqué gardé et sa date effacée
+    // ensemble, sans fenêtre où l'autre isolat pourrait le supprimer.
+    await _depotChapitres.marquerGarde(idChapitre);
     _signaler();
   }
 
+  /// Retire le choix « Garder » d'un chapitre ([annulerSuppression]) puis
+  /// applique les règles de son titre : s'il n'est plus voulu, sa
+  /// suppression est de nouveau prévue dans 24 heures.
+  Future<void> retirerGarde(int idChapitre) async {
+    await _depotChapitres.marquerGarde(idChapitre, estGarde: false);
+    final idTitre = (await _depotChapitres.chargerChapitre(idChapitre))?.idTitre;
+    if (idTitre != null) {
+      await appliquerRegles(idTitre);
+    } else {
+      _signaler();
+    }
+  }
+
   /// Chapitres gardés par le client ([annulerSuppression]) : l'interface
-  /// peut l'indiquer à côté du chapitre.
+  /// peut l'indiquer à côté du chapitre (`Chapitre.estGarde` donne la même
+  /// information chapitre par chapitre).
   Future<Set<int>> chargerChapitresGardes() =>
-      _serviceParametres.chargerChapitresGardes();
+      _depotChapitres.chargerIdsChapitresGardes();
+
+  /// Chapitres dont la suppression est prévue (tous titres, ou seulement
+  /// [idTitre]), la plus proche d'abord : section rouge de l'onglet
+  /// Téléchargements, avec le compte à rebours
+  /// (`Chapitre.dateSuppressionPrevue`).
+  Future<List<Chapitre>> chargerSuppressionsPrevues({int? idTitre}) =>
+      _depotChapitres.chargerSuppressionsPrevues(idTitre: idTitre);
 
   /// Met un chapitre voulu par les règles en file, ou relance son échec.
   Future<void> _mettreEnFileAutomatiquement(int idChapitre) async {
@@ -668,10 +706,11 @@ class ServiceTelechargement {
   /// fichiers `.zip` sur l'appareil.
   ///
   /// Les archives sont effacées d'abord (et leurs chapitres marqués non
-  /// téléchargés) : si une suppression de fichier échoue, l'erreur remonte
-  /// et le titre reste, pour pouvoir réessayer sans perdre la trace des
-  /// fichiers. Un téléchargement en cours pour ce titre s'arrête à la page
-  /// suivante (sa ligne de file disparaît avec le titre).
+  /// téléchargés), puis la couverture enregistrée : si une suppression de
+  /// fichier échoue, l'erreur remonte et le titre reste, pour pouvoir
+  /// réessayer sans perdre la trace des fichiers. Un téléchargement en cours
+  /// pour ce titre s'arrête à la page suivante (sa ligne de file disparaît
+  /// avec le titre).
   Future<void> supprimerTitre(int idTitre) async {
     final chapitres = await _depotChapitres.chargerChapitres(idTitre);
     for (final chapitre in chapitres) {
@@ -679,6 +718,11 @@ class ServiceTelechargement {
       if (id != null && chapitre.estTelecharge) {
         await supprimerTelechargement(id, signalerChangement: false);
       }
+    }
+    final titre = await _depotTitres.chargerTitre(idTitre);
+    if (titre != null) {
+      // Après les archives : le dossier du titre n'est retiré que vide.
+      await _stockage.supprimerCouverture(titre);
     }
     await _depotTitres.supprimerTitre(idTitre);
     _signaler();
@@ -722,9 +766,8 @@ class ServiceTelechargement {
     await _depotChapitres.enregistrerArchive(idChapitre, null);
     // Un chapitre supprimé n'a plus à être « gardé » : s'il est retéléchargé,
     // les règles s'appliquent à nouveau normalement.
-    final gardes = await _serviceParametres.chargerChapitresGardes();
-    if (gardes.remove(idChapitre)) {
-      await _serviceParametres.enregistrerChapitresGardes(gardes);
+    if (chapitre?.estGarde ?? false) {
+      await _depotChapitres.marquerGarde(idChapitre, estGarde: false);
     }
     if (signalerChangement) {
       _signaler();
