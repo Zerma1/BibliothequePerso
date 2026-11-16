@@ -107,6 +107,10 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
   /// qui masque les titres `pornographic`).
   final List<String>? niveauxContenuRecherche;
 
+  /// UUID de chapitre → `externalUrl` (`null` = hébergé sur MangaDex), pour
+  /// les chapitres déjà lus dans un flux par cette instance.
+  final Map<String, String?> _urlsExternesConnues = <String, String?>{};
+
   static final RegExp _motifUuid = RegExp(
     r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
     r'[0-9a-fA-F]{12}$',
@@ -137,11 +141,34 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
   // Extraction des identifiants
   // ---------------------------------------------------------------------
 
-  /// Indique si [hote] est le site MangaDex (`mangadex.org` ou
-  /// `www.mangadex.org`).
+  /// Indique si [hote] est le site public MangaDex (`mangadex.org` ou
+  /// `www.mangadex.org`) : sert à reconnaître une URL de titre ou de
+  /// chapitre. Pour choisir le User-Agent d'une requête, utiliser
+  /// [estServeurMangaDex], qui couvre aussi les sous-domaines.
   static bool estHoteMangaDex(String hote) {
     final h = hote.toLowerCase();
     return h == domaineMangaDex || h == 'www.$domaineMangaDex';
+  }
+
+  /// Indique si [hote] est un serveur MangaDex, quel qu'il soit : le site
+  /// (`mangadex.org`), ses sous-domaines (`api.`, `uploads.`…) et les nœuds
+  /// MangaDex@Home (`*.mangadex.network`). Tous exigent un User-Agent honnête
+  /// ([userAgentApplication], docs/2-limitations) ; avec un User-Agent de
+  /// navigateur, `uploads.mangadex.org` redirige vers une page anti-robot
+  /// HTML (journal des erreurs, E10).
+  ///
+  /// Différence avec [estHoteMangaDex] : celle-ci ne reconnaît que le site
+  /// public (URLs de titres et de chapitres).
+  static bool estServeurMangaDex(String hote) {
+    var h = hote.trim().toLowerCase();
+    // Point final d'un nom de domaine absolu (« mangadex.org. ») toléré.
+    if (h.endsWith('.')) {
+      h = h.substring(0, h.length - 1);
+    }
+    return h == domaineMangaDex ||
+        h.endsWith('.$domaineMangaDex') ||
+        h == 'mangadex.network' ||
+        h.endsWith('.mangadex.network');
   }
 
   /// Extrait l'UUID d'un titre depuis
@@ -339,13 +366,28 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
   ///   départagé par date de création. LIMITE : la doc ne garantit pas que
   ///   ce tri soit total ni stable entre deux requêtes (ajouts pendant la
   ///   lecture) ; les doublons éventuels sont donc retirés par UUID ;
-  /// - `contentRating[]` : toutes les classifications (voir
-  ///   [_toutesClassifications]) ;
-  /// - `includeExternalUrl=0` : un chapitre hébergé ailleurs n'a pas de pages
-  ///   sur MangaDex et ne pourrait pas être téléchargé ;
-  /// - `includeFuturePublishAt=0` et `includeEmptyPages=0` : on ne signale
-  ///   pas un chapitre qui ne peut pas encore être lu ;
+  /// - `contentRating[]` : toutes les classifications (énumération
+  ///   `contentRating` de api.yaml) ;
+  /// - `includeFuturePublishAt=0` : on ne signale pas un chapitre qui ne
+  ///   peut pas encore être lu ;
   /// - `translatedLanguage[]` si [languesChapitres] n'est pas vide.
+  ///
+  /// Chapitres hébergés sur un site externe (tâche R4) : api.yaml 5.13.1,
+  /// `feedParameters`, déclare `includeExternalUrl` avec le schéma
+  /// `triStateFilter` (« type: integer, enum: [0, 1] ») sans en décrire le
+  /// sens ; `ChapterAttributes.externalUrl` : « type: string, pattern:
+  /// ^https?://, maxLength: 512, nullable: true, description: Denotes a
+  /// chapter that links to an external source ». Sens vérifié sur l'API le
+  /// 2026-11-16 : `includeExternalUrl=1` ne renvoie QUE les chapitres
+  /// externes (titre de référence : total 0 au lieu de 217), `0` les exclut,
+  /// paramètre absent = les deux (Ruri Dragon : 324 = 280 externes + 44).
+  /// Le paramètre n'est donc plus envoyé, et chaque chapitre externe reçoit
+  /// `Chapitre.urlExterne`.
+  ///
+  /// `includeEmptyPages` n'est plus envoyé non plus : un chapitre externe a
+  /// souvent `pages = 0` (Ruri Dragon, VIZ et MANGA Plus) et serait exclu.
+  /// Les chapitres sans page ET sans `externalUrl` (illisibles) sont retirés
+  /// ici, comme le faisait `includeEmptyPages=0`.
   ///
   /// Lève une [ErreurSource] si le flux dépasse le plafond de 10 000
   /// résultats de l'API (il faut alors filtrer par langue).
@@ -379,9 +421,9 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
             // erotica] et un titre que le client suit déjà pourrait renvoyer
             // un flux vide sans erreur.
             'contentRating[]': niveauxContenu,
-            'includeExternalUrl': '0',
+            // Ni `includeExternalUrl` ni `includeEmptyPages` : voir la
+            // documentation de la méthode (chapitres externes, R4).
             'includeFuturePublishAt': '0',
-            'includeEmptyPages': '0',
             if (languesChapitres.isNotEmpty)
               'translatedLanguage[]': languesChapitres,
           },
@@ -402,7 +444,7 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
           return (
             total: total,
             nombre: donnees.length,
-            chapitres: <(String, Chapitre)>[
+            chapitres: <(String, Chapitre?)>[
               for (final chapitre in donnees)
                 (
                   chapitre.lireTexte('id', url),
@@ -412,6 +454,13 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
           );
         });
         for (final (idChapitre, chapitre) in page.chapitres) {
+          if (chapitre == null) {
+            // Chapitre vide et non externe : illisible, ignoré.
+            continue;
+          }
+          // Mémorisé pour que [recupererContenu] reconnaisse un chapitre
+          // externe sans requête supplémentaire.
+          _urlsExternesConnues[idChapitre] = chapitre.urlExterne;
           if (idsVus.add(idChapitre)) {
             chapitres.add(chapitre);
           }
@@ -443,10 +492,39 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
   /// `SignalementMangaDex` (signalement_mangadex.dart), qui reconnaît ces
   /// images avec `SignalementMangaDex.estServeurMangaDexAtHome`.
   /// Qualité : [qualiteReduite] choisit les images `data-saver`.
+  ///
+  /// Chapitre externe (`ChapterAttributes.externalUrl` renseigné, tâche R4) :
+  /// lève une [ErreurSource] « chapitre hébergé sur un site externe » sans
+  /// appeler `/at-home` (PLAYBOOK.md section 10 : ces pages ne sont jamais
+  /// lues ni téléchargées). Si le chapitre n'a pas été vu par
+  /// [recupererChapitres] avec cette instance, une requête
+  /// `GET /chapter/{id}` (api.yaml, operationId `get-chapter-id`, réponse
+  /// `ChapterResponse`) vérifie d'abord `externalUrl`.
   @override
   Future<ContenuChapitre> recupererContenu(String urlChapitre) {
     return _avecTypeSite(() async {
       final id = extraireIdChapitre(urlChapitre);
+      final String? urlExterne;
+      if (_urlsExternesConnues.containsKey(id)) {
+        urlExterne = _urlsExternesConnues[id];
+      } else {
+        urlExterne = await _lireJson(
+          Uri.https(domaineApiMangaDex, '/chapter/$id'),
+          (json, url) => _lireUrlExterne(
+            json.lireObjet('data', url).lireObjet('attributes', url),
+            url,
+          ),
+        );
+        _urlsExternesConnues[id] = urlExterne;
+      }
+      if (urlExterne != null) {
+        throw ErreurSource(
+          urlChapitre,
+          'Chapitre hébergé sur un site externe '
+          '(${nomSiteExterne(urlExterne)} : $urlExterne) : aucune page à '
+          'récupérer sur MangaDex',
+        );
+      }
       final uri = Uri.https(domaineApiMangaDex, '/at-home/server/$id');
       return _lireJson(
         uri,
@@ -674,11 +752,59 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
     );
   }
 
+  /// Lit `ChapterAttributes.externalUrl` (api.yaml : « nullable: true,
+  /// pattern: ^https?:// ») : renvoie l'URL si elle est renseignée, `null`
+  /// si l'attribut est absent, nul ou vide. Une valeur qui n'est pas une URL
+  /// http(s) lève une [ErreurSource] (structure inattendue).
+  static String? _lireUrlExterne(Map<String, Object?> attributs, String url) {
+    final valeur = attributs.lireTexteOptionnel('externalUrl', url)?.trim();
+    if (valeur == null || valeur.isEmpty) {
+      return null;
+    }
+    final uri = Uri.tryParse(valeur);
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
+      throw ErreurSource(url, 'externalUrl MangaDex invalide : $valeur');
+    }
+    return valeur;
+  }
+
+  /// Nom lisible du site d'un chapitre externe, pour le bouton
+  /// « Lire sur `site` » : « MANGA Plus » pour `mangaplus.shueisha.co.jp`,
+  /// « VIZ » pour `viz.com` (deux éditeurs vus dans le flux réel de Ruri
+  /// Dragon), sinon le nom de domaine en minuscules sans `www.`. Renvoie le
+  /// texte reçu tel quel s'il ne contient pas d'hôte.
+  static String nomSiteExterne(String urlExterne) {
+    final hote = Uri.tryParse(urlExterne.trim())?.host.toLowerCase() ?? '';
+    if (hote.isEmpty) {
+      return urlExterne.trim();
+    }
+    final domaine = hote.startsWith('www.') ? hote.substring(4) : hote;
+    return _nomsSitesExternes[domaine] ?? domaine;
+  }
+
+  /// Noms commerciaux des sites externes connus (domaine sans `www.`).
+  static const Map<String, String> _nomsSitesExternes = <String, String>{
+    'mangaplus.shueisha.co.jp': 'MANGA Plus',
+    'viz.com': 'VIZ',
+  };
+
   /// Construit un [Chapitre] depuis un objet `Chapter` de l'API (api.yaml,
-  /// schéma `ChapterAttributes`).
-  Chapitre _construireChapitre(Map<String, Object?> chapitre, String url) {
+  /// schéma `ChapterAttributes`), ou `null` si le chapitre n'a aucune page
+  /// (`pages`, « Count of readable images ») et pas d'`externalUrl` : il ne
+  /// peut être lu nulle part (rôle de l'ancien `includeEmptyPages=0`).
+  ///
+  /// Un chapitre externe garde son URL MangaDex dans `urlChapitre` (clé
+  /// unique en base) et reçoit son lien dans `Chapitre.urlExterne`.
+  Chapitre? _construireChapitre(Map<String, Object?> chapitre, String url) {
     final id = chapitre.lireTexte('id', url);
     final attributs = chapitre.lireObjet('attributes', url);
+    final urlExterne = _lireUrlExterne(attributs, url);
+    final pages = attributs['pages'];
+    if (urlExterne == null && pages is int && pages <= 0) {
+      return null;
+    }
     // `chapter` est un texte nullable (maxLength 8) : null pour un oneshot.
     final numeroTexte = attributs.lireTexteOptionnel('chapter', url)?.trim();
     final titre = attributs.lireTexteOptionnel('title', url)?.trim() ?? '';
@@ -702,6 +828,7 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
       datePublication: publication == null
           ? null
           : DateTime.tryParse(publication)?.toUtc(),
+      urlExterne: urlExterne,
     );
   }
 

@@ -527,6 +527,99 @@ void main() {
       expect(requetes, hasLength(3));
     });
 
+    group('exigerImage (E10)', () {
+      // Début d'un vrai JPEG (marqueurs SOI + APP0 « JFIF »).
+      const debutJpeg = <int>[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46];
+
+      test('page anti-robot HTML reçue après redirection : ErreurSource '
+          'sans nouvelle tentative', () async {
+        // `package:http` (IOClient) suit la redirection 302 vers
+        // /edge/challenge et rend la page finale en 200 ; MockClient ne suit
+        // pas les redirections : on simule donc directement cette réponse
+        // finale, telle qu'observée le 2026-11-16 (text/html, <!doctype html>).
+        final client = clientAvecReponses(<http.Response>[
+          http.Response(
+            '<!doctype html><html><head><title>Challenge</title></head>'
+            '<body>Vérification</body></html>',
+            200,
+            headers: <String, String>{
+              'Content-Type': 'text/html; charset=utf-8',
+            },
+          ),
+          http.Response.bytes(
+            debutJpeg,
+            200,
+            headers: <String, String>{'content-type': 'image/jpeg'},
+          ),
+        ]);
+        const url = 'https://uploads.mangadex.org/covers/id/fichier.jpg';
+        await expectLater(
+          client.recupererOctets(Uri.parse(url), exigerImage: true),
+          throwsA(
+            isA<ErreurSource>()
+                .having((e) => e.url, 'url', url)
+                .having((e) => e.message, 'message', contains('text/html'))
+                .having((e) => e.codeStatut, 'code', 200)
+                .having((e) => e.octetsRecus, 'octets', greaterThan(0))
+                .having(
+                  (e) => e.extraitReponse,
+                  'extrait',
+                  contains('<!doctype html>'),
+                ),
+          ),
+        );
+        expect(requetes, hasLength(1));
+      });
+
+      test('JPEG : octets renvoyés', () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response.bytes(
+            debutJpeg,
+            200,
+            headers: <String, String>{'Content-Type': 'Image/JPEG'},
+          ),
+        ]);
+        final octets = await client.recupererOctets(
+          Uri.parse('https://uploads.mangadex.org/covers/id/fichier.jpg'),
+          exigerImage: true,
+        );
+        expect(octets, debutJpeg);
+      });
+
+      test('Content-Type absent : ErreurSource', () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response.bytes(debutJpeg, 200),
+        ]);
+        await expectLater(
+          client.recupererOctetsAvecDetails(
+            Uri.parse('https://exemple.org/i.jpg'),
+            exigerImage: true,
+          ),
+          throwsA(
+            isA<ErreurSource>().having(
+              (e) => e.message,
+              'message',
+              contains('absent'),
+            ),
+          ),
+        );
+      });
+
+      test('sans exigerImage : comportement inchangé (HTML accepté)', () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response(
+            '<!doctype html>',
+            200,
+            headers: <String, String>{'content-type': 'text/html'},
+          ),
+        ]);
+        final octets = await client.recupererOctets(
+          Uri.parse('https://exemple.org/i.jpg'),
+        );
+        expect(utf8.decode(octets), '<!doctype html>');
+      });
+    });
+
     test('une erreur réseau donne 0 octet reçu', () async {
       final client = creerClientTest((requete) async {
         throw http.ClientException('coupure', requete.url);

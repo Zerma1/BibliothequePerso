@@ -13,12 +13,18 @@
 // - manga_recherche_filtre.json : GET /manga?title=Shinigami ni Sodaterareta
 //   &limit=5&includes[]=cover_art&includes[]=author&includes[]=artist&
 //   contentRating[]=safe&contentRating[]=suggestive
+// Enregistrée le 2026-11-16 (tâche R4, User-Agent de l'application) :
+// - manga_flux_ruri_dragon.json : GET /manga/141609b6-…/feed?limit=100&
+//   offset=0&order[chapter]=asc&order[createdAt]=asc&contentRating[]=(les 4)
+//   &includeFuturePublishAt=0 (sans includeExternalUrl : total 324, dont
+//   des chapitres MANGA Plus et VIZ avec externalUrl)
 // Les pages 2 et 3 du flux ne sont pas enregistrées (dix requêtes au plus) :
 // les tests de pagination les reconstruisent à partir des entrées réelles de
 // la page 1, en gardant la structure exacte de l'enveloppe (result, response,
 // data, limit, offset, total).
 import 'dart:convert';
 
+import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
@@ -587,7 +593,11 @@ void main() {
           'erotica',
           'pornographic',
         ]);
-        expect(premiere.queryParameters['includeExternalUrl'], '0');
+        // Chapitres externes inclus (R4) : paramètre absent = tous.
+        expect(
+          premiere.queryParameters.containsKey('includeExternalUrl'),
+          isFalse,
+        );
         expect(
           premiere.queryParametersAll.containsKey('translatedLanguage[]'),
           isFalse,
@@ -752,18 +762,41 @@ void main() {
   group('recupererContenu', () {
     const urlChapitre = 'https://mangadex.org/chapter/$idChapitreReference';
 
+    /// Réponse `ChapterResponse` (api.yaml) construite avec l'entrée réelle
+    /// du chapitre dans manga_flux_page1.json (sans externalUrl).
+    String reponseChapitre() {
+      final donnees =
+          lireJsonExemple('manga_flux_page1.json')['data']! as List<Object?>;
+      return jsonEncode(<String, Object?>{
+        'result': 'ok',
+        'response': 'entity',
+        'data': donnees.firstWhere(
+          (d) => (d! as Map<String, Object?>)['id'] == idChapitreReference,
+        ),
+      });
+    }
+
+    /// API simulée : `GET /chapter/{id}` puis `GET /at-home/server/{id}`
+    /// (réponse [corpsAtHome], par défaut at_home_serveur.json).
+    http.Response Function(http.Request) apiChapitre([String? corpsAtHome]) {
+      return (requete) => reponseJson(
+        requete.url.path.startsWith('/chapter/')
+            ? reponseChapitre()
+            : corpsAtHome ?? lireExemple('exemples_json/at_home_serveur.json'),
+      );
+    }
+
     test(
       'construit baseUrl/data/hash/fichier pour les 36 pages réelles',
       () async {
-        final source = creerSource(
-          (requete) =>
-              reponseJson(lireExemple('exemples_json/at_home_serveur.json')),
-        );
+        final source = creerSource(apiChapitre());
         final contenu = await source.recupererContenu(urlChapitre);
-        expect(
-          requetes.single.url.toString(),
+        // Chapitre inconnu de l'instance : GET /chapter/{id} vérifie
+        // d'abord qu'il n'est pas externe.
+        expect(requetes.map((r) => r.url.toString()), <String>[
+          'https://api.mangadex.org/chapter/$idChapitreReference',
           'https://api.mangadex.org/at-home/server/$idChapitreReference',
-        );
+        ]);
         expect(contenu.estTexte, isFalse);
         expect(contenu.urlReferer, isNull);
         expect(contenu.urlsImages, hasLength(36));
@@ -777,11 +810,7 @@ void main() {
     );
 
     test('qualité réduite : data-saver et la liste dataSaver', () async {
-      final source = creerSource(
-        (requete) =>
-            reponseJson(lireExemple('exemples_json/at_home_serveur.json')),
-        qualiteReduite: true,
-      );
+      final source = creerSource(apiChapitre(), qualiteReduite: true);
       final contenu = await source.recupererContenu(urlChapitre);
       final attendu =
           ((lireJsonExemple('at_home_serveur.json')['chapter']!
@@ -796,22 +825,22 @@ void main() {
     });
 
     test('deux appels at-home sont espacés de 1,5 s (40 par minute)', () async {
-      final source = creerSource(
-        (requete) =>
-            reponseJson(lireExemple('exemples_json/at_home_serveur.json')),
-      );
+      final source = creerSource(apiChapitre());
       await source.recupererContenu(urlChapitre);
+      final avant = horloge.attentes.length;
       await source.recupererContenu(urlChapitre);
-      final total = horloge.attentes.fold<Duration>(
-        Duration.zero,
-        (somme, d) => somme + d,
-      );
+      // Le second appel connaît déjà le chapitre : seul /at-home est
+      // rappelé, et il attend le délai propre à ce point d'accès.
+      expect(requetes, hasLength(3));
+      final total = horloge.attentes
+          .sublist(avant)
+          .fold<Duration>(Duration.zero, (somme, d) => somme + d);
       expect(total, delaiMinimalAtHomeMangaDex);
     });
 
     test('aucune page : ErreurSource plutôt qu\'un contenu vide', () async {
       final source = creerSource(
-        (requete) => reponseJson(
+        apiChapitre(
           '{"result":"ok","baseUrl":"https://uploads.mangadex.org",'
           '"chapter":{"hash":"abc","data":[],"dataSaver":[]}}',
         ),
@@ -820,6 +849,205 @@ void main() {
         source.recupererContenu(urlChapitre),
         throwsA(isA<ErreurSource>()),
       );
+    });
+  });
+
+  group('Chapitres externes (Ruri Dragon, R4)', () {
+    const idRuri = '141609b6-cf86-4266-904c-6648f389cdc9';
+    const urlRuri = 'https://mangadex.org/title/$idRuri/ruri-dragon';
+    // Entrées réelles de manga_flux_ruri_dragon.json.
+    const idVizEn = '1f493000-615a-4fac-8347-3cbcc6ff8230';
+    const idMangaPlusFr = '06ef8154-1f94-4091-926f-8e396f55733c';
+    const idInterneEsLa = '969c2e97-e592-4570-9eff-42bb736b7d11';
+
+    SourceMangaDex sourceRuri() => creerSource((requete) {
+      if (requete.url.path.endsWith('/feed')) {
+        // Page réelle (100 entrées, total 324) présentée comme complète.
+        final page = lireJsonExemple('manga_flux_ruri_dragon.json');
+        return reponseJson(
+          pageFlux(page['data']! as List<Object?>, 500, 0, 100),
+        );
+      }
+      return reponseJson(lireExemple('exemples_json/at_home_serveur.json'));
+    });
+
+    test('réponse réelle : total 324, chapitres externes et internes', () {
+      final page = lireJsonExemple('manga_flux_ruri_dragon.json');
+      expect(page['total'], 324);
+      expect(page['data'], hasLength(100));
+    });
+
+    test('le flux ne filtre plus les chapitres externes ni vides', () async {
+      final source = sourceRuri();
+      await source.recupererChapitres(urlRuri);
+      final parametres = requetes.single.url.queryParameters;
+      expect(parametres.containsKey('includeExternalUrl'), isFalse);
+      expect(parametres.containsKey('includeEmptyPages'), isFalse);
+      expect(parametres['includeFuturePublishAt'], '0');
+    });
+
+    test('chaque chapitre externe reçoit son urlExterne', () async {
+      final chapitres = await sourceRuri().recupererChapitres(urlRuri);
+      expect(chapitres, hasLength(100));
+      Chapitre parId(String id) => chapitres.firstWhere(
+        (c) => c.urlChapitre == 'https://mangadex.org/chapter/$id',
+      );
+      // Externe avec pages = 0 : gardé (includeEmptyPages ne l'exclut plus).
+      final viz = parId(idVizEn);
+      expect(viz.urlExterne, 'https://viz.com/shonenjump/-/chapter/24786');
+      expect(viz.numero, 1.0);
+      expect(viz.langue, 'en');
+      expect(
+        parId(idMangaPlusFr).urlExterne,
+        'https://mangaplus.shueisha.co.jp/viewer/7001938',
+      );
+      // Chapitre hébergé sur MangaDex : pas de lien externe.
+      final interne = parId(idInterneEsLa);
+      expect(interne.urlExterne, isNull);
+      expect(interne.langue, 'es');
+      // Dans la page réelle : 96 externes, 4 internes.
+      expect(chapitres.where((c) => c.urlExterne != null), hasLength(96));
+    });
+
+    test('chapitre vide et non externe : ignoré', () async {
+      final page = lireJsonExemple('manga_flux_ruri_dragon.json');
+      final interne =
+          (page['data']! as List<Object?>).firstWhere(
+                (d) => (d! as Map<String, Object?>)['id'] == idInterneEsLa,
+              )!
+              as Map<String, Object?>;
+      final vide = <String, Object?>{
+        ...interne,
+        'id': '$idInterneEsLa-vide',
+        'attributes': <String, Object?>{
+          ...(interne['attributes']! as Map<String, Object?>),
+          'pages': 0,
+        },
+      };
+      final source = creerSource(
+        (requete) => reponseJson(pageFlux(<Object?>[interne, vide], 500, 0, 2)),
+      );
+      final chapitres = await source.recupererChapitres(urlRuri);
+      expect(chapitres.map((c) => c.urlChapitre), <String>[
+        'https://mangadex.org/chapter/$idInterneEsLa',
+      ]);
+    });
+
+    test(
+      'recupererContenu après le flux : erreur claire, sans /at-home',
+      () async {
+        final source = sourceRuri();
+        await source.recupererChapitres(urlRuri);
+        await expectLater(
+          source.recupererContenu(
+            'https://mangadex.org/chapter/$idMangaPlusFr',
+          ),
+          throwsA(
+            isA<ErreurSource>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('hébergé sur un site externe'),
+                    contains('MANGA Plus'),
+                  ),
+                )
+                .having(
+                  (e) => e.typeDetecte,
+                  'typeDetecte',
+                  TypeSource.mangaDex,
+                ),
+          ),
+        );
+        // Seule la requête du flux : ni /chapter ni /at-home.
+        expect(requetes, hasLength(1));
+      },
+    );
+
+    test('recupererContenu sans flux : GET /chapter puis erreur, sans '
+        '/at-home', () async {
+      final page = lireJsonExemple('manga_flux_ruri_dragon.json');
+      final entree = (page['data']! as List<Object?>).firstWhere(
+        (d) => (d! as Map<String, Object?>)['id'] == idVizEn,
+      );
+      final source = creerSource(
+        (requete) => reponseJson(
+          jsonEncode(<String, Object?>{
+            'result': 'ok',
+            'response': 'entity',
+            'data': entree,
+          }),
+        ),
+      );
+      await expectLater(
+        source.recupererContenu('https://mangadex.org/chapter/$idVizEn'),
+        throwsA(
+          isA<ErreurSource>().having(
+            (e) => e.message,
+            'message',
+            contains('hébergé sur un site externe (VIZ'),
+          ),
+        ),
+      );
+      expect(requetes.map((r) => r.url.path), <String>['/chapter/$idVizEn']);
+    });
+
+    test(
+      'chapitre interne du même flux : /at-home appelé directement',
+      () async {
+        final source = sourceRuri();
+        await source.recupererChapitres(urlRuri);
+        final contenu = await source.recupererContenu(
+          'https://mangadex.org/chapter/$idInterneEsLa',
+        );
+        expect(contenu.urlsImages, isNotEmpty);
+        expect(requetes.last.url.path, '/at-home/server/$idInterneEsLa');
+        expect(requetes, hasLength(2));
+      },
+    );
+
+    test('estServeurMangaDex : site, sous-domaines et nœuds @Home (E10)', () {
+      for (final hote in <String>[
+        'mangadex.org',
+        'www.mangadex.org',
+        'uploads.mangadex.org',
+        'api.mangadex.org',
+        'UPLOADS.MangaDex.org',
+        'abcdef.xyz123.mangadex.network',
+        'api.mangadex.network',
+      ]) {
+        expect(SourceMangaDex.estServeurMangaDex(hote), isTrue, reason: hote);
+      }
+      for (final hote in <String>[
+        'mangadex.org.exemple.com',
+        'fauxmangadex.org',
+        'mangaplus.shueisha.co.jp',
+        '',
+      ]) {
+        expect(SourceMangaDex.estServeurMangaDex(hote), isFalse, reason: hote);
+      }
+      // estHoteMangaDex reste limité au site public.
+      expect(SourceMangaDex.estHoteMangaDex('uploads.mangadex.org'), isFalse);
+    });
+
+    test('nomSiteExterne : nom lisible du site', () {
+      expect(
+        SourceMangaDex.nomSiteExterne(
+          'https://mangaplus.shueisha.co.jp/viewer/7001938',
+        ),
+        'MANGA Plus',
+      );
+      expect(
+        SourceMangaDex.nomSiteExterne(
+          'https://viz.com/shonenjump/-/chapter/24786',
+        ),
+        'VIZ',
+      );
+      expect(
+        SourceMangaDex.nomSiteExterne('https://www.Exemple-Editeur.com/ch/1'),
+        'exemple-editeur.com',
+      );
+      expect(SourceMangaDex.nomSiteExterne('pas une url'), 'pas une url');
     });
   });
 
