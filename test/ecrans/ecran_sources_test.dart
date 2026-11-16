@@ -80,6 +80,59 @@ void main() {
     expect(find.textContaining('langue : EN'), findsOneWidget);
   });
 
+  testWidgets('affiche le type Scan-Manga (lecture sur le site)', (
+    tester,
+  ) async {
+    bibliotheque.sources.add(
+      const Source(
+        id: 2,
+        nom: 'Scan-Manga',
+        urlBase: 'https://www.scan-manga.com',
+        typeSource: TypeSource.scanManga,
+        langueParDefaut: 'fr',
+      ),
+    );
+    await afficher(tester);
+    await tester.pump();
+
+    expect(find.text('Scan-Manga'), findsOneWidget);
+    expect(
+      find.textContaining('Scan-Manga (lecture sur le site)'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('le formulaire propose le type Scan-Manga sans débordement', (
+    tester,
+  ) async {
+    // Écran étroit de téléphone : le libellé long ne doit pas déborder.
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      envelopper(
+        const EcranSources(),
+        bibliotheque: bibliotheque,
+        ajoutSite: ajoutSite,
+      ),
+    );
+    await tester.pump();
+    await ouvrirAjout(tester);
+
+    await tester.tap(find.text(Textes.typeAutomatique));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.text(Textes.libelleTypeSource(TypeSource.scanManga)).last,
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(Textes.libelleTypeSource(TypeSource.scanManga)),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('ajoute un site avec nom, langue et type corrigé', (
     tester,
   ) async {

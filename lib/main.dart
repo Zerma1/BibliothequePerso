@@ -43,6 +43,7 @@ import 'services/service_export.dart';
 import 'services/planification_mises_a_jour.dart';
 import 'services/service_mises_a_jour.dart';
 import 'services/service_parametres.dart';
+import 'services/service_sources_par_defaut.dart';
 import 'services/service_rapports_erreur.dart';
 import 'services/service_telechargement.dart';
 import 'sources/client_http_poli.dart';
@@ -255,6 +256,13 @@ Future<ServicesApplication> construireServices({
     }
     rethrow;
   }
+  // MangaDex et Scan-Manga présents dès le premier lancement (demande du
+  // client). Sans réseau, ne lève jamais d'erreur, ne modifie jamais une source
+  // existante et ne recrée pas une source que le client a supprimée.
+  await ServiceSourcesParDefaut(
+    depotSources: DepotSources(base),
+    serviceParametres: ServiceParametres(DepotParametres(base)),
+  ).assurerSourcesParDefaut();
   return assemblerServices(base, client: client, stockage: stockage);
 }
 

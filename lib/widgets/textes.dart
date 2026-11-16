@@ -259,6 +259,8 @@ abstract final class Textes {
         return 'WordPress MangaThemesia';
       case TypeSource.generique:
         return 'Générique (sélecteurs CSS)';
+      case TypeSource.scanManga:
+        return 'Scan-Manga (lecture sur le site)';
     }
   }
 

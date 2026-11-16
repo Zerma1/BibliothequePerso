@@ -25,6 +25,13 @@ void main() {
     }
   });
 
+  test('le type scanManga est stocké sous son nom', () {
+    expect(TypeSource.values, contains(TypeSource.scanManga));
+    final map = source.copierAvec(typeSource: TypeSource.scanManga).versMap();
+    expect(map['type_source'], 'scanManga');
+    expect(Source.depuisMap(map).typeSource, TypeSource.scanManga);
+  });
+
   test('copierAvec, == et hashCode sont cohérents', () {
     final inactive = source.copierAvec(estActive: false);
     expect(inactive.estActive, isFalse);

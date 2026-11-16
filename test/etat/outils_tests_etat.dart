@@ -1038,6 +1038,20 @@ class FauxServiceParametres implements ServiceParametres {
   /// Réglages « enregistrés ».
   ReglagesTelechargement reglages = const ReglagesTelechargement();
 
+  /// Sources par défaut déjà proposées.
+  Set<String> sourcesParDefautProposees = <String>{};
+
+  @override
+  Future<Set<String>> chargerSourcesParDefautProposees() async =>
+      Set<String>.of(sourcesParDefautProposees);
+
+  @override
+  Future<void> enregistrerSourcesParDefautProposees(
+    Iterable<String> identifiants,
+  ) async {
+    sourcesParDefautProposees = identifiants.toSet();
+  }
+
   /// Erreur levée par la lecture, si définie.
   Object? erreurLecture;
 

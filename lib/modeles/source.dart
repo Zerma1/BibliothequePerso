@@ -20,6 +20,11 @@ enum TypeSource {
 
   /// Site quelconque décrit par des sélecteurs CSS saisis par le client.
   generique,
+
+  /// Scan-Manga (`scan-manga.com`) : fiches et listes de chapitres lues dans
+  /// le HTML ; les chapitres ne se lisent que sur le site (lien externe,
+  /// jamais téléchargés, PLAYBOOK.md section 10).
+  scanManga,
 }
 
 /// Un site configuré dans l'application.

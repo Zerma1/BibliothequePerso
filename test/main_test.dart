@@ -5,7 +5,9 @@ import 'dart:io';
 
 import 'package:bibliotheque_perso/main.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
+import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/services/planification_mises_a_jour.dart';
+import 'package:bibliotheque_perso/services/service_sources_par_defaut.dart';
 import 'package:bibliotheque_perso/sources/client_http_poli.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -49,7 +51,17 @@ void main() {
       listes.map((liste) => liste.nom),
       containsAll(<String>[nomListeFavoris, nomListeSuivis]),
     );
-    expect(await services.serviceBibliotheque.chargerSources(), isEmpty);
+    // Les deux sources par défaut sont créées au démarrage, sans réseau.
+    final sources = await services.serviceBibliotheque.chargerSources();
+    expect(sources, hasLength(2));
+    final mangaDex = sources.singleWhere((s) => s.nom == nomMangaDex);
+    expect(mangaDex.urlBase, urlBaseMangaDex);
+    expect(mangaDex.typeSource, TypeSource.mangaDex);
+    final scanManga = sources.singleWhere((s) => s.nom == nomScanManga);
+    expect(scanManga.urlBase, urlBaseScanManga);
+    expect(scanManga.typeSource, TypeSource.scanManga);
+    expect(scanManga.langueParDefaut, 'fr');
+    expect(requetes, isEmpty);
 
     // Aucun titre suivi : rapport vide, aucune requête réseau.
     final rapport = await services.serviceMisesAJour.verifierTitresSuivis();

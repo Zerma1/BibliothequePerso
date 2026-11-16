@@ -348,6 +348,37 @@ class ServiceParametres {
   Future<void> supprimerVerrouTelechargement() =>
       _depot.supprimer(cleVerrouTelechargement);
 
+  /// Clé : identifiants des sources par défaut déjà proposées au client
+  /// (« mangadex,scan-manga »). Une source proposée puis supprimée par le
+  /// client n'est jamais recréée (tâche R9).
+  static const String cleSourcesParDefautProposees =
+      'sources.par_defaut.proposees';
+
+  /// Identifiants des sources par défaut déjà proposées (vide si aucune).
+  Future<Set<String>> chargerSourcesParDefautProposees() async {
+    final texte = await _depot.chargerTexte(cleSourcesParDefautProposees) ?? '';
+    return <String>{
+      for (final morceau in texte.split(','))
+        if (morceau.trim().isNotEmpty) morceau.trim(),
+    };
+  }
+
+  /// Enregistre les identifiants des sources par défaut déjà proposées
+  /// (vides et identifiants contenant une virgule ignorés).
+  Future<void> enregistrerSourcesParDefautProposees(
+    Iterable<String> identifiants,
+  ) {
+    final propres = <String>{
+      for (final identifiant in identifiants)
+        if (identifiant.trim().isNotEmpty && !identifiant.contains(','))
+          identifiant.trim(),
+    };
+    return _depot.enregistrerTexte(
+      cleSourcesParDefautProposees,
+      propres.join(','),
+    );
+  }
+
   /// Date de la dernière recherche de mises à jour, ou `null`.
   Future<DateTime?> chargerDerniereVerification() async {
     final texte = await _depot.chargerTexte(cleDerniereVerification);
