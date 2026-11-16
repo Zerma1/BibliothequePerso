@@ -76,7 +76,11 @@ class DepotChapitres {
   ///
   /// Un chapitre est reconnu par son `url_chapitre` (contrainte UNIQUE) : un
   /// chapitre déjà présent n'est pas modifié, ce qui conserve son état de lecture
-  /// et de téléchargement. Les chapitres sans [Chapitre.dateDetection] reçoivent
+  /// et de téléchargement. Seule exception : son lien externe
+  /// ([Chapitre.urlExterne]) est mis à jour s'il a changé, y compris remis à
+  /// NULL quand le chapitre devient hébergé par le site source ; aucune autre
+  /// colonne n'est touchée. Un lien vide ou fait d'espaces est enregistré
+  /// comme NULL. Les chapitres sans [Chapitre.dateDetection] reçoivent
   /// [dateDetection] (par défaut : maintenant).
   ///
   /// Lève une [ErreurBaseDeDonnees] si un chapitre n'a pas de
@@ -122,7 +126,9 @@ class DepotChapitres {
             );
           }
         }
-        return _insererChapitres(txn, chapitres, detection);
+        final nouveaux = await _insererChapitres(txn, chapitres, detection);
+        await _mettreAJourUrlsExternes(txn, chapitres);
+        return nouveaux;
       });
     } on DatabaseException catch (erreur) {
       throw ErreurBaseDeDonnees(
@@ -147,6 +153,7 @@ class DepotChapitres {
     for (final chapitre in chapitres) {
       final ligne = chapitre.versMap()..remove('id');
       ligne['date_detection'] ??= dateVersMillisecondes(detection);
+      ligne['url_externe'] = _normaliserUrlExterne(chapitre.urlExterne);
       await txn.insert(
         'chapitres',
         ligne,
@@ -155,6 +162,42 @@ class DepotChapitres {
     }
     final apres = await _compterTout(txn);
     return apres - avant;
+  }
+
+  /// Aligne le lien externe des chapitres **déjà connus** sur celui donné par
+  /// le site, dans [txn].
+  ///
+  /// Une seule colonne est écrite (`url_externe`) : l'état de lecture, de
+  /// téléchargement, la suppression prévue et le choix « Garder » restent
+  /// intacts. `IS NOT ?` compare aussi les NULL (contrairement à `!=`) : la
+  /// ligne n'est écrite que si la valeur change réellement, et un chapitre
+  /// qui vient d'être inséré, déjà à jour, n'est pas réécrit. La recherche
+  /// passe par l'index UNIQUE de `url_chapitre` ; le filtre sur `id_titre`
+  /// évite de modifier le chapitre d'un autre titre qui partagerait l'URL.
+  Future<void> _mettreAJourUrlsExternes(
+    Transaction txn,
+    List<Chapitre> chapitres,
+  ) async {
+    for (final chapitre in chapitres) {
+      final urlExterne = _normaliserUrlExterne(chapitre.urlExterne);
+      await txn.rawUpdate(
+        'UPDATE chapitres SET url_externe = ? '
+        'WHERE url_chapitre = ? AND id_titre = ? AND url_externe IS NOT ?',
+        <Object?>[
+          urlExterne,
+          chapitre.urlChapitre,
+          chapitre.idTitre,
+          urlExterne,
+        ],
+      );
+    }
+  }
+
+  /// Lien externe sans espaces autour, ou `null` s'il est absent ou vide
+  /// (un lien vide signifie « hébergé par le site source »).
+  static String? _normaliserUrlExterne(String? urlExterne) {
+    final url = urlExterne?.trim();
+    return url == null || url.isEmpty ? null : url;
   }
 
   /// Charge les chapitres d'un titre, triés par numéro croissant.

@@ -20,8 +20,8 @@ void main() {
     await base.close();
   });
 
-  test('la version du schéma est 5 et correspond à la base ouverte', () async {
-    expect(versionSchema, 5);
+  test('la version du schéma est 6 et correspond à la base ouverte', () async {
+    expect(versionSchema, 6);
     expect(await base.getVersion(), versionSchema);
   });
 
@@ -396,7 +396,8 @@ void main() {
         fabrique: databaseFactoryFfi,
       );
       try {
-        expect(await version5.getVersion(), 5);
+        // Toutes les migrations suivantes sont appliquées.
+        expect(await version5.getVersion(), versionSchema);
         final chapitre = (await version5.query('chapitres')).single;
         expect(chapitre['nom'], 'Chapitre 1');
         expect(chapitre['est_lu'], 1);
@@ -456,6 +457,102 @@ void main() {
         );
       } finally {
         await version5.close();
+      }
+    } finally {
+      await dossier.delete(recursive: true);
+    }
+  });
+
+  test('la migration 5 → 6 conserve les données et ajoute url_externe '
+      '(NULL = chapitre hébergé)', () async {
+    final dossier = await Directory.systemTemp.createTemp('migration6_test_');
+    final chemin = p.join(dossier.path, 'version5.db');
+    try {
+      final version5 = await databaseFactoryFfi.openDatabase(
+        chemin,
+        options: OpenDatabaseOptions(
+          version: 5,
+          onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+          onCreate: (db, version) => appliquerMigrations(db, 0, 5),
+        ),
+      );
+      final idSource = await version5.insert('sources', <String, Object?>{
+        'nom': 'MangaDex',
+        'url_base': 'https://mangadex.org',
+        'type_source': 'mangaDex',
+      });
+      final idTitre = await version5.insert('titres', <String, Object?>{
+        'id_source': idSource,
+        'url_titre': 'https://mangadex.org/title/ruri',
+        'nom': 'Ruri Dragon',
+        'type_titre': 'manga',
+        'niveau_contenu': 'safe',
+        'couverture_choisie': 'https://exemple.org/vol2.jpg',
+      });
+      final idChapitre = await version5.insert('chapitres', <String, Object?>{
+        'id_titre': idTitre,
+        'url_chapitre': 'https://mangadex.org/chapter/1',
+        'nom': 'Chapitre 1',
+        'numero': 1.0,
+        'langue': 'fr',
+        'est_lu': 1,
+        'est_telecharge': 1,
+        'nom_archive': 'manga/Ruri Dragon/ch1.fr.zip',
+        'date_suppression_prevue': 1000,
+        'est_garde': 1,
+      });
+      await version5.insert('telechargements', <String, Object?>{
+        'id_chapitre': idChapitre,
+        'statut': 'termine',
+        'date_ajout': 1,
+        'date_maj': 2,
+      });
+      await version5.insert('listes', <String, Object?>{
+        'nom': 'Lus en 2026',
+        'ordre': 4,
+      });
+      expect(await version5.getVersion(), 5);
+      await version5.close();
+
+      final version6 = await ouvrirBaseDeDonnees(
+        chemin: chemin,
+        fabrique: databaseFactoryFfi,
+      );
+      try {
+        expect(await version6.getVersion(), versionSchema);
+        final chapitre = (await version6.query('chapitres')).single;
+        expect(chapitre['nom'], 'Chapitre 1');
+        expect(chapitre['est_lu'], 1);
+        expect(chapitre['est_telecharge'], 1);
+        expect(chapitre['nom_archive'], 'manga/Ruri Dragon/ch1.fr.zip');
+        expect(chapitre['date_suppression_prevue'], 1000);
+        expect(chapitre['est_garde'], 1);
+        // Les lignes existantes reçoivent NULL : chapitre hébergé.
+        expect(chapitre.containsKey('url_externe'), isTrue);
+        expect(chapitre['url_externe'], isNull);
+
+        final titre = (await version6.query('titres')).single;
+        expect(titre['niveau_contenu'], 'safe');
+        expect(titre['couverture_choisie'], 'https://exemple.org/vol2.jpg');
+        expect(
+          (await version6.query('telechargements')).single['statut'],
+          'termine',
+        );
+        expect(await version6.query('listes'), hasLength(5));
+
+        // La colonne est utilisable et accepte NULL.
+        await version6.update(
+          'chapitres',
+          <String, Object?>{'url_externe': 'https://editeur.example/ch1'},
+          where: 'id = ?',
+          whereArgs: <Object?>[idChapitre],
+        );
+        expect(
+          (await version6.query('chapitres')).single['url_externe'],
+          'https://editeur.example/ch1',
+        );
+      } finally {
+        await version6.close();
       }
     } finally {
       await dossier.delete(recursive: true);

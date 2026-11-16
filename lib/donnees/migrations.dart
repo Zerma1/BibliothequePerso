@@ -24,6 +24,7 @@ const List<Migration> migrations = <Migration>[
   _migration3,
   _migration4,
   _migration5,
+  _migration6,
 ];
 
 /// Version actuelle du schéma (nombre de migrations).
@@ -374,4 +375,21 @@ Future<void> _migration5(DatabaseExecutor executeur) async {
       );
     }
   }
+}
+
+/// Migration 6 (tâche R4) : lien externe des chapitres non hébergés par le
+/// site source (ex. MangaDex qui renvoie vers le site de l'éditeur).
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration6(DatabaseExecutor executeur) async {
+  // url_externe : URL du chapitre chez l'éditeur, NULL = chapitre hébergé
+  // par le site source. ADD COLUMN sans DEFAULT : les lignes existantes
+  // reçoivent NULL, c'est-à-dire « hébergé », ce qui était le cas de tous
+  // les chapitres enregistrés jusqu'ici. Pas de NOT NULL ni de CHECK : la
+  // valeur vient du site et n'a pas de format garanti. Pas d'UNIQUE : un
+  // éditeur peut renvoyer plusieurs chapitres vers la même page. Pas
+  // d'index : la colonne n'est jamais un critère de recherche (elle est lue
+  // avec le chapitre, et la mise à jour par enregistrerChapitres passe par
+  // l'index UNIQUE de url_chapitre).
+  await executeur.execute('ALTER TABLE chapitres ADD COLUMN url_externe TEXT');
 }
