@@ -3,6 +3,7 @@
 // simulé et `tester.pump(durée)` fait avancer les Timer sans attendre.
 import 'dart:async';
 
+import 'package:bibliotheque_perso/etat/constantes_etat.dart';
 import 'package:bibliotheque_perso/etat/description_erreur.dart';
 import 'package:bibliotheque_perso/etat/etat_mises_a_jour.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
@@ -193,17 +194,21 @@ void main() {
       expect(etat.prochaineEcheance, DateTime.utc(2026, 11, 15, 12));
 
       service.echeancePassee = true;
-      heure = DateTime.utc(2026, 11, 15, 12);
+      // L'heure simulée n'avance pas toute seule : elle reste avant
+      // l'échéance pendant que le temps passe, puis l'atteint.
       await tester.pump(const Duration(minutes: 59));
       expect(service.nombreControlesEcheance, 1);
+      heure = DateTime.utc(2026, 11, 15, 12);
       await tester.pump(const Duration(minutes: 1));
       expect(service.nombreControlesEcheance, 2);
       expect(service.nombreAppels, 1);
       expect(etat.finVerification.value!.estManuelle, isFalse);
       expect(etat.prochaineEcheance, DateTime.utc(2026, 11, 16));
 
+      await tester.pump(const Duration(hours: 11, minutes: 59));
+      expect(service.nombreControlesEcheance, 2);
       heure = DateTime.utc(2026, 11, 16);
-      await tester.pump(const Duration(hours: 12));
+      await tester.pump(const Duration(minutes: 1));
       expect(service.nombreControlesEcheance, 3);
 
       etat.dispose();
@@ -213,6 +218,66 @@ void main() {
       expect(service.nombreControlesEcheance, 3);
     },
   );
+
+  testWidgets(
+    "veille : l'échéance passée pendant la veille est rattrapée par le "
+    "contrôle régulier, sans attendre le minuteur",
+    (tester) async {
+      var heure = DateTime.utc(2026, 11, 15, 11);
+      service.echeancePassee = false;
+      final etat = EtatMisesAJour(
+        service,
+        planifier: true,
+        maintenant: () => heure,
+      )..demarrer();
+      addTearDown(etat.dispose);
+      await tester.pump();
+      expect(service.nombreControlesEcheance, 1);
+
+      // Contrôle avant l'échéance : la base n'est pas sollicitée.
+      await tester.pump(intervalleControleEcheance);
+      expect(service.nombreControlesEcheance, 1);
+
+      // L'ordinateur dort de 11:15 à 14:00 : l'horloge réelle avance, pas
+      // le minuteur (qui attendrait encore 45 min).
+      service.echeancePassee = true;
+      heure = DateTime.utc(2026, 11, 15, 14);
+      await tester.pump(intervalleControleEcheance);
+      expect(service.nombreControlesEcheance, 2);
+      expect(service.nombreAppels, 1);
+      expect(etat.prochaineEcheance, DateTime.utc(2026, 11, 16));
+    },
+  );
+
+  testWidgets('controlerEcheance (retour au premier plan) ne fait rien '
+      'avant l\'échéance et vérifie après', (tester) async {
+    var heure = DateTime.utc(2026, 11, 15, 11);
+    service.echeancePassee = false;
+    final etat = EtatMisesAJour(
+      service,
+      planifier: true,
+      maintenant: () => heure,
+    )..demarrer();
+    addTearDown(etat.dispose);
+    await tester.pump();
+
+    etat.controlerEcheance();
+    await tester.pump();
+    expect(service.nombreControlesEcheance, 1);
+
+    heure = DateTime.utc(2026, 11, 15, 13);
+    etat.controlerEcheance();
+    await tester.pump();
+    expect(service.nombreControlesEcheance, 2);
+  });
+
+  test('controlerEcheance est sans effet sans planification', () async {
+    final etat = EtatMisesAJour(service)..demarrer();
+    addTearDown(etat.dispose);
+    etat.controlerEcheance();
+    await Future<void>.delayed(Duration.zero);
+    expect(service.nombreControlesEcheance, 0);
+  });
 
   testWidgets('replanifier recale le minuteur sur le nouveau réglage', (
     tester,

@@ -34,6 +34,7 @@ import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
 import 'package:bibliotheque_perso/services/service_mises_a_jour.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
 import 'package:bibliotheque_perso/services/service_telechargement.dart';
+import 'package:bibliotheque_perso/services/verrou_telechargement.dart';
 import 'package:bibliotheque_perso/sources/detecteur_type_site.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/sources/fabrique_sources.dart';
@@ -230,6 +231,62 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
   Future<List<Chapitre>> chargerChapitres(int idTitre) async {
     await _lire();
     return List<Chapitre>.of(chapitresParTitre[idTitre] ?? const <Chapitre>[]);
+  }
+
+  /// Langues du réglage général renvoyées par [chargerLanguesGenerales].
+  List<String> languesGenerales = <String>['fr', 'en'];
+
+  @override
+  Future<List<String>> chargerLanguesGenerales() async =>
+      List<String>.of(languesGenerales);
+
+  @override
+  Future<List<String>> languesPourTitre(Titre titre) async {
+    final idSource = titre.idSource;
+    final source = idSource == null
+        ? null
+        : sources.where((s) => s.id == idSource).firstOrNull;
+    return ServiceBibliotheque.languesPreferees(
+      source,
+      general: languesGenerales,
+      titre: titre,
+    );
+  }
+
+  /// Appels reçus par [modifierLanguesTitre] (`null` : réglage général).
+  final List<({int idTitre, List<String>? langues})> languesModifiees =
+      <({int idTitre, List<String>? langues})>[];
+
+  @override
+  Future<void> modifierLanguesTitre(int idTitre, List<String>? langues) async {
+    languesModifiees.add((idTitre: idTitre, langues: langues));
+    enregistrerLanguesDeTest(idTitre, langues);
+  }
+
+  /// Enregistre les langues propres d'un titre comme le vrai service
+  /// (codes nettoyés, liste vide ou `null` = retour au réglage général).
+  void enregistrerLanguesDeTest(int idTitre, List<String>? langues) {
+    final index = titres.indexWhere((titre) => titre.id == idTitre);
+    if (index < 0) {
+      throw const ErreurService("Ce titre n'existe plus.");
+    }
+    final propres = ServiceParametres.nettoyerLangues(
+      langues ?? const <String>[],
+    );
+    titres[index] = propres.isEmpty
+        ? titres[index].copierAvec(effacerLanguesPreferees: true)
+        : titres[index].copierAvec(languesPreferees: propres.join(','));
+  }
+
+  @override
+  Future<Chapitre?> chargerChapitre(int idChapitre) async {
+    await _lire();
+    for (final chapitres in chapitresParTitre.values) {
+      for (final chapitre in chapitres) {
+        if (chapitre.id == idChapitre) return chapitre;
+      }
+    }
+    return null;
   }
 
   @override
@@ -554,8 +611,19 @@ class FauxServiceTelechargement implements ServiceTelechargement {
     return PlanTelechargement.vide;
   }
 
+  /// Nombre de lectures de la file (regroupement des relectures).
+  int nombreLecturesFile = 0;
+
+  /// Si défini, [chargerFile] attend qu'il soit complété (lecture lente).
+  Completer<void>? retenueFile;
+
   @override
   Future<List<Telechargement>> chargerFile() async {
+    nombreLecturesFile++;
+    final attente = retenueFile;
+    if (attente != null) {
+      await attente.future;
+    }
     final erreur = erreurFile;
     if (erreur != null) {
       throw erreur;
@@ -614,6 +682,141 @@ class FauxServiceTelechargement implements ServiceTelechargement {
 
   @override
   Future<void> lancerTraitement() async {}
+
+  /// Protections posées par le lecteur, par chapitre (compteur).
+  final Map<int, int> protections = <int, int>{};
+
+  @override
+  void protegerChapitre(int idChapitre) {
+    journal.add('proteger:$idChapitre');
+    protections.update(idChapitre, (n) => n + 1, ifAbsent: () => 1);
+  }
+
+  @override
+  void libererChapitre(int idChapitre) {
+    journal.add('liberer:$idChapitre');
+    final nombre = protections[idChapitre];
+    if (nombre == null) return;
+    if (nombre <= 1) {
+      protections.remove(idChapitre);
+    } else {
+      protections[idChapitre] = nombre - 1;
+    }
+  }
+
+  @override
+  bool estProtege(int idChapitre) => protections.containsKey(idChapitre);
+
+  @override
+  String get identifiantVerrou => 'faux-service';
+
+  @override
+  Future<List<List<Chapitre>>> chargerDoublons(int idTitre) async =>
+      PolitiqueTelechargement.trouverDoublons(
+        bibliotheque.chapitresParTitre[idTitre] ?? const <Chapitre>[],
+      );
+
+  /// Titres passés à [supprimerTitre].
+  final List<int> titresSupprimes = <int>[];
+
+  @override
+  Future<void> supprimerTitre(int idTitre) async {
+    journal.add('supprimerTitre:$idTitre');
+    titresSupprimes.add(idTitre);
+    for (final chapitre
+        in bibliotheque.chapitresParTitre[idTitre] ?? const <Chapitre>[]) {
+      final id = chapitre.id;
+      if (id == null) continue;
+      file.removeWhere((t) => t.idChapitre == id);
+      pages.remove(id);
+      textes.remove(id);
+    }
+    await bibliotheque.supprimerTitre(idTitre);
+    bibliotheque.chapitresParTitre.remove(idTitre);
+    signaler();
+  }
+
+  /// Chapitres gardés par le client (bouton « Garder »).
+  final Set<int> gardes = <int>{};
+
+  /// Appels à [supprimerArchivesEchues].
+  int nombreControlesEcheances = 0;
+
+  /// Date « actuelle » utilisée pour les échéances (par défaut l'heure
+  /// réelle).
+  DateTime Function() horloge = DateTime.now;
+
+  /// Programme la suppression d'un chapitre téléchargé à [date].
+  void planifierSuppressionDeTest(int idChapitre, DateTime? date) {
+    for (final chapitres in bibliotheque.chapitresParTitre.values) {
+      for (var i = 0; i < chapitres.length; i++) {
+        if (chapitres[i].id == idChapitre) {
+          chapitres[i] = date == null
+              ? chapitres[i].copierAvec(effacerDateSuppressionPrevue: true)
+              : chapitres[i].copierAvec(dateSuppressionPrevue: date);
+        }
+      }
+    }
+  }
+
+  @override
+  Future<int> supprimerArchivesEchues() async {
+    nombreControlesEcheances++;
+    journal.add('echeances');
+    final maintenant = horloge();
+    final echus = <int>[
+      for (final chapitres in bibliotheque.chapitresParTitre.values)
+        for (final chapitre in chapitres)
+          if (chapitre.id != null &&
+              chapitre.dateSuppressionPrevue != null &&
+              !chapitre.dateSuppressionPrevue!.isAfter(maintenant) &&
+              !estProtege(chapitre.id!) &&
+              !gardes.contains(chapitre.id))
+            chapitre.id!,
+    ];
+    for (final id in echus) {
+      await supprimerTelechargement(id, signalerChangement: false);
+      planifierSuppressionDeTest(id, null);
+    }
+    if (echus.isNotEmpty) signaler();
+    return echus.length;
+  }
+
+  @override
+  Future<void> supprimerMaintenant(int idChapitre) async {
+    journal.add('supprimerMaintenant:$idChapitre');
+    await supprimerTelechargement(idChapitre, signalerChangement: false);
+    planifierSuppressionDeTest(idChapitre, null);
+    gardes.remove(idChapitre);
+    signaler();
+  }
+
+  @override
+  Future<void> annulerSuppression(int idChapitre) async {
+    journal.add('garder:$idChapitre');
+    gardes.add(idChapitre);
+    planifierSuppressionDeTest(idChapitre, null);
+    signaler();
+  }
+
+  @override
+  Future<Set<int>> chargerChapitresGardes() async => Set<int>.of(gardes);
+
+  @override
+  Future<PlanTelechargement> modifierLanguesTitre(
+    int idTitre,
+    List<String>? langues,
+  ) async {
+    journal.add('langues:$idTitre:${langues?.join(',')}');
+    bibliotheque.enregistrerLanguesDeTest(idTitre, langues);
+    return appliquerRegles(idTitre);
+  }
+
+  /// Nombre renvoyé par [reparerArchivesManquantes].
+  int archivesReparees = 0;
+
+  @override
+  Future<int> reparerArchivesManquantes() async => archivesReparees;
 }
 
 /// Faux `ServiceParametres` : réglages gardés en mémoire.
@@ -676,6 +879,51 @@ class FauxServiceParametres implements ServiceParametres {
   @override
   Future<void> enregistrerDerniereVerification(DateTime date) async {
     derniereVerification = date.toUtc();
+  }
+
+  /// Langues de lecture « enregistrées » (la première est la favorite).
+  List<String> langues = <String>['fr', 'en'];
+
+  @override
+  Future<List<String>> chargerLangues() async => List<String>.of(langues);
+
+  @override
+  Future<void> enregistrerLangues(List<String> nouvelles) async {
+    final propres = ServiceParametres.nettoyerLangues(nouvelles);
+    if (propres.isEmpty) {
+      throw const ErreurService('Choisissez au moins une langue de lecture.');
+    }
+    langues = propres;
+  }
+
+  /// Chapitres gardés « enregistrés ».
+  Set<int> chapitresGardes = <int>{};
+
+  @override
+  Future<Set<int>> chargerChapitresGardes() async =>
+      Set<int>.of(chapitresGardes);
+
+  @override
+  Future<void> enregistrerChapitresGardes(Iterable<int> ids) async {
+    chapitresGardes = ids.toSet();
+  }
+
+  /// Verrou de la file « enregistré ».
+  VerrouTelechargement? verrou;
+
+  @override
+  Future<VerrouTelechargement?> chargerVerrouTelechargement() async => verrou;
+
+  @override
+  Future<void> enregistrerVerrouTelechargement(
+    VerrouTelechargement nouveau,
+  ) async {
+    verrou = nouveau;
+  }
+
+  @override
+  Future<void> supprimerVerrouTelechargement() async {
+    verrou = null;
   }
 }
 

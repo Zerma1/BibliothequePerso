@@ -1,6 +1,7 @@
 // Tests de EtatLecteur : faux services pour la navigation et le marquage
 // « lu », puis vrais services sur une base en mémoire avec une archive .zip
 // écrite dans un dossier temporaire (aucun réseau).
+import 'dart:async';
 import 'dart:io';
 
 import 'package:bibliotheque_perso/donnees/depot_categories.dart';
@@ -139,6 +140,36 @@ void main() {
       expect(etat.chapitreSuivant!.id, 2);
     });
 
+    test('deux oneshots se suivent comme deux chapitres distincts', () async {
+      bibliotheque.chapitresParTitre[1]!.insertAll(0, const <Chapitre>[
+        Chapitre(id: 7, idTitre: 1, urlChapitre: 'o1', nom: 'A', numero: 0),
+        Chapitre(id: 8, idTitre: 1, urlChapitre: 'o2', nom: 'B', numero: 0),
+      ]);
+      final etat = creer(8);
+      await etat.charger();
+
+      expect(etat.chapitrePrecedent!.id, 7);
+      expect(etat.chapitreSuivant!.id, 1);
+    });
+
+    test(
+      'les langues propres au titre décident de la version retenue',
+      () async {
+        // Les deux versions du numéro 3 sont sur l'appareil.
+        telechargement.ajouterChapitreTelecharge(3);
+        final avant = creer(2);
+        await avant.charger();
+        expect(avant.chapitreSuivant!.id, 4);
+
+        bibliotheque.enregistrerLanguesDeTest(1, <String>['en']);
+        final etat = creer(2);
+        await etat.charger();
+
+        // Langues du titre : l'anglais passe avant le réglage du site.
+        expect(etat.chapitreSuivant!.id, 3);
+      },
+    );
+
     test(
       'la dernière page marque le chapitre lu PUIS applique les règles',
       () async {
@@ -257,6 +288,81 @@ void main() {
       addTearDown(etat.dispose);
       await etat.charger();
       expect(etat.erreur!.nature, NatureErreur.introuvable);
+    });
+
+    test("le chapitre ouvert est protégé, la protection suit le changement de "
+        "chapitre et est levée à la fermeture", () async {
+      final etat = EtatLecteur(
+        serviceBibliotheque: bibliotheque,
+        serviceTelechargement: telechargement,
+        idTitre: 1,
+        idChapitre: 1,
+      );
+      await etat.charger();
+      expect(telechargement.protections, <int, int>{1: 1});
+
+      await etat.allerAuSuivant();
+      expect(telechargement.protections, <int, int>{2: 1});
+      await etat.allerAuPrecedent();
+      expect(telechargement.protections, <int, int>{1: 1});
+
+      // Recharger le même chapitre ne pose pas une seconde protection.
+      await etat.reessayer();
+      expect(telechargement.protections, <int, int>{1: 1});
+
+      etat.dispose();
+      expect(telechargement.protections, isEmpty);
+    });
+
+    test(
+      "seules les pages proches de la page courante restent en mémoire",
+      () async {
+        telechargement.ajouterChapitreTelecharge(1, nombrePages: 30);
+        final etat = creer(1);
+        await etat.charger();
+        for (var i = 0; i < 30; i++) {
+          await etat.page(i);
+        }
+        expect(etat.nombrePagesEnMemoire, 30);
+
+        etat.signalerPageVisible(15);
+        // Pages 10 à 20 : marge de 5 de chaque côté.
+        expect(etat.nombrePagesEnMemoire, 11);
+        // Une page oubliée est relue (nouvelle lecture), une page proche non.
+        final proche = etat.page(14);
+        expect(identical(proche, etat.page(14)), isTrue);
+        expect(await etat.page(0), pngMinimal);
+      },
+    );
+
+    test("les relectures de la file pendant un téléchargement sont "
+        "regroupées", () async {
+      final etat = creer(3);
+      await etat.charger();
+      await etat.telechargerChapitre();
+      await pumpEventQueue();
+      final avant = telechargement.nombreLecturesFile;
+
+      // Dix pages téléchargées pendant une lecture lente de la file : dix
+      // signaux, mais une lecture en cours et une seule relecture à la fin.
+      final retenue = Completer<void>();
+      telechargement.retenueFile = retenue;
+      for (var i = 1; i <= 10; i++) {
+        telechargement.modifierLigne(
+          3,
+          StatutTelechargement.enCours,
+          faites: i,
+          total: 10,
+        );
+        await pumpEventQueue();
+      }
+      telechargement.retenueFile = null;
+      retenue.complete();
+      await pumpEventQueue();
+
+      expect(telechargement.nombreLecturesFile - avant, 2);
+      expect(etat.etatHorsLigne.statut, StatutHorsLigne.enCours);
+      expect(etat.etatHorsLigne.progression, 1.0);
     });
 
     test('une page illisible est relue au « Réessayer »', () async {

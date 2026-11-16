@@ -4,11 +4,14 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../modeles/chapitre.dart';
 import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
 import '../services/service_bibliotheque.dart';
 import '../services/service_telechargement.dart';
+import 'constantes_etat.dart';
 import 'description_erreur.dart';
 
 /// Une ligne de la file, avec le chapitre et le titre à afficher.
@@ -41,11 +44,59 @@ class ElementTelechargement {
 class EtatTelechargements extends EtatNotifiant {
   /// Crée l'état et s'abonne aux changements de la file ; appeler [charger]
   /// pour la première lecture.
-  EtatTelechargements(this._service, this._serviceBibliotheque) {
+  ///
+  /// Avec [controlerEcheances] (par défaut), les suppressions prévues dont
+  /// le délai de 24 heures est passé sont faites toutes les
+  /// [intervalleControleEcheance] ; l'écran d'accueil appelle aussi
+  /// [controlerSuppressionsEchues] au retour au premier plan.
+  EtatTelechargements(
+    this._service,
+    this._serviceBibliotheque, {
+    bool controlerEcheances = true,
+  }) {
     _abonnement = _service.changements.listen((_) => _demanderRechargement());
+    if (controlerEcheances) {
+      // Le service ne fait ces suppressions qu'au démarrage, à l'application
+      // des règles et en fin de file : une application laissée ouverte
+      // plusieurs jours sans nouveau chapitre ne les ferait jamais. Un
+      // `Timer` ne compte pas la veille : le retour au premier plan complète.
+      _controleRegulier = Timer.periodic(
+        intervalleControleEcheance,
+        (_) => unawaited(controlerSuppressionsEchues()),
+      );
+    }
   }
 
   final ServiceTelechargement _service;
+  Timer? _controleRegulier;
+
+  /// Contrôle en cours : deux déclenchements rapprochés (minuteur et retour
+  /// au premier plan) n'en font qu'un.
+  Future<int>? _controleEnCours;
+
+  /// Supprime les archives dont la suppression prévue est échue et renvoie
+  /// leur nombre (0 en cas d'erreur, journalisée : ce contrôle automatique
+  /// sera refait au suivant).
+  Future<int> controlerSuppressionsEchues() {
+    if (estLibere) return Future<int>.value(0);
+    final enCours = _controleEnCours;
+    if (enCours != null) return enCours;
+    final nouveau = _controler().whenComplete(() => _controleEnCours = null);
+    _controleEnCours = nouveau;
+    return nouveau;
+  }
+
+  Future<int> _controler() async {
+    try {
+      // Le service prévient par `changements` s'il a supprimé quelque
+      // chose : la file et les fiches ouvertes se relisent d'elles-mêmes.
+      return await _service.supprimerArchivesEchues();
+    } catch (erreur, pile) {
+      debugPrint('Suppressions prévues non faites : $erreur\n$pile');
+      return 0;
+    }
+  }
+
   final ServiceBibliotheque _serviceBibliotheque;
   late final StreamSubscription<void> _abonnement;
 
@@ -158,35 +209,27 @@ class EtatTelechargements extends EtatNotifiant {
     } while (_rechargementRedemande);
   }
 
-  /// Retrouve le chapitre et le titre de chaque identifiant inconnu.
-  // LIMITE : le service ne fournit pas de lecture d'un chapitre par son
-  // identifiant (`ServiceBibliotheque.chargerChapitre` manque) : on relit les
-  // chapitres des titres jusqu'à les avoir tous trouvés. C'est fait une seule
-  // fois par chapitre grâce au cache.
+  /// Retrouve le chapitre et le titre de chaque identifiant inconnu (une
+  /// seule lecture par chapitre et par titre grâce au cache).
   Future<void> _retrouverChapitres(Iterable<int> idsChapitres) async {
     final manquants = idsChapitres
         .where(
           (id) => !_chapitres.containsKey(id) && !_idsIntrouvables.contains(id),
         )
         .toSet();
-    if (manquants.isEmpty) return;
-    final titres = await _serviceBibliotheque.chargerTitres();
-    for (final titre in titres) {
-      final idTitre = titre.id;
-      if (idTitre == null) continue;
-      _titres[idTitre] = titre;
-      final chapitres = await _serviceBibliotheque.chargerChapitres(idTitre);
-      for (final chapitre in chapitres) {
-        final id = chapitre.id;
-        if (id != null &&
-            (manquants.contains(id) || _chapitres.containsKey(id))) {
-          _chapitres[id] = chapitre;
-        }
+    for (final id in manquants) {
+      final chapitre = await _serviceBibliotheque.chargerChapitre(id);
+      if (chapitre == null) {
+        _idsIntrouvables.add(id);
+        continue;
       }
-      manquants.removeWhere(_chapitres.containsKey);
-      if (manquants.isEmpty) return;
+      _chapitres[id] = chapitre;
+      final idTitre = chapitre.idTitre;
+      if (idTitre != null && !_titres.containsKey(idTitre)) {
+        final titre = await _serviceBibliotheque.chargerTitre(idTitre);
+        if (titre != null) _titres[idTitre] = titre;
+      }
     }
-    _idsIntrouvables.addAll(manquants);
   }
 
   /// Relance un téléchargement en échec.
@@ -229,6 +272,8 @@ class EtatTelechargements extends EtatNotifiant {
 
   @override
   void dispose() {
+    _controleRegulier?.cancel();
+    _controleRegulier = null;
     unawaited(_abonnement.cancel());
     super.dispose();
   }

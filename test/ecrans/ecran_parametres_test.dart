@@ -45,6 +45,82 @@ void main() {
     await tester.pump();
   }
 
+  group('Mes langues', () {
+    testWidgets('affiche les langues en français, la favorite d\'abord', (
+      tester,
+    ) async {
+      await afficher(tester);
+
+      expect(find.text(Textes.sectionLangues), findsOneWidget);
+      expect(find.text('Français'), findsOneWidget);
+      expect(find.text('Anglais'), findsOneWidget);
+      expect(find.text('fr · ${Textes.favorite}'), findsOneWidget);
+      // La favorite n'a pas de bouton « Choisir comme favorite ».
+      expect(find.byTooltip(Textes.choisirCommeFavorite), findsOneWidget);
+    });
+
+    testWidgets('ajoute une langue depuis la liste, avec recherche sans '
+        'accents', (tester) async {
+      await afficher(tester);
+
+      await tester.tap(find.text(Textes.ajouterLangue));
+      await tester.pumpAndSettle();
+      // Les langues déjà choisies ne sont pas proposées.
+      expect(find.widgetWithText(ListTile, 'Français'), findsOneWidget);
+      await tester.enterText(find.byType(TextField).last, 'japon');
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Japonais'));
+      await tester.pumpAndSettle();
+
+      expect(parametres.langues, <String>['fr', 'en', 'ja']);
+      expect(telechargement.nombreAppelsReglesATous, 1);
+      expect(find.text(Textes.languesEnregistrees), findsOneWidget);
+    });
+
+    testWidgets('« Choisir comme favorite » met la langue en premier, et la '
+        'dernière langue ne peut pas être retirée', (tester) async {
+      await afficher(tester);
+
+      await tester.tap(find.byTooltip(Textes.choisirCommeFavorite));
+      await tester.pumpAndSettle();
+      expect(parametres.langues, <String>['en', 'fr']);
+      expect(find.text('en · ${Textes.favorite}'), findsOneWidget);
+
+      await tester.tap(find.byTooltip(Textes.retirerLangue).last);
+      await tester.pumpAndSettle();
+      expect(parametres.langues, <String>['en']);
+      final retirer = tester.widget<IconButton>(
+        find.widgetWithIcon(IconButton, Icons.close),
+      );
+      expect(retirer.onPressed, isNull);
+    });
+  });
+
+  testWidgets('les langues d\'un site sont un réglage avancé, replié s\'il '
+      'est vide', (tester) async {
+    bibliotheque.sources[0] = bibliotheque.sources[0].copierAvec(
+      langueParDefaut: '',
+    );
+    await afficher(tester);
+    expect(find.text(Textes.languesSite('')), findsNothing);
+    expect(find.textContaining(Textes.languesSite('')), findsOneWidget);
+
+    await tester.tap(find.byTooltip(Textes.modifierSite));
+    await tester.pumpAndSettle();
+
+    expect(find.text(Textes.reglageAvanceLangues), findsOneWidget);
+    expect(
+      find.widgetWithText(TextFormField, Textes.champLangues),
+      findsNothing,
+    );
+    await tester.tap(find.text(Textes.reglageAvanceLangues));
+    await tester.pumpAndSettle();
+    expect(
+      find.widgetWithText(TextFormField, Textes.champLangues),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('les quatre limites, leurs explications et l\'enregistrement', (
     tester,
   ) async {

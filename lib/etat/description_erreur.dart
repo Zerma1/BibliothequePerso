@@ -11,8 +11,13 @@ import 'package:flutter/foundation.dart';
 
 import '../modeles/erreur_base_de_donnees.dart';
 import '../services/erreur_service.dart';
-// L'état doit reconnaître l'erreur levée par les sites : elle traverse le
-// service sans être convertie (voir ServiceBibliotheque.ajouterTitreDepuisUrl).
+// EXCEPTION À LA RÈGLE DES COUCHES (etat → services seulement) : l'état doit
+// reconnaître l'erreur levée par les sites, qui traverse les services sans
+// être convertie (voir ServiceBibliotheque.ajouterTitreDepuisUrl et le
+// rapport de ServiceMisesAJour). Ce fichier est le SEUL de lib/etat/ à
+// importer lib/sources/ ; les autres états passent par [DescriptionErreur]
+// ou [estErreurDeSite]. À retirer quand les services exposeront eux-mêmes
+// un indicateur « erreur du site ».
 import '../sources/erreur_source.dart';
 
 /// Famille d'une erreur, qui détermine le message affiché.
@@ -67,7 +72,7 @@ class DescriptionErreur {
     if (erreur is ErreurService) {
       return DescriptionErreur(NatureErreur.refus, detail: erreur.message);
     }
-    debugPrint('Erreur inattendue dans l\'interface : $erreur\n$pile');
+    debugPrint("Erreur inattendue dans l'interface : $erreur\n$pile");
     return DescriptionErreur(
       NatureErreur.inattendue,
       detail: erreur.toString(),
@@ -83,6 +88,13 @@ class DescriptionErreur {
   @override
   String toString() => 'DescriptionErreur(${nature.name}, $detail)';
 }
+
+/// `true` si [erreur] vient d'un site (réseau, code HTTP, page illisible),
+/// et non de la base ou d'un refus du service.
+///
+/// Seul point de lib/etat/ qui connaît `ErreurSource` (voir l'exception
+/// documentée sur les imports de ce fichier).
+bool estErreurDeSite(Object? erreur) => erreur is ErreurSource;
 
 /// Résultat d'une action déclenchée par le client (ajout, actualisation…).
 ///

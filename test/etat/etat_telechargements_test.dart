@@ -41,6 +41,77 @@ void main() {
     expect(etat.nombreActifs, 0);
   });
 
+  group('suppressions prévues échues', () {
+    test('le contrôle supprime seulement les échéances passées, sauf le '
+        'chapitre ouvert dans le lecteur', () async {
+      final maintenant = DateTime.utc(2026, 11, 16, 12);
+      service.horloge = () => maintenant;
+      for (final id in <int>[10, 11, 20]) {
+        service.ajouterChapitreTelecharge(id);
+      }
+      service
+        ..planifierSuppressionDeTest(
+          10,
+          maintenant.subtract(const Duration(minutes: 1)),
+        )
+        ..planifierSuppressionDeTest(
+          11,
+          maintenant.add(const Duration(hours: 2)),
+        )
+        ..planifierSuppressionDeTest(
+          20,
+          maintenant.subtract(const Duration(hours: 1)),
+        )
+        ..protegerChapitre(20);
+      final etat = EtatTelechargements(
+        service,
+        bibliotheque,
+        controlerEcheances: false,
+      );
+      addTearDown(etat.dispose);
+
+      final nombre = await etat.controlerSuppressionsEchues();
+
+      expect(nombre, 1);
+      expect(service.pages.containsKey(10), isFalse);
+      expect(service.pages.containsKey(11), isTrue);
+      expect(service.pages.containsKey(20), isTrue);
+    });
+
+    test('deux contrôles rapprochés n\'en font qu\'un', () async {
+      final etat = EtatTelechargements(
+        service,
+        bibliotheque,
+        controlerEcheances: false,
+      );
+      addTearDown(etat.dispose);
+
+      await Future.wait(<Future<int>>[
+        etat.controlerSuppressionsEchues(),
+        etat.controlerSuppressionsEchues(),
+      ]);
+
+      expect(service.nombreControlesEcheances, 1);
+    });
+
+    // testWidgets : le temps y est simulé (pump avance les minuteurs).
+    testWidgets('le contrôle régulier tourne toutes les 15 minutes', (
+      tester,
+    ) async {
+      final etat = EtatTelechargements(service, bibliotheque);
+      await tester.pump(const Duration(minutes: 14));
+      expect(service.nombreControlesEcheances, 0);
+      await tester.pump(const Duration(minutes: 1));
+      expect(service.nombreControlesEcheances, 1);
+      await tester.pump(const Duration(minutes: 15));
+      await tester.pump(const Duration(minutes: 15));
+      expect(service.nombreControlesEcheances, 3);
+      etat.dispose();
+      await tester.pump(const Duration(hours: 1));
+      expect(service.nombreControlesEcheances, 3);
+    });
+  });
+
   test('associe chaque ligne à son chapitre et à son titre', () async {
     service
       ..modifierLigne(20, StatutTelechargement.enCours, faites: 2, total: 8)

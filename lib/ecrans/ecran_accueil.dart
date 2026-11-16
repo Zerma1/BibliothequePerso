@@ -5,6 +5,7 @@ library;
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
+import '../etat/etat_mises_a_jour.dart';
 import '../etat/etat_telechargements.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/textes.dart';
@@ -52,6 +53,30 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
   /// gardent leur état (recherche saisie, défilement) au lieu d'être
   /// recréés.
   final GlobalKey _cleContenu = GlobalKey(debugLabel: 'contenuAccueil');
+
+  /// Retour de l'application au premier plan (réveil de l'ordinateur,
+  /// fenêtre réactivée, application Android rouverte) : une échéance de
+  /// recherche des nouveaux chapitres ou de suppression prévue a pu passer
+  /// pendant la veille, que les minuteurs n'ont pas comptée.
+  late final AppLifecycleListener _cycleDeVie;
+
+  @override
+  void initState() {
+    super.initState();
+    _cycleDeVie = AppLifecycleListener(
+      onResume: () {
+        if (!mounted) return;
+        context.read<EtatMisesAJour>().controlerEcheance();
+        context.read<EtatTelechargements>().controlerSuppressionsEchues();
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _cycleDeVie.dispose();
+    super.dispose();
+  }
 
   void _choisirOnglet(int index) => setState(() => _indexOnglet = index);
 

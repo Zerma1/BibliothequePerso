@@ -15,6 +15,7 @@ import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
 import '../services/service_bibliotheque.dart';
 import '../services/service_telechargement.dart';
+import 'constantes_etat.dart';
 import 'description_erreur.dart';
 import 'etat_lecteur.dart';
 import 'outils_chapitres.dart';
@@ -25,11 +26,16 @@ class EtatTitre extends EtatNotifiant {
   ///
   /// Sans [serviceTelechargement], la fiche n'affiche pas l'état hors-ligne
   /// des chapitres (tests de l'étape 3).
+  ///
+  /// [maintenant] permet aux tests de fixer l'heure du compte à rebours des
+  /// suppressions prévues.
   EtatTitre(
     this._service,
     this.idTitre, {
     ServiceTelechargement? serviceTelechargement,
-  }) : _serviceTelechargement = serviceTelechargement {
+    DateTime Function()? maintenant,
+  }) : _serviceTelechargement = serviceTelechargement,
+       _maintenant = maintenant ?? (() => DateTime.now().toUtc()) {
     // La file change à chaque page téléchargée : la fiche suit la
     // progression de ses chapitres sans que le client ne recharge.
     _abonnement = serviceTelechargement?.changements.listen(
@@ -39,10 +45,52 @@ class EtatTitre extends EtatNotifiant {
 
   final ServiceBibliotheque _service;
   final ServiceTelechargement? _serviceTelechargement;
+  final DateTime Function() _maintenant;
   StreamSubscription<void>? _abonnement;
+
+  /// Rafraîchit le compte à rebours des suppressions prévues ; actif
+  /// seulement si un chapitre affiché en a une.
+  Timer? _minuterieCompteARebours;
 
   /// Identifiant du titre affiché.
   final int idTitre;
+
+  /// Langues appliquées à ce titre (propres au titre, sinon du site, sinon
+  /// réglage général), la favorite d'abord.
+  List<String> _langues = const <String>[];
+
+  /// Langues du réglage général du client (« Mes langues »).
+  List<String> _languesGenerales = const <String>[];
+
+  /// Chapitres téléchargés en double (même numéro, même langue).
+  Set<int> _idsDoublons = const <int>{};
+
+  /// Heure actuelle (UTC) pour le compte à rebours des suppressions.
+  DateTime get maintenant => _maintenant();
+
+  /// Langues appliquées à ce titre, la favorite d'abord.
+  List<String> get langues => _langues;
+
+  /// Langues du réglage général (« Mes langues »).
+  List<String> get languesGenerales => _languesGenerales;
+
+  /// `true` si le client a choisi des langues propres à ce titre (sinon le
+  /// titre suit le réglage général, ou l'ancien réglage de son site).
+  bool get aLanguesPropres => _titre?.listeLanguesPreferees.isNotEmpty ?? false;
+
+  /// `true` si [chapitre] est un doublon téléchargé.
+  bool estDoublon(Chapitre chapitre) => _idsDoublons.contains(chapitre.id);
+
+  /// Nombre de chapitres téléchargés en double.
+  int get nombreDoublons => _idsDoublons.length;
+
+  /// Nombre de chapitres dont la suppression automatique est prévue.
+  int get nombreSuppressionsPrevues => _chapitres
+      .where(
+        (chapitre) =>
+            chapitre.estTelecharge && chapitre.dateSuppressionPrevue != null,
+      )
+      .length;
 
   /// Lignes de la file de téléchargement des chapitres de ce titre.
   Map<int, Telechargement> _telechargements = const <int, Telechargement>{};
@@ -115,6 +163,7 @@ class EtatTitre extends EtatNotifiant {
     return EtatHorsLigne.depuis(
       chapitre,
       id == null ? null : _telechargements[id],
+      estDoublon: estDoublon(chapitre),
     );
   }
 
@@ -339,6 +388,92 @@ class EtatTitre extends EtatNotifiant {
     }
   }
 
+  /// Bouton « Garder » d'une suppression prévue : l'archive de [chapitre]
+  /// n'est plus jamais supprimée automatiquement (le client peut toujours
+  /// la supprimer lui-même).
+  Future<ResultatAction<bool>> garder(Chapitre chapitre) => _agirSurArchive(
+    chapitre,
+    (service, id) => service.annulerSuppression(id),
+  );
+
+  /// Bouton « Supprimer maintenant » d'une suppression prévue (ou choix
+  /// d'un doublon à retirer) : l'archive est effacée tout de suite.
+  Future<ResultatAction<bool>> supprimerMaintenant(Chapitre chapitre) =>
+      _agirSurArchive(
+        chapitre,
+        (service, id) => service.supprimerMaintenant(id),
+      );
+
+  Future<ResultatAction<bool>> _agirSurArchive(
+    Chapitre chapitre,
+    Future<void> Function(ServiceTelechargement service, int idChapitre) action,
+  ) async {
+    final service = _serviceTelechargement;
+    final id = chapitre.id;
+    if (service == null || id == null) {
+      return const ResultatAction<bool>.echec(
+        DescriptionErreur(NatureErreur.introuvable),
+      );
+    }
+    try {
+      await action(service, id);
+      await _relireTelechargements(relireChapitres: true);
+      return const ResultatAction<bool>.reussite(true);
+    } catch (erreur, pile) {
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    }
+  }
+
+  /// Change les langues de ce titre : [langues] par ordre de préférence (la
+  /// première est la favorite), ou `null` pour revenir au réglage général.
+  ///
+  /// Les règles de téléchargement sont réappliquées (une archive dans une
+  /// langue retirée passe en suppression prévue dans 24 heures). Si une
+  /// langue est ajoutée, le site est relu pour connaître les chapitres dans
+  /// cette langue, puis les règles sont réappliquées.
+  ///
+  /// Renvoie le nombre de nouveaux chapitres trouvés, ou une réussite sans
+  /// valeur (`null`) si les langues sont enregistrées mais que le site n'a
+  /// pas pu être relu (la prochaine actualisation le fera).
+  Future<ResultatAction<int?>> modifierLangues(List<String>? langues) async {
+    final anciennes = _langues.toSet();
+    try {
+      final service = _serviceTelechargement;
+      if (service != null) {
+        // Enregistre et applique les règles de ce titre.
+        await service.modifierLanguesTitre(idTitre, langues);
+      } else {
+        await _service.modifierLanguesTitre(idTitre, langues);
+      }
+      final numero = ++_numeroLecture;
+      final donnees = await _lireBase();
+      if (numero == _numeroLecture) _appliquer(donnees);
+      notifier();
+    } on _TitreIntrouvable {
+      _signalerIntrouvable();
+      notifier();
+      return const ResultatAction<int?>.echec(
+        DescriptionErreur(NatureErreur.introuvable),
+      );
+    } catch (erreur, pile) {
+      return ResultatAction<int?>.echec(DescriptionErreur.depuis(erreur, pile));
+    }
+    final ajoutees = _langues.where((langue) => !anciennes.contains(langue));
+    if (ajoutees.isEmpty) {
+      return const ResultatAction<int?>.reussite(0);
+    }
+    // Une langue ajoutée : ses chapitres ne sont connus qu'après une
+    // relecture du site (le service ne demande au site que les langues
+    // utiles). Les langues restent enregistrées même si le site ne répond
+    // pas.
+    final resultat = await actualiser();
+    if (!resultat.estReussi) {
+      return const ResultatAction<int?>.reussite(null);
+    }
+    await _appliquerRegles();
+    return ResultatAction<int?>.reussite(resultat.donnee);
+  }
+
   /// Crée l'état du lecteur ouvert sur [chapitre], ou `null` si les
   /// téléchargements ne sont pas disponibles.
   EtatLecteur? creerEtatLecteur(Chapitre chapitre) {
@@ -379,41 +514,85 @@ class EtatTitre extends EtatNotifiant {
     await _relireTelechargements(relireChapitres: true);
   }
 
+  /// Relecture de la file en cours, nouvelle relecture demandée pendant
+  /// celle-ci, et relecture des chapitres demandée par l'une des demandes
+  /// regroupées.
+  Future<void>? _relecture;
+  bool _relectureRedemandee = false;
+  bool _relireChapitresDemande = false;
+
   /// Relit la file pour les chapitres de ce titre ; relit aussi les
   /// chapitres si un téléchargement s'est terminé ou a été retiré (le
   /// marqueur « téléchargé » a changé en base).
-  Future<void> _relireTelechargements({bool relireChapitres = false}) async {
-    final service = _serviceTelechargement;
-    if (service == null || estLibere) return;
-    try {
-      final idsChapitres = <int>{
-        for (final chapitre in _chapitres)
-          if (chapitre.id != null) chapitre.id!,
-      };
-      final file = await service.chargerFile();
-      final nouveaux = <int, Telechargement>{
-        for (final telechargement in file)
-          if (idsChapitres.contains(telechargement.idChapitre))
-            telechargement.idChapitre: telechargement,
-      };
-      final anciens = _telechargements;
-      final statutsChanges =
-          anciens.length != nouveaux.length ||
-          nouveaux.entries.any(
-            (entree) => anciens[entree.key]?.statut != entree.value.statut,
-          );
-      _telechargements = nouveaux;
-      if ((relireChapitres || statutsChanges) && _titre != null) {
-        final chapitres = await _service.chargerChapitres(idTitre);
-        _chapitres = _trier(chapitres);
-        _mettreAJourNonLus();
-        _regrouper();
-      }
-      notifier();
-    } catch (erreur, pile) {
-      // Un échec de lecture de la file ne doit pas masquer la fiche.
-      debugPrint('File de téléchargement illisible : $erreur\n$pile');
+  ///
+  /// Pendant un téléchargement, le service prévient à chaque page : les
+  /// demandes qui arrivent pendant une relecture sont regroupées en une
+  /// seule relecture à la fin (comme dans `EtatTelechargements`).
+  Future<void> _relireTelechargements({bool relireChapitres = false}) {
+    if (_serviceTelechargement == null || estLibere) {
+      return Future<void>.value();
     }
+    if (relireChapitres) _relireChapitresDemande = true;
+    final enCours = _relecture;
+    if (enCours != null) {
+      _relectureRedemandee = true;
+      return enCours;
+    }
+    final nouvelle = _relireEnBoucle().whenComplete(() => _relecture = null);
+    _relecture = nouvelle;
+    return nouvelle;
+  }
+
+  Future<void> _relireEnBoucle() async {
+    final service = _serviceTelechargement!;
+    do {
+      _relectureRedemandee = false;
+      final relireChapitres = _relireChapitresDemande;
+      _relireChapitresDemande = false;
+      if (estLibere) return;
+      // Un chargement ou une actualisation lancé pendant la relecture lit
+      // déjà la base : sa réponse est plus récente que la nôtre.
+      final numero = _numeroLecture;
+      try {
+        final idsChapitres = <int>{
+          for (final chapitre in _chapitres)
+            if (chapitre.id != null) chapitre.id!,
+        };
+        final file = await service.chargerFile();
+        if (numero != _numeroLecture) continue;
+        final nouveaux = <int, Telechargement>{
+          for (final telechargement in file)
+            if (idsChapitres.contains(telechargement.idChapitre))
+              telechargement.idChapitre: telechargement,
+        };
+        final anciens = _telechargements;
+        final statutsChanges =
+            anciens.length != nouveaux.length ||
+            nouveaux.entries.any(
+              (entree) => anciens[entree.key]?.statut != entree.value.statut,
+            );
+        // Les chapitres sont aussi relus quand la file n'est pas en cours de
+        // traitement : le changement signalé vient alors d'une suppression
+        // prévue posée ou annulée, d'un doublon supprimé… (pendant un
+        // téléchargement, le service prévient à chaque page : on ne relit
+        // les chapitres qu'à un changement de statut).
+        if ((relireChapitres || statutsChanges || !service.estEnCours) &&
+            _titre != null) {
+          final chapitres = await _service.chargerChapitres(idTitre);
+          final doublons = await service.chargerDoublons(idTitre);
+          if (numero != _numeroLecture) continue;
+          _chapitres = _trier(chapitres);
+          _idsDoublons = _idsDepuisDoublons(doublons);
+          _mettreAJourNonLus();
+          _regrouper();
+        }
+        _telechargements = nouveaux;
+        notifier();
+      } catch (erreur, pile) {
+        // Un échec de lecture de la file ne doit pas masquer la fiche.
+        debugPrint('File de téléchargement illisible : $erreur\n$pile');
+      }
+    } while (_relectureRedemandee);
   }
 
   /// Lit toutes les données du titre sans modifier l'état ; lève une erreur
@@ -444,6 +623,9 @@ class EtatTitre extends EtatNotifiant {
               if (idsChapitres.contains(telechargement.idChapitre))
                 telechargement.idChapitre: telechargement,
           };
+    final doublons = service == null
+        ? const <List<Chapitre>>[]
+        : await service.chargerDoublons(idTitre);
 
     return (
       titre: titre,
@@ -456,8 +638,17 @@ class EtatTitre extends EtatNotifiant {
       },
       chapitres: tries,
       telechargements: telechargements,
+      langues: await _service.languesPourTitre(titre),
+      languesGenerales: await _service.chargerLanguesGenerales(),
+      idsDoublons: _idsDepuisDoublons(doublons),
     );
   }
+
+  static Set<int> _idsDepuisDoublons(List<List<Chapitre>> doublons) => <int>{
+    for (final groupe in doublons)
+      for (final chapitre in groupe)
+        if (chapitre.id != null) chapitre.id!,
+  };
 
   /// Le dépôt trie par numéro croissant ; la fiche montre le plus récent en
   /// haut. À numéro égal (plusieurs langues), le plus récemment enregistré
@@ -477,19 +668,37 @@ class EtatTitre extends EtatNotifiant {
     _idsListesDuTitre = donnees.idsListesDuTitre;
     _chapitres = donnees.chapitres;
     _telechargements = donnees.telechargements;
+    _langues = donnees.langues;
+    _languesGenerales = donnees.languesGenerales;
+    _idsDoublons = donnees.idsDoublons;
     _regrouper();
   }
 
-  /// Une ligne par numéro, la plus récente en haut.
+  /// Une ligne par numéro (chaque oneshot à part), la plus récente en haut.
   void _regrouper() {
-    _groupes = regrouperParNumero(
-      _chapitres,
-      languesPreferees(_source),
-    ).reversed.toList();
+    _groupes = regrouperParNumero(_chapitres, _langues).reversed.toList();
+    _mettreAJourCompteARebours();
+  }
+
+  /// Lance (ou arrête) le rafraîchissement du compte à rebours selon qu'un
+  /// chapitre a une suppression prévue.
+  void _mettreAJourCompteARebours() {
+    if (estLibere) return;
+    if (nombreSuppressionsPrevues == 0) {
+      _minuterieCompteARebours?.cancel();
+      _minuterieCompteARebours = null;
+    } else {
+      _minuterieCompteARebours ??= Timer.periodic(
+        intervalleCompteARebours,
+        (_) => notifier(),
+      );
+    }
   }
 
   @override
   void dispose() {
+    _minuterieCompteARebours?.cancel();
+    _minuterieCompteARebours = null;
     unawaited(_abonnement?.cancel());
     super.dispose();
   }
@@ -516,6 +725,9 @@ typedef _DonneesTitre = ({
   Set<int> idsListesDuTitre,
   List<Chapitre> chapitres,
   Map<int, Telechargement> telechargements,
+  List<String> langues,
+  List<String> languesGenerales,
+  Set<int> idsDoublons,
 });
 
 /// Signal interne : le titre n'existe plus en base.

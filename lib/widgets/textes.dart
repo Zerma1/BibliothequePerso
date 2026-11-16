@@ -487,6 +487,12 @@ abstract final class Textes {
   static String infoBulleHorsLigne(EtatHorsLigne etat) {
     switch (etat.statut) {
       case StatutHorsLigne.telecharge:
+        if (etat.aSuppressionPrevue) {
+          return 'Suppression prévue — appuyer pour supprimer maintenant';
+        }
+        if (etat.estDoublon) {
+          return 'Doublon — appuyer pour supprimer cette version';
+        }
         return 'Téléchargé — appuyer pour supprimer le téléchargement';
       case StatutHorsLigne.enFile:
         return 'En file d\'attente — appuyer pour retirer de la file';
@@ -530,6 +536,218 @@ abstract final class Textes {
       'Supprimer le fichier hors-ligne de « $nomChapitre » ?\n'
       'Le chapitre reste dans la liste. Pour un titre favori ou suivi, il '
       'pourra être téléchargé de nouveau automatiquement.';
+
+  /// Chapitre désigné avec son titre (écran Téléchargements, qui mélange les
+  /// titres).
+  static String chapitreDuTitre(String nomTitre, String nomChapitre) =>
+      '$nomTitre – $nomChapitre';
+
+  // --------------------------- Titre : suppressions prévues et doublons
+
+  /// Légende : archive dont la suppression automatique est prévue.
+  static const String legendeSuppressionPrevue = 'Suppression prévue (24 h)';
+
+  /// Légende : archive en double.
+  static const String legendeDoublon = 'Doublon (à vous de choisir)';
+
+  /// Compte à rebours d'une suppression prévue.
+  static String suppressionDans(Duration reste) {
+    if (reste.inMinutes < 1) return 'Suppression imminente';
+    final heures = reste.inHours;
+    final minutes = reste.inMinutes % 60;
+    if (heures == 0) return 'Supprimé dans $minutes min';
+    return 'Supprimé dans $heures h ${minutes.toString().padLeft(2, '0')}';
+  }
+
+  /// Explication d'une suppression prévue (sous le compte à rebours).
+  static const String explicationSuppressionPrevue =
+      'Ce chapitre ne fait plus partie de vos règles de téléchargement.';
+
+  /// Bouton : garder une archive dont la suppression est prévue.
+  static const String garder = 'Garder';
+
+  /// Bouton : supprimer tout de suite une archive.
+  static const String supprimerMaintenant = 'Supprimer maintenant';
+
+  /// Archive gardée.
+  static const String chapitreGarde =
+      'Chapitre gardé : il ne sera plus supprimé automatiquement.';
+
+  /// Explication d'un doublon.
+  static const String explicationDoublon =
+      "Doublon : même numéro et même langue qu'une autre version "
+      'téléchargée. Supprimez celle que vous ne voulez pas.';
+
+  /// Bouton : supprimer un doublon.
+  static const String supprimerCeDoublon = 'Supprimer ce doublon';
+
+  /// Mention sur un numéro dont une version cachée demande une action.
+  static const String versionsATrier = 'Versions à trier';
+
+  // ------------------------------------------------------ Titre : langues
+
+  /// Titre de la section des langues d'un titre.
+  static const String languesDuTitre = 'Langues de ce titre';
+
+  /// Langues d'un titre qui suit le réglage général.
+  static String languesTitreGenerales(List<String> langues) =>
+      'Réglage général (« Mes langues ») : ${listeLangues(langues)}';
+
+  /// Langues d'un titre choisies pour lui.
+  static String languesTitrePropres(List<String> langues) =>
+      'Personnalisées : ${listeLangues(langues)}';
+
+  /// Langues d'un titre qui suit l'ancien réglage de son site.
+  static String languesTitreSite(List<String> langues) =>
+      'Réglage du site : ${listeLangues(langues)}';
+
+  /// Bouton : modifier les langues d'un titre.
+  static const String modifierLangues = 'Modifier';
+
+  /// Bouton : revenir au réglage général.
+  static const String revenirAuReglageGeneral = 'Revenir au réglage général';
+
+  /// Choix du dialogue : suivre le réglage général.
+  static const String suivreReglageGeneral = 'Suivre « Mes langues »';
+
+  /// Choix du dialogue : langues propres au titre.
+  static const String languesPersonnalisees = 'Langues personnalisées';
+
+  /// Explication du dialogue des langues d'un titre.
+  static const String explicationLanguesTitre =
+      "Seuls les chapitres dans ces langues sont téléchargés pour ce titre. "
+      "Une langue retirée : ses chapitres téléchargés seront supprimés dans "
+      "24 heures (vous pourrez les garder). Une langue ajoutée : le site est "
+      "relu pour trouver ses chapitres.";
+
+  /// Langues d'un titre enregistrées.
+  static String languesTitreEnregistrees(int? nombreNouveaux) {
+    if (nombreNouveaux == null) {
+      return "Langues enregistrées. Le site n'a pas pu être relu : les "
+          "chapitres des nouvelles langues apparaîtront à la prochaine "
+          "actualisation.";
+    }
+    if (nombreNouveaux == 0) return 'Langues enregistrées.';
+    return 'Langues enregistrées : ${nouveauxChapitres(nombreNouveaux)}.';
+  }
+
+  // -------------------------------------------------------- Mes langues
+
+  /// Section des langues de lecture.
+  static const String sectionLangues = 'Mes langues';
+
+  /// Explication de la section des langues.
+  static const String explicationMesLangues =
+      "Langues dans lesquelles vous lisez, par ordre de préférence. Pour "
+      "chaque chapitre, une seule version est téléchargée : dans la langue "
+      "favorite si elle existe, sinon dans la suivante. Les chapitres dans "
+      "d'autres langues ne sont jamais téléchargés automatiquement. Chaque "
+      "titre peut avoir ses propres langues (sur sa fiche).";
+
+  /// Bouton : ajouter une langue.
+  static const String ajouterLangue = 'Ajouter une langue';
+
+  /// Titre du dialogue de choix d'une langue.
+  static const String choisirUneLangue = 'Choisir une langue';
+
+  /// Champ de recherche d'une langue.
+  static const String rechercherLangue = 'Rechercher une langue';
+
+  /// Aucune langue ne correspond à la recherche.
+  static const String aucuneLangueTrouvee = 'Aucune langue trouvée.';
+
+  /// Action : la langue devient la favorite.
+  static const String choisirCommeFavorite = 'Choisir comme favorite';
+
+  /// Mention de la langue favorite.
+  static const String favorite = 'favorite';
+
+  /// Action : monter une langue.
+  static const String monterLangue = 'Préférer (monter)';
+
+  /// Action : descendre une langue.
+  static const String descendreLangue = 'Moins préférer (descendre)';
+
+  /// Action : retirer une langue.
+  static const String retirerLangue = 'Retirer';
+
+  /// Nombre maximal de langues atteint.
+  static String maximumLangues(int nombre) =>
+      'Vous avez atteint le maximum de $nombre langues.';
+
+  /// Langues enregistrées (réglage général).
+  static const String languesEnregistrees =
+      'Langues enregistrées : les téléchargements sont mis à jour.';
+
+  /// Nom français d'une langue (code ISO 639-1, variante régionale
+  /// éventuelle), ou le code en majuscules s'il est inconnu.
+  static String nomLangue(String code) =>
+      nomsLangues[code.toLowerCase()] ?? code.toUpperCase();
+
+  /// Liste lisible de langues : « Français (favorite), Anglais ».
+  static String listeLangues(List<String> codes) {
+    if (codes.isEmpty) return '—';
+    return <String>[
+      for (var i = 0; i < codes.length; i++)
+        i == 0 ? '${nomLangue(codes[i])} ($favorite)' : nomLangue(codes[i]),
+    ].join(', ');
+  }
+
+  /// Langues proposées à l'ajout, avec leur nom en français (codes ISO
+  /// 639-1, et variantes régionales utilisées par MangaDex). Triées par nom
+  /// à l'affichage.
+  static const Map<String, String> nomsLangues = <String, String>{
+    'fr': 'Français',
+    'en': 'Anglais',
+    'es': 'Espagnol',
+    'es-la': 'Espagnol (Amérique latine)',
+    'pt': 'Portugais',
+    'pt-br': 'Portugais (Brésil)',
+    'it': 'Italien',
+    'de': 'Allemand',
+    'nl': 'Néerlandais',
+    'pl': 'Polonais',
+    'ru': 'Russe',
+    'uk': 'Ukrainien',
+    'cs': 'Tchèque',
+    'sk': 'Slovaque',
+    'hu': 'Hongrois',
+    'ro': 'Roumain',
+    'bg': 'Bulgare',
+    'sr': 'Serbe',
+    'hr': 'Croate',
+    'lt': 'Lituanien',
+    'el': 'Grec',
+    'tr': 'Turc',
+    'sv': 'Suédois',
+    'no': 'Norvégien',
+    'da': 'Danois',
+    'fi': 'Finnois',
+    'ca': 'Catalan',
+    'ar': 'Arabe',
+    'he': 'Hébreu',
+    'fa': 'Persan',
+    'hi': 'Hindi',
+    'bn': 'Bengali',
+    'ta': 'Tamoul',
+    'th': 'Thaï',
+    'vi': 'Vietnamien',
+    'id': 'Indonésien',
+    'ms': 'Malais',
+    'tl': 'Tagalog',
+    'my': 'Birman',
+    'mn': 'Mongol',
+    'kk': 'Kazakh',
+    'ja': 'Japonais',
+    'ja-ro': 'Japonais (romanisé)',
+    'ko': 'Coréen',
+    'ko-ro': 'Coréen (romanisé)',
+    'zh': 'Chinois (simplifié)',
+    'zh-hk': 'Chinois (traditionnel)',
+    'zh-ro': 'Chinois (romanisé)',
+    'eo': 'Espéranto',
+    'la': 'Latin',
+  };
 
   /// Chapitre ajouté à la file.
   static const String telechargementAjoute =
@@ -647,7 +865,9 @@ abstract final class Textes {
       'Les chapitres sont téléchargés automatiquement pour la lecture '
       'hors-ligne selon les listes du titre. Un titre ni favori ni suivi '
       'n\'est jamais téléchargé automatiquement. Une seule version est '
-      'gardée par numéro de chapitre, dans la langue préférée du site.';
+      'gardée par numéro de chapitre, selon « Mes langues ». Un chapitre '
+      'qui sort des règles est supprimé 24 heures plus tard (il est affiché '
+      'en rouge d\'ici là, et vous pouvez le garder).';
 
   /// Nom d'une limite de téléchargement.
   static String libelleLimite(LimiteTelechargement limite) {
@@ -775,13 +995,17 @@ abstract final class Textes {
   static const String champNomSiteObligatoire = 'Nom';
 
   /// Champ des langues d'un site.
-  static const String champLangues = 'Langues, par ordre de préférence';
+  static const String champLangues = 'Langues propres à ce site';
 
   /// Aide du champ des langues.
   static const String aideLangues =
-      'Exemple : « fr,en » = français en priorité ; si un chapitre sort '
-      'd\'abord en anglais, il est téléchargé puis remplacé par la version '
-      'française à sa sortie.';
+      "Laissez vide pour suivre « Mes langues » (conseillé). Sinon, codes "
+      "par ordre de préférence : « fr,en » = français en priorité ; si un "
+      "chapitre sort d'abord en anglais, il est téléchargé puis remplacé par "
+      "la version française à sa sortie.";
+
+  /// Titre repliable du réglage avancé des langues d'un site.
+  static const String reglageAvanceLangues = 'Réglage avancé : langues du site';
 
   /// Langues mal saisies.
   static const String erreurLangues =
@@ -797,8 +1021,9 @@ abstract final class Textes {
 
   /// Langues d'un site dans la liste.
   static String languesSite(String langues) => langues.isEmpty
-      ? 'Langues : non précisées (fr,en par défaut)'
-      : 'Langues : ${langues.toUpperCase().replaceAll(',', ', ')}';
+      ? 'Langues : celles de « Mes langues »'
+      : 'Langues propres au site : '
+            '${langues.toUpperCase().replaceAll(',', ', ')}';
 
   /// Site modifié.
   static String siteModifie(String nom) => 'Site « $nom » modifié.';

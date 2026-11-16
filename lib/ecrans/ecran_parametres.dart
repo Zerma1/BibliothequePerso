@@ -4,11 +4,13 @@ library;
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
+import '../etat/description_erreur.dart';
 import '../etat/etat_mises_a_jour.dart';
 import '../etat/etat_parametres.dart';
 import '../etat/etat_sources.dart';
 import '../modeles/source.dart';
 import '../widgets/constantes_interface.dart';
+import '../widgets/editeur_langues.dart';
 import '../widgets/messages.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
@@ -32,6 +34,10 @@ class EcranParametres extends StatelessWidget {
           child: ListView(
             padding: const EdgeInsets.all(espacementMoyen),
             children: const <Widget>[
+              // Les langues d'abord : c'est le réglage qui décide de ce qui
+              // est téléchargé, avant les limites de nombre.
+              _SectionLangues(),
+              SizedBox(height: espacementGrand),
               _SectionMisesAJour(),
               SizedBox(height: espacementGrand),
               _SectionTelechargements(),
@@ -58,6 +64,57 @@ class _TitreSection extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: espacementPetit),
       child: Text(texte, style: Theme.of(context).textTheme.titleLarge),
+    );
+  }
+}
+
+// ---------------------------------------------------------------- Mes langues
+
+/// Langues de lecture du client (réglage général) : ajout depuis une liste
+/// en français, retrait, ordre, favorite. Chaque changement est enregistré
+/// aussitôt.
+class _SectionLangues extends StatelessWidget {
+  const _SectionLangues();
+
+  Future<void> _executer(
+    BuildContext context,
+    Future<ResultatAction<bool>> action,
+  ) async {
+    final resultat = await action;
+    if (context.mounted) {
+      afficherResultat(context, resultat, succes: Textes.languesEnregistrees);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final etat = context.watch<EtatParametres>();
+    if (!etat.estCharge) {
+      // Chargement et erreur sont affichés par la section Téléchargements
+      // (même lecture des réglages).
+      return const _TitreSection(Textes.sectionLangues);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        const _TitreSection(Textes.sectionLangues),
+        Text(
+          Textes.explicationMesLangues,
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: espacementPetit),
+        EditeurLangues(
+          langues: etat.langues,
+          nombreMaximal: EtatParametres.nombreMaximalLangues,
+          estOccupe: etat.estEnEnregistrementLangues,
+          surAjouter: (code) => _executer(context, etat.ajouterLangue(code)),
+          surRetirer: (code) => _executer(context, etat.retirerLangue(code)),
+          surDeplacer: (code, decalage) =>
+              _executer(context, etat.deplacerLangue(code, decalage)),
+          surChoisirFavorite: (code) =>
+              _executer(context, etat.choisirFavorite(code)),
+        ),
+      ],
     );
   }
 }
@@ -513,23 +570,36 @@ class _EtatDialogueSite extends State<_DialogueSite> {
                       : null,
                 ),
                 const SizedBox(height: espacementMoyen),
-                TextFormField(
-                  controller: _langues,
-                  decoration: const InputDecoration(
-                    labelText: Textes.champLangues,
-                    helperText: Textes.aideLangues,
-                    helperMaxLines: 4,
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: _validerLangues,
-                ),
-                const SizedBox(height: espacementMoyen),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text(Textes.siteActif),
                   subtitle: const Text(Textes.aideSiteActif),
                   value: _estActive,
                   onChanged: (valeur) => setState(() => _estActive = valeur),
+                ),
+                // Réglage avancé, replié : « Mes langues » (Paramètres) et
+                // les langues de chaque titre suffisent dans presque tous
+                // les cas. Déplié d'office si le site a déjà des langues
+                // propres, pour que le client voie ce qui s'applique.
+                ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  initiallyExpanded: widget.source.langueParDefaut.isNotEmpty,
+                  title: const Text(Textes.reglageAvanceLangues),
+                  childrenPadding: const EdgeInsets.only(
+                    bottom: espacementPetit,
+                  ),
+                  children: <Widget>[
+                    TextFormField(
+                      controller: _langues,
+                      decoration: const InputDecoration(
+                        labelText: Textes.champLangues,
+                        helperText: Textes.aideLangues,
+                        helperMaxLines: 5,
+                        border: OutlineInputBorder(),
+                      ),
+                      validator: _validerLangues,
+                    ),
+                  ],
                 ),
               ],
             ),

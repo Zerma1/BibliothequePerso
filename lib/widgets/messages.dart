@@ -31,6 +31,33 @@ void afficherResultat<T>(
   }
 }
 
+/// Demande au client de confirmer la suppression de l'archive du chapitre
+/// [nomChapitre] ; renvoie `true` s'il confirme. Partagé par la fiche du
+/// titre et l'écran Téléchargements pour que la question soit la même.
+Future<bool> confirmerSuppressionTelechargement(
+  BuildContext context,
+  String nomChapitre,
+) async {
+  final confirme = await showDialog<bool>(
+    context: context,
+    builder: (contexteDialogue) => AlertDialog(
+      title: const Text(Textes.supprimerTelechargement),
+      content: Text(Textes.confirmationSuppressionTelechargement(nomChapitre)),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(contexteDialogue).pop(false),
+          child: const Text(Textes.annuler),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(contexteDialogue).pop(true),
+          child: const Text(Textes.supprimer),
+        ),
+      ],
+    ),
+  );
+  return confirme ?? false;
+}
+
 /// Ouvre [url] dans le navigateur du système.
 ///
 /// Ce n'est pas une requête HTTP de l'application : c'est le navigateur qui

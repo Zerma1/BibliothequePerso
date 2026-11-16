@@ -76,6 +76,14 @@ const double largeurMaxCouvertureFiche = 300;
 /// deviendraient pénibles à lire sur un grand écran.
 const double largeurMaxFormulaire = 560;
 
+/// Hauteur maximale d'un dialogue qui contient une longue liste (choix d'une
+/// langue), en part de la hauteur de l'écran.
+const double fractionHauteurDialogueListe = 0.6;
+
+/// Opacité du fond rouge d'un chapitre dont la suppression est prévue : une
+/// teinte légère qui attire l'œil sans gêner la lecture du texte.
+const double opaciteFondSuppressionPrevue = 0.35;
+
 /// Petit espacement entre éléments.
 const double espacementPetit = 8;
 

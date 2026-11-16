@@ -26,6 +26,52 @@ void main() {
       await etat.charger();
     });
 
+    group('Mes langues', () {
+      test('charge les langues, la première est la favorite', () {
+        expect(etat.langues, <String>['fr', 'en']);
+        expect(etat.langueFavorite, 'fr');
+        expect(etat.peutRetirerLangue, isTrue);
+      });
+
+      test('ajoute, déplace, choisit la favorite et retire, en '
+          'enregistrant et appliquant les règles à chaque fois', () async {
+        expect((await etat.ajouterLangue('ja')).estReussi, isTrue);
+        expect(parametres.langues, <String>['fr', 'en', 'ja']);
+
+        await etat.deplacerLangue('ja', -1);
+        expect(etat.langues, <String>['fr', 'ja', 'en']);
+
+        await etat.choisirFavorite('en');
+        expect(etat.langues, <String>['en', 'fr', 'ja']);
+        expect(etat.langueFavorite, 'en');
+
+        await etat.retirerLangue('fr');
+        expect(parametres.langues, <String>['en', 'ja']);
+        expect(telechargement.nombreAppelsReglesATous, 4);
+        expect(etat.estEnEnregistrementLangues, isFalse);
+      });
+
+      test('une langue déjà choisie ou un déplacement hors limites ne '
+          'change rien', () async {
+        await etat.ajouterLangue('fr');
+        await etat.deplacerLangue('fr', -1);
+        await etat.deplacerLangue('en', 1);
+        expect(etat.langues, <String>['fr', 'en']);
+        expect(telechargement.nombreAppelsReglesATous, 0);
+      });
+
+      test('la dernière langue ne peut pas être retirée', () async {
+        await etat.retirerLangue('en');
+        expect(etat.peutRetirerLangue, isFalse);
+
+        final resultat = await etat.retirerLangue('fr');
+
+        expect(resultat.estReussi, isFalse);
+        expect(resultat.erreur!.nature, NatureErreur.refus);
+        expect(etat.langues, <String>['fr']);
+      });
+    });
+
     test('charge les réglages enregistrés', () {
       expect(etat.estCharge, isTrue);
       expect(etat.valeur(LimiteTelechargement.favorisLusConserves), 3);

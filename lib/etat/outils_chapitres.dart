@@ -1,41 +1,18 @@
-/// Outils partagés par les états qui affichent des chapitres : langues
-/// préférées d'un site, regroupement des versions par numéro et état
-/// hors-ligne d'un chapitre.
+/// Outils partagés par les états qui affichent des chapitres : regroupement
+/// des versions par numéro et état hors-ligne d'un chapitre.
+///
+/// Les langues à appliquer viennent du service
+/// (`ServiceBibliotheque.languesPourTitre` : titre, puis site, puis réglage
+/// général), pour que l'interface mette en avant la version que le service
+/// télécharge.
 library;
 
 import '../modeles/chapitre.dart';
-import '../modeles/source.dart';
 import '../modeles/telechargement.dart';
 import '../services/politique_telechargement.dart';
-import '../services/service_bibliotheque.dart';
 
-/// Langues préférées d'un site (codes ISO 639-1 par ordre de préférence).
-///
-/// Même découpage que le service de téléchargement (« fr, en ,,FR » →
-/// `[fr, en]`) : l'interface met donc en avant la version que le service
-/// télécharge. Sans langue réglée, on prend les langues par défaut du client.
-// LIMITE : la logique est recopiée ici car la couche `etat` ne doit pas
-// importer `sources/` (où vit `SourceMangaDex.languesIsoDepuisPreference`) et
-// le service ne l'expose pas publiquement.
-List<String> languesPreferees(Source? source) {
-  List<String> decouper(String preference) {
-    final codes = <String>[];
-    for (final morceau in preference.split(',')) {
-      final code = morceau.trim().toLowerCase();
-      if (code.isNotEmpty && !codes.contains(code)) {
-        codes.add(code);
-      }
-    }
-    return codes;
-  }
-
-  final langues = decouper(source?.langueParDefaut ?? '');
-  return langues.isEmpty
-      ? decouper(ServiceBibliotheque.languesParDefaut)
-      : langues;
-}
-
-/// Toutes les versions d'un même numéro de chapitre.
+/// Toutes les versions d'un même numéro de chapitre (un oneshot forme
+/// toujours son propre groupe).
 class GroupeChapitres {
   /// Crée le groupe.
   const GroupeChapitres({required this.retenu, required this.autres});
@@ -113,7 +90,13 @@ enum StatutHorsLigne {
 /// État hors-ligne d'un chapitre et progression éventuelle.
 class EtatHorsLigne {
   /// Crée l'état.
-  const EtatHorsLigne(this.statut, {this.progression, this.messageErreur});
+  const EtatHorsLigne(
+    this.statut, {
+    this.progression,
+    this.messageErreur,
+    this.dateSuppressionPrevue,
+    this.estDoublon = false,
+  });
 
   /// Chapitre seulement listé.
   static const EtatHorsLigne nonTelecharge = EtatHorsLigne(
@@ -129,14 +112,41 @@ class EtatHorsLigne {
   /// Cause de l'échec, si [statut] vaut [StatutHorsLigne.echec].
   final String? messageErreur;
 
+  /// Date (UTC) à laquelle les règles de conservation supprimeront
+  /// l'archive (suppression différée de 24 heures), ou `null`.
+  final DateTime? dateSuppressionPrevue;
+
+  /// `true` si l'archive est un doublon (même numéro et même langue qu'une
+  /// autre archive du titre) : le client choisit laquelle garder.
+  final bool estDoublon;
+
+  /// `true` si une suppression automatique est prévue pour l'archive.
+  bool get aSuppressionPrevue =>
+      statut == StatutHorsLigne.telecharge && dateSuppressionPrevue != null;
+
+  /// Temps restant avant la suppression prévue à l'instant [maintenant]
+  /// (jamais négatif), ou `null` si aucune suppression n'est prévue.
+  Duration? tempsAvantSuppression(DateTime maintenant) {
+    final date = dateSuppressionPrevue;
+    if (!aSuppressionPrevue || date == null) return null;
+    final reste = date.difference(maintenant);
+    return reste.isNegative ? Duration.zero : reste;
+  }
+
   /// Calcule l'état d'un [chapitre] à partir de sa ligne de file
   /// [telechargement] (ou `null` s'il n'est pas dans la file).
+  /// [estDoublon] vient de `ServiceTelechargement.chargerDoublons`.
   factory EtatHorsLigne.depuis(
     Chapitre chapitre,
-    Telechargement? telechargement,
-  ) {
+    Telechargement? telechargement, {
+    bool estDoublon = false,
+  }) {
     if (chapitre.estTelecharge) {
-      return const EtatHorsLigne(StatutHorsLigne.telecharge);
+      return EtatHorsLigne(
+        StatutHorsLigne.telecharge,
+        dateSuppressionPrevue: chapitre.dateSuppressionPrevue,
+        estDoublon: estDoublon,
+      );
     }
     switch (telechargement?.statut) {
       case null:

@@ -7,6 +7,7 @@ import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/telechargement.dart';
 import 'package:bibliotheque_perso/modeles/titre_alternatif.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
+import 'package:bibliotheque_perso/widgets/indicateur_hors_ligne.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -154,6 +155,164 @@ void main() {
       expect(find.text(Textes.aideAppuiChapitre), findsOneWidget);
       expect(find.text('Téléchargé'), findsOneWidget);
       expect(find.text('Non téléchargé (en ligne seulement)'), findsOneWidget);
+    });
+
+    testWidgets('suppression prévue : compte à rebours en rouge, puis '
+        '« Garder »', (tester) async {
+      preparer();
+      telechargement
+        ..ajouterChapitreTelecharge(1)
+        ..planifierSuppressionDeTest(
+          1,
+          DateTime.now().toUtc().add(const Duration(hours: 5)),
+        );
+      await afficherAvecTelechargements(tester);
+
+      final compteARebours = find.textContaining('Supprimé dans 4 h');
+      expect(compteARebours, findsOneWidget);
+      final couleurs = Theme.of(tester.element(compteARebours)).colorScheme;
+      expect(tester.widget<Text>(compteARebours).style?.color, couleurs.error);
+      expect(find.text(Textes.legendeSuppressionPrevue), findsOneWidget);
+      expect(
+        find.byTooltip(
+          'Suppression prévue — appuyer pour supprimer maintenant',
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text(Textes.garder));
+      await tester.pumpAndSettle();
+
+      expect(telechargement.gardes, contains(1));
+      expect(find.textContaining('Supprimé dans'), findsNothing);
+      expect(find.text(Textes.chapitreGarde), findsOneWidget);
+    });
+
+    testWidgets('« Supprimer maintenant » efface l\'archive sans attendre', (
+      tester,
+    ) async {
+      preparer();
+      telechargement
+        ..ajouterChapitreTelecharge(1)
+        ..planifierSuppressionDeTest(
+          1,
+          DateTime.now().toUtc().add(const Duration(minutes: 30)),
+        );
+      await afficherAvecTelechargements(tester);
+      expect(find.text('Supprimé dans 29 min'), findsOneWidget);
+
+      await tester.tap(find.text(Textes.supprimerMaintenant));
+      await tester.pumpAndSettle();
+
+      expect(telechargement.journal, contains('supprimerMaintenant:1'));
+      expect(telechargement.pages.containsKey(1), isFalse);
+      expect(find.text(Textes.supprimerMaintenant), findsNothing);
+    });
+
+    testWidgets('doublons en orange, dépliés, et le client choisit', (
+      tester,
+    ) async {
+      preparer();
+      // Deuxième version anglaise du chapitre 1 (autre groupe de traduction).
+      service.chapitresParTitre[1]!.add(
+        const Chapitre(
+          id: 3,
+          idTitre: 1,
+          urlChapitre: 'https://mangadex.org/chapter/3',
+          nom: 'Le début (autre scan)',
+          numero: 1,
+          langue: 'en',
+        ),
+      );
+      telechargement
+        ..ajouterChapitreTelecharge(1)
+        ..ajouterChapitreTelecharge(3);
+      await afficherAvecTelechargements(tester);
+
+      // Le numéro est déplié d'office : les deux versions sont visibles.
+      expect(find.text('Le début'), findsOneWidget);
+      expect(find.text('Le début (autre scan)'), findsOneWidget);
+      expect(find.text(Textes.explicationDoublon), findsNWidgets(2));
+      expect(find.text(Textes.legendeDoublon), findsOneWidget);
+      final explication = find.text(Textes.explicationDoublon).first;
+      final couleurs = Theme.of(tester.element(explication)).colorScheme;
+      expect(
+        tester.widget<Text>(explication).style?.color,
+        couleurDoublon(couleurs),
+      );
+
+      await tester.tap(find.text(Textes.supprimerCeDoublon).last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, Textes.supprimer));
+      await tester.pumpAndSettle();
+
+      expect(find.text(Textes.explicationDoublon), findsNothing);
+      expect(
+        telechargement.pages.keys.where((id) => id == 1 || id == 3),
+        hasLength(1),
+      );
+    });
+
+    testWidgets('deux oneshots sont deux lignes distinctes', (tester) async {
+      preparer();
+      service.chapitresParTitre[1]!.addAll(const <Chapitre>[
+        Chapitre(
+          id: 7,
+          idTitre: 1,
+          urlChapitre: 'u7',
+          nom: 'Oneshot A',
+          numero: 0,
+        ),
+        Chapitre(
+          id: 8,
+          idTitre: 1,
+          urlChapitre: 'u8',
+          nom: 'Oneshot B',
+          numero: 0,
+        ),
+      ]);
+      await afficherAvecTelechargements(tester);
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Oneshot A'), findsOneWidget);
+      expect(find.text('Oneshot B'), findsOneWidget);
+      expect(find.text(Textes.enTeteNumeros(4, 4)), findsOneWidget);
+    });
+
+    testWidgets('langues du titre : personnalisées puis retour au réglage '
+        'général', (tester) async {
+      preparer();
+      await afficherAvecTelechargements(tester);
+      expect(
+        find.text(Textes.languesTitreGenerales(<String>['fr', 'en'])),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text(Textes.modifierLangues));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(Textes.languesPersonnalisees));
+      await tester.pumpAndSettle();
+      // Le brouillon part des langues actuelles : on retire le français.
+      await tester.tap(find.byTooltip(Textes.retirerLangue).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, Textes.enregistrer));
+      await tester.pumpAndSettle();
+
+      expect(telechargement.journal, contains('langues:1:en'));
+      expect(
+        find.text(Textes.languesTitrePropres(<String>['en'])),
+        findsOneWidget,
+      );
+      expect(find.text(Textes.languesTitreEnregistrees(0)), findsOneWidget);
+
+      await tester.tap(find.text(Textes.revenirAuReglageGeneral));
+      await tester.pumpAndSettle();
+
+      expect(service.titres.first.languesPreferees, isNull);
+      expect(
+        find.text(Textes.languesTitreGenerales(<String>['fr', 'en'])),
+        findsOneWidget,
+      );
     });
 
     testWidgets('chaque ligne montre son état hors-ligne', (tester) async {

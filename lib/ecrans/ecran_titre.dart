@@ -3,16 +3,20 @@ library;
 
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show listEquals;
+
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../etat/description_erreur.dart';
 import '../etat/etat_bibliotheque.dart';
+import '../etat/etat_parametres.dart';
 import '../etat/etat_titre.dart';
 import '../etat/outils_chapitres.dart';
 import '../modeles/chapitre.dart';
 import '../modeles/titre.dart';
 import '../widgets/constantes_interface.dart';
+import '../widgets/editeur_langues.dart';
 import '../widgets/image_couverture.dart';
 import '../widgets/indicateur_hors_ligne.dart';
 import '../widgets/messages.dart';
@@ -232,7 +236,10 @@ class EcranTitre extends StatelessWidget {
               SliverList.builder(
                 itemCount: groupes.length,
                 itemBuilder: (context, index) => _LigneGroupe(
-                  key: ValueKey<double>(groupes[index].numero),
+                  // Clé par identifiant et non par numéro : plusieurs
+                  // oneshots partagent le numéro 0 mais sont des lignes
+                  // distinctes.
+                  key: ValueKey<int?>(groupes[index].retenu.id),
                   etat: etat,
                   groupe: groupes[index],
                 ),
@@ -349,8 +356,203 @@ class _EnTete extends StatelessWidget {
                   ),
             ],
           ),
+          const SizedBox(height: espacementGrand),
+          _SectionLanguesTitre(etat: etat),
         ],
       ),
+    );
+  }
+}
+
+/// Langues appliquées à ce titre (réglage général, du site ou
+/// personnalisées) et boutons pour les changer.
+class _SectionLanguesTitre extends StatelessWidget {
+  const _SectionLanguesTitre({required this.etat});
+
+  final EtatTitre etat;
+
+  Future<void> _modifier(BuildContext context) async {
+    final choix = await showDialog<_ChoixLangues>(
+      context: context,
+      builder: (_) => _DialogueLanguesTitre(
+        languesActuelles: etat.langues,
+        languesGenerales: etat.languesGenerales,
+        aLanguesPropres: etat.aLanguesPropres,
+      ),
+    );
+    if (choix == null || !context.mounted) return;
+    await _enregistrer(context, choix.langues);
+  }
+
+  Future<void> _enregistrer(BuildContext context, List<String>? langues) async {
+    final resultat = await etat.modifierLangues(langues);
+    if (context.mounted) {
+      afficherResultat(
+        context,
+        resultat,
+        succes: Textes.languesTitreEnregistrees(resultat.donnee),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final langues = etat.langues;
+    final String description;
+    if (etat.aLanguesPropres) {
+      description = Textes.languesTitrePropres(langues);
+    } else if (listEquals(langues, etat.languesGenerales)) {
+      description = Textes.languesTitreGenerales(langues);
+    } else {
+      // Titre d'un site qui garde l'ancien réglage de langues par site.
+      description = Textes.languesTitreSite(langues);
+    }
+    final occupe = etat.estEnActualisation;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Text(Textes.languesDuTitre, style: theme.textTheme.titleMedium),
+        const SizedBox(height: espacementPetit),
+        Text(description),
+        const SizedBox(height: espacementPetit),
+        // Boutons qui passent à la ligne sur un écran étroit.
+        Wrap(
+          spacing: espacementPetit,
+          runSpacing: espacementPetit,
+          children: <Widget>[
+            OutlinedButton.icon(
+              onPressed: occupe ? null : () => _modifier(context),
+              icon: const Icon(Icons.translate),
+              label: const Text(Textes.modifierLangues),
+            ),
+            if (etat.aLanguesPropres)
+              TextButton(
+                onPressed: occupe ? null : () => _enregistrer(context, null),
+                child: const Text(Textes.revenirAuReglageGeneral),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Choix fait dans le dialogue des langues d'un titre : `null` = suivre le
+/// réglage général.
+class _ChoixLangues {
+  const _ChoixLangues(this.langues);
+
+  final List<String>? langues;
+}
+
+/// Dialogue des langues d'un titre : suivre « Mes langues », ou choisir des
+/// langues propres à ce titre (brouillon local, enregistré à la validation).
+class _DialogueLanguesTitre extends StatefulWidget {
+  const _DialogueLanguesTitre({
+    required this.languesActuelles,
+    required this.languesGenerales,
+    required this.aLanguesPropres,
+  });
+
+  final List<String> languesActuelles;
+  final List<String> languesGenerales;
+  final bool aLanguesPropres;
+
+  @override
+  State<_DialogueLanguesTitre> createState() => _EtatDialogueLanguesTitre();
+}
+
+class _EtatDialogueLanguesTitre extends State<_DialogueLanguesTitre> {
+  late bool _personnalisees = widget.aLanguesPropres;
+
+  // Brouillon de départ : les langues appliquées aujourd'hui, que le client
+  // n'a plus qu'à ajuster.
+  late List<String> _brouillon = List<String>.of(
+    widget.languesActuelles.isEmpty
+        ? widget.languesGenerales
+        : widget.languesActuelles,
+  );
+
+  void _deplacer(String code, int decalage) {
+    final index = _brouillon.indexOf(code);
+    final cible = index + decalage;
+    if (index < 0 || cible < 0 || cible >= _brouillon.length) return;
+    setState(() {
+      _brouillon = List<String>.of(_brouillon)
+        ..removeAt(index)
+        ..insert(cible, code);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text(Textes.languesDuTitre),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: largeurMaxFormulaire),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              const Text(Textes.explicationLanguesTitre),
+              const SizedBox(height: espacementMoyen),
+              RadioGroup<bool>(
+                groupValue: _personnalisees,
+                onChanged: (valeur) =>
+                    setState(() => _personnalisees = valeur ?? false),
+                child: Column(
+                  children: <Widget>[
+                    RadioListTile<bool>(
+                      contentPadding: EdgeInsets.zero,
+                      value: false,
+                      title: const Text(Textes.suivreReglageGeneral),
+                      subtitle: Text(
+                        Textes.listeLangues(widget.languesGenerales),
+                      ),
+                    ),
+                    const RadioListTile<bool>(
+                      contentPadding: EdgeInsets.zero,
+                      value: true,
+                      title: Text(Textes.languesPersonnalisees),
+                    ),
+                  ],
+                ),
+              ),
+              if (_personnalisees)
+                EditeurLangues(
+                  langues: _brouillon,
+                  nombreMaximal: EtatParametres.nombreMaximalLangues,
+                  surAjouter: (code) => setState(
+                    () => _brouillon = <String>[..._brouillon, code],
+                  ),
+                  surRetirer: (code) => setState(
+                    () => _brouillon = <String>[
+                      for (final langue in _brouillon)
+                        if (langue != code) langue,
+                    ],
+                  ),
+                  surDeplacer: _deplacer,
+                  surChoisirFavorite: (code) =>
+                      _deplacer(code, -_brouillon.indexOf(code)),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text(Textes.annuler),
+        ),
+        FilledButton(
+          onPressed: () =>
+              Navigator.of(context)
+                  .pop(_ChoixLangues(_personnalisees ? _brouillon : null)),
+          child: const Text(Textes.enregistrer),
+        ),
+      ],
     );
   }
 }
@@ -524,7 +726,16 @@ class _LigneGroupe extends StatefulWidget {
 }
 
 class _EtatLigneGroupe extends State<_LigneGroupe> {
-  bool _estDeplie = false;
+  // Déplié d'office si une version cachée demande une décision du client
+  // (suppression prévue, doublon) : sinon il ne la verrait pas.
+  late bool _estDeplie = _autresDemandentAction;
+
+  bool get _autresDemandentAction => widget.groupe.autres.any((chapitre) {
+    final horsLigne = widget.etat.etatHorsLigne(chapitre);
+    return horsLigne.aSuppressionPrevue ||
+        (horsLigne.estDoublon &&
+            horsLigne.statut == StatutHorsLigne.telecharge);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -539,6 +750,7 @@ class _EtatLigneGroupe extends State<_LigneGroupe> {
           surBasculerLu: () =>
               widget.etat.marquerGroupeLu(groupe, estLu: !groupe.estLu),
           autresVersions: groupe.autres.length,
+          autresATrier: _autresDemandentAction,
           estDeplie: _estDeplie,
           surDeplier: () => setState(() => _estDeplie = !_estDeplie),
         ),
@@ -569,6 +781,7 @@ class _LigneChapitre extends StatelessWidget {
     required this.estLu,
     required this.surBasculerLu,
     this.autresVersions = 0,
+    this.autresATrier = false,
     this.estDeplie = false,
     this.surDeplier,
     this.estSecondaire = false,
@@ -579,6 +792,10 @@ class _LigneChapitre extends StatelessWidget {
   final bool estLu;
   final Future<ResultatAction<bool>> Function() surBasculerLu;
   final int autresVersions;
+
+  /// Une des autres versions attend une décision (suppression prévue ou
+  /// doublon) : mention orange sur la ligne repliée.
+  final bool autresATrier;
   final bool estDeplie;
   final VoidCallback? surDeplier;
   final bool estSecondaire;
@@ -674,24 +891,8 @@ class _LigneChapitre extends StatelessWidget {
     switch (horsLigne.statut) {
       case StatutHorsLigne.telecharge:
         final nom = Textes.nomChapitre(chapitre.nom, chapitre.numero);
-        final confirme = await showDialog<bool>(
-          context: context,
-          builder: (contexteDialogue) => AlertDialog(
-            title: const Text(Textes.supprimerTelechargement),
-            content: Text(Textes.confirmationSuppressionTelechargement(nom)),
-            actions: <Widget>[
-              TextButton(
-                onPressed: () => Navigator.of(contexteDialogue).pop(false),
-                child: const Text(Textes.annuler),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(contexteDialogue).pop(true),
-                child: const Text(Textes.supprimer),
-              ),
-            ],
-          ),
-        );
-        if (confirme != true || !context.mounted) return;
+        final confirme = await confirmerSuppressionTelechargement(context, nom);
+        if (!confirme || !context.mounted) return;
         final resultat = await etat.supprimerTelechargement(chapitre);
         if (context.mounted) {
           afficherResultat(
@@ -722,86 +923,221 @@ class _LigneChapitre extends StatelessWidget {
     final theme = Theme.of(context);
     final couleurs = theme.colorScheme;
     final horsLigne = etat.etatHorsLigne(chapitre);
-    // Les chapitres lus sont atténués : les nouveautés ressortent.
-    final couleurTexte = estLu ? couleurs.outline : null;
+    final aSuppression = horsLigne.aSuppressionPrevue;
+    final estDoublon =
+        !aSuppression &&
+        horsLigne.estDoublon &&
+        horsLigne.statut == StatutHorsLigne.telecharge;
+    // Décisions du client : rouge pour une suppression prévue, orange pour
+    // un doublon ; sinon les chapitres lus sont atténués (les nouveautés
+    // ressortent).
+    final Color? couleurAlerte = aSuppression
+        ? couleurSuppressionPrevue(couleurs)
+        : (estDoublon ? couleurDoublon(couleurs) : null);
+    final couleurTexte = couleurAlerte ?? (estLu ? couleurs.outline : null);
     final styleDetail = theme.textTheme.bodySmall?.copyWith(
       color: couleurTexte,
     );
+    final reste = horsLigne.tempsAvantSuppression(etat.maintenant);
     return InkWell(
       onTap: () => _surAppui(context),
-      child: Padding(
-        // Les autres versions sont décalées : on voit qu'elles appartiennent
-        // au numéro du dessus.
-        padding: EdgeInsets.fromLTRB(
-          estSecondaire ? espacementGrand + espacementMoyen : espacementMoyen,
-          espacementPetit / 2,
-          espacementMoyen,
-          espacementPetit / 2,
-        ),
-        child: _ColonnesChapitre(
-          avecHorsLigne: etat.gereTelechargements,
-          nom: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                Textes.nomChapitre(chapitre.nom, chapitre.numero),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: couleurTexte,
-                  fontWeight: estLu || estSecondaire ? null : FontWeight.w600,
+      child: Ink(
+        // Fond rouge léger : la ligne se repère en faisant défiler une longue
+        // liste, même avant d'en lire le texte.
+        color: aSuppression
+            ? couleurs.errorContainer.withValues(
+                alpha: opaciteFondSuppressionPrevue,
+              )
+            : null,
+        child: Padding(
+          // Les autres versions sont décalées : on voit qu'elles appartiennent
+          // au numéro du dessus.
+          padding: EdgeInsets.fromLTRB(
+            estSecondaire ? espacementGrand + espacementMoyen : espacementMoyen,
+            espacementPetit / 2,
+            espacementMoyen,
+            espacementPetit / 2,
+          ),
+          child: _ColonnesChapitre(
+            avecHorsLigne: etat.gereTelechargements,
+            nom: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  Textes.nomChapitre(chapitre.nom, chapitre.numero),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: couleurTexte,
+                    fontWeight: estLu || estSecondaire ? null : FontWeight.w600,
+                  ),
                 ),
-              ),
-              if (autresVersions > 0)
-                InkWell(
-                  onTap: surDeplier,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      Text(
-                        Textes.autresVersions(autresVersions),
-                        style: theme.textTheme.bodySmall?.copyWith(
+                if (autresVersions > 0)
+                  InkWell(
+                    onTap: surDeplier,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Flexible(
+                          child: Text(
+                            autresATrier
+                                ? '${Textes.autresVersions(autresVersions)} · '
+                                      '${Textes.versionsATrier}'
+                                : Textes.autresVersions(autresVersions),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: autresATrier
+                                  ? couleurDoublon(couleurs)
+                                  : couleurs.primary,
+                            ),
+                          ),
+                        ),
+                        Icon(
+                          estDeplie ? Icons.expand_less : Icons.expand_more,
+                          size: theme.textTheme.bodySmall?.fontSize,
                           color: couleurs.primary,
                         ),
+                      ],
+                    ),
+                  ),
+                if (aSuppression && reste != null) ...<Widget>[
+                  Text(
+                    Textes.suppressionDans(reste),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: couleurAlerte,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  Text(
+                    Textes.explicationSuppressionPrevue,
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  _ActionsArchive(
+                    enfants: <Widget>[
+                      TextButton(
+                        onPressed: () => _garder(context),
+                        child: const Text(Textes.garder),
                       ),
-                      Icon(
-                        estDeplie ? Icons.expand_less : Icons.expand_more,
-                        size: theme.textTheme.bodySmall?.fontSize,
-                        color: couleurs.primary,
+                      TextButton(
+                        style: TextButton.styleFrom(
+                          foregroundColor: couleurAlerte,
+                        ),
+                        onPressed: () => _supprimerMaintenant(context),
+                        child: const Text(Textes.supprimerMaintenant),
                       ),
                     ],
                   ),
-                ),
-            ],
-          ),
-          langue: Text(
-            chapitre.langue.isEmpty ? '—' : chapitre.langue.toUpperCase(),
-            style: styleDetail,
-          ),
-          date: Text(
-            chapitre.datePublication == null
-                ? '—'
-                : Textes.formaterDate(chapitre.datePublication!),
-            style: styleDetail,
-          ),
-          horsLigne: IconButton(
-            tooltip: Textes.infoBulleHorsLigne(horsLigne),
-            onPressed: () => _surAppuiHorsLigne(context, horsLigne),
-            icon: IndicateurHorsLigne(etat: horsLigne),
-          ),
-          lu: IconButton(
-            tooltip: estLu ? Textes.marquerNonLu : Textes.marquerLu,
-            icon: Icon(
-              estLu ? Icons.check_circle : Icons.circle_outlined,
-              color: estLu ? couleurs.outline : couleurs.primary,
+                ],
+                if (estDoublon) ...<Widget>[
+                  Text(
+                    Textes.explicationDoublon,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: couleurAlerte,
+                    ),
+                  ),
+                  _ActionsArchive(
+                    enfants: <Widget>[
+                      TextButton(
+                        style: TextButton.styleFrom(
+                          foregroundColor: couleurAlerte,
+                        ),
+                        onPressed: () => _supprimerDoublon(context),
+                        child: const Text(Textes.supprimerCeDoublon),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
             ),
-            onPressed: () async {
-              final resultat = await surBasculerLu();
-              if (context.mounted) afficherResultat(context, resultat);
-            },
+            langue: Text(
+              chapitre.langue.isEmpty ? '—' : chapitre.langue.toUpperCase(),
+              style: styleDetail,
+            ),
+            date: Text(
+              chapitre.datePublication == null
+                  ? '—'
+                  : Textes.formaterDate(chapitre.datePublication!),
+              style: styleDetail,
+            ),
+            horsLigne: IconButton(
+              tooltip: Textes.infoBulleHorsLigne(horsLigne),
+              onPressed: () => _surAppuiHorsLigne(context, horsLigne),
+              icon: IndicateurHorsLigne(etat: horsLigne),
+            ),
+            lu: IconButton(
+              tooltip: estLu ? Textes.marquerNonLu : Textes.marquerLu,
+              icon: Icon(
+                estLu ? Icons.check_circle : Icons.circle_outlined,
+                color: estLu ? couleurs.outline : couleurs.primary,
+              ),
+              onPressed: () async {
+                final resultat = await surBasculerLu();
+                if (context.mounted) afficherResultat(context, resultat);
+              },
+            ),
           ),
         ),
       ),
+    );
+  }
+
+  /// « Garder » : la suppression prévue est annulée pour de bon.
+  Future<void> _garder(BuildContext context) async {
+    final resultat = await etat.garder(chapitre);
+    if (context.mounted) {
+      afficherResultat(context, resultat, succes: Textes.chapitreGarde);
+    }
+  }
+
+  /// « Supprimer maintenant » : sans confirmation, le client vient de
+  /// choisir entre deux boutons explicites et l'archive allait de toute
+  /// façon être supprimée.
+  Future<void> _supprimerMaintenant(BuildContext context) async {
+    final resultat = await etat.supprimerMaintenant(chapitre);
+    if (context.mounted) {
+      afficherResultat(
+        context,
+        resultat,
+        succes: Textes.telechargementSupprime,
+      );
+    }
+  }
+
+  /// Suppression d'un doublon : confirmée, car rien ne l'aurait supprimé
+  /// sans l'action du client.
+  Future<void> _supprimerDoublon(BuildContext context) async {
+    final confirme = await confirmerSuppressionTelechargement(
+      context,
+      Textes.nomChapitre(chapitre.nom, chapitre.numero),
+    );
+    if (!confirme || !context.mounted) return;
+    final resultat = await etat.supprimerMaintenant(chapitre);
+    if (context.mounted) {
+      afficherResultat(
+        context,
+        resultat,
+        succes: Textes.telechargementSupprime,
+      );
+    }
+  }
+}
+
+/// Boutons d'action sous le nom d'un chapitre (suppression prévue,
+/// doublon) : compacts, et passent à la ligne si la colonne est étroite.
+class _ActionsArchive extends StatelessWidget {
+  const _ActionsArchive({required this.enfants});
+
+  final List<Widget> enfants;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButtonTheme(
+      data: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: espacementPetit),
+        ),
+      ),
+      child: Wrap(spacing: espacementPetit / 2, children: enfants),
     );
   }
 }

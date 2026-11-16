@@ -89,6 +89,36 @@ void main() {
     expect(service.journal, contains('supprimer:2'));
   });
 
+  testWidgets("supprimer un chapitre terminé demande confirmation", (
+    tester,
+  ) async {
+    service.modifierLigne(1, StatutTelechargement.termine);
+    await afficher(tester);
+
+    // Annuler : rien n'est supprimé.
+    await tester.tap(find.byTooltip(Textes.supprimerTelechargement));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        Textes.confirmationSuppressionTelechargement(
+          Textes.chapitreDuTitre('Solo Leveling', 'Un'),
+        ),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text(Textes.annuler));
+    await tester.pumpAndSettle();
+    expect(service.journal, isNot(contains('supprimer:1')));
+
+    // Confirmer : l'archive est supprimée.
+    await tester.tap(find.byTooltip(Textes.supprimerTelechargement));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(Textes.supprimer));
+    await tester.pumpAndSettle();
+    expect(service.journal, contains('supprimer:1'));
+    expect(find.text(Textes.telechargementSupprime), findsOneWidget);
+  });
+
   testWidgets('vider les terminés', (tester) async {
     service
       ..modifierLigne(1, StatutTelechargement.termine)

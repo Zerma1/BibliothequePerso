@@ -1,6 +1,6 @@
-/// État de l'écran Paramètres, sections « Téléchargements » (limites des
-/// règles de conservation des favoris et suivis) et « Mises à jour »
-/// (nombre de recherches par jour).
+/// État de l'écran Paramètres, sections « Mes langues » (langues de lecture),
+/// « Téléchargements » (limites des règles de conservation des favoris et
+/// suivis) et « Mises à jour » (nombre de recherches par jour).
 library;
 
 import 'package:flutter/foundation.dart';
@@ -152,6 +152,96 @@ class EtatParametres extends EtatNotifiant {
     }
   }
 
+  // ------------------------------------------------------------ Mes langues
+
+  /// Nombre maximal de langues (même borne que le service).
+  static const int nombreMaximalLangues =
+      ServiceParametres.nombreMaximalLangues;
+
+  List<String> _langues = List<String>.of(ServiceParametres.languesParDefaut);
+  bool _estEnEnregistrementLangues = false;
+
+  /// Langues de lecture du client, la favorite d'abord.
+  List<String> get langues => _langues;
+
+  /// Langue favorite (la première).
+  String get langueFavorite => _langues.first;
+
+  /// `true` pendant l'enregistrement des langues.
+  bool get estEnEnregistrementLangues => _estEnEnregistrementLangues;
+
+  /// `true` si une langue peut encore être ajoutée.
+  bool get peutAjouterLangue => _langues.length < nombreMaximalLangues;
+
+  /// `true` si une langue peut être retirée (il en faut au moins une).
+  bool get peutRetirerLangue => _langues.length > 1;
+
+  /// Ajoute [code] en dernière position (la moins préférée).
+  Future<ResultatAction<bool>> ajouterLangue(String code) {
+    if (_langues.contains(code)) {
+      return Future<ResultatAction<bool>>.value(
+        const ResultatAction<bool>.reussite(true),
+      );
+    }
+    return _enregistrerLangues(<String>[..._langues, code]);
+  }
+
+  /// Retire [code] (refusé par le service s'il ne restait qu'elle).
+  Future<ResultatAction<bool>> retirerLangue(String code) =>
+      _enregistrerLangues(<String>[
+        for (final langue in _langues)
+          if (langue != code) langue,
+      ]);
+
+  /// Déplace [code] de [decalage] rangs (−1 : plus préférée, +1 : moins).
+  Future<ResultatAction<bool>> deplacerLangue(String code, int decalage) {
+    final index = _langues.indexOf(code);
+    final cible = index + decalage;
+    if (index < 0 || cible < 0 || cible >= _langues.length) {
+      return Future<ResultatAction<bool>>.value(
+        const ResultatAction<bool>.reussite(true),
+      );
+    }
+    final nouvelles = List<String>.of(_langues)
+      ..removeAt(index)
+      ..insert(cible, code);
+    return _enregistrerLangues(nouvelles);
+  }
+
+  /// « Choisir comme favorite » : [code] passe en première position.
+  Future<ResultatAction<bool>> choisirFavorite(String code) =>
+      deplacerLangue(code, -_langues.indexOf(code));
+
+  /// Enregistre aussitôt (comme le nombre de recherches par jour) puis
+  /// applique les règles à tous les favoris et suivis : sans risque, car
+  /// une archive dans une langue retirée n'est supprimée qu'après 24 heures
+  /// (le client peut revenir en arrière ou la garder).
+  // LIMITE : les chapitres d'une langue ajoutée n'apparaissent qu'à la
+  // prochaine recherche de nouveaux chapitres ou actualisation d'un titre
+  // (le site n'est pas relu pour tous les titres ici : trop de requêtes).
+  Future<ResultatAction<bool>> _enregistrerLangues(
+    List<String> nouvelles,
+  ) async {
+    _estEnEnregistrementLangues = true;
+    notifier();
+    try {
+      await _serviceParametres.enregistrerLangues(nouvelles);
+      // Relues : le service nettoie les codes et borne leur nombre.
+      _langues = await _serviceParametres.chargerLangues();
+      try {
+        await _serviceTelechargement.appliquerReglesATous();
+      } catch (erreur, pile) {
+        debugPrint('Règles non appliquées après les langues : $erreur\n$pile');
+      }
+      return const ResultatAction<bool>.reussite(true);
+    } catch (erreur, pile) {
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnEnregistrementLangues = false;
+      notifier();
+    }
+  }
+
   /// Lit les réglages enregistrés.
   Future<void> charger() async {
     _estEnChargement = true;
@@ -159,6 +249,7 @@ class EtatParametres extends EtatNotifiant {
     notifier();
     try {
       final reglages = await _serviceParametres.chargerReglagesTelechargement();
+      _langues = await _serviceParametres.chargerLangues();
       _planification = await _serviceParametres.chargerPlanification();
       _derniereVerification = await _serviceParametres
           .chargerDerniereVerification();

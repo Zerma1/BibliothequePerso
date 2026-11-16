@@ -342,7 +342,7 @@ class _EtatVueImages extends State<_VueImages> {
 }
 
 /// Une page : lue dans l'archive au premier affichage.
-class _PageLecteur extends StatelessWidget {
+class _PageLecteur extends StatefulWidget {
   const _PageLecteur({
     super.key,
     required this.etat,
@@ -355,16 +355,48 @@ class _PageLecteur extends StatelessWidget {
   final double hauteurProvisoire;
 
   @override
+  State<_PageLecteur> createState() => _EtatPageLecteur();
+}
+
+class _EtatPageLecteur extends State<_PageLecteur> {
+  /// Lecture demandée une fois pour toutes tant que la page est construite :
+  /// l'état oublie les pages éloignées de la page courante, mais une page
+  /// encore à l'écran ne doit pas être relue à chaque notification.
+  late Future<Uint8List> _lecture;
+
+  @override
+  void initState() {
+    super.initState();
+    _lecture = widget.etat.page(widget.index);
+  }
+
+  @override
+  void didUpdateWidget(_PageLecteur ancien) {
+    super.didUpdateWidget(ancien);
+    if (ancien.index != widget.index || ancien.etat != widget.etat) {
+      _lecture = widget.etat.page(widget.index);
+    }
+  }
+
+  void _relire() {
+    widget.etat.relirePage(widget.index);
+    setState(() => _lecture = widget.etat.page(widget.index));
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final etat = widget.etat;
+    final index = widget.index;
+    final hauteurProvisoire = widget.hauteurProvisoire;
     return FutureBuilder<Uint8List>(
-      future: etat.page(index),
+      future: _lecture,
       builder: (context, instantane) {
         if (instantane.hasError) {
           return SizedBox(
             height: hauteurProvisoire / 2,
             child: VueErreur(
               message: Textes.pageIllisible,
-              surReessayer: () => etat.relirePage(index),
+              surReessayer: _relire,
             ),
           );
         }
@@ -377,23 +409,37 @@ class _PageLecteur extends StatelessWidget {
             child: const VueChargement(),
           );
         }
-        return Image.memory(
-          octets,
-          width: double.infinity,
-          fit: BoxFit.fitWidth,
-          gaplessPlayback: true,
-          semanticLabel: Textes.pageSurTotal(index + 1, etat.nombrePages),
-          // Tant que l'image n'est pas décodée, elle n'a pas de hauteur : on
-          // garde la hauteur provisoire, sinon toutes les pages suivantes
-          // entreraient d'un coup dans l'écran (et seraient toutes lues).
-          frameBuilder: (context, enfant, image, estSynchrone) =>
-              image == null && !estSynchrone
-              ? SizedBox(height: hauteurProvisoire, child: enfant)
-              : enfant,
-          errorBuilder: (_, _, _) => SizedBox(
-            height: hauteurProvisoire / 2,
-            child: const Center(child: Text(Textes.pageIllisible)),
-          ),
+        // Largeur réellement affichée (plafonnée par la colonne de lecture)
+        // : l'image est décodée à cette taille en pixels physiques et non à
+        // sa taille d'origine, souvent bien plus grande. Une page de
+        // webtoon décodée en entier peut peser des dizaines de Mo.
+        return LayoutBuilder(
+          builder: (context, contraintes) {
+            final largeur = contraintes.maxWidth;
+            final largeurDecodage = largeur.isFinite && largeur > 0
+                ? (largeur * MediaQuery.devicePixelRatioOf(context)).round()
+                : null;
+            return Image.memory(
+              octets,
+              width: double.infinity,
+              fit: BoxFit.fitWidth,
+              cacheWidth: largeurDecodage,
+              gaplessPlayback: true,
+              semanticLabel: Textes.pageSurTotal(index + 1, etat.nombrePages),
+              // Tant que l'image n'est pas décodée, elle n'a pas de hauteur :
+              // on garde la hauteur provisoire, sinon toutes les pages
+              // suivantes entreraient d'un coup dans l'écran (et seraient
+              // toutes lues).
+              frameBuilder: (context, enfant, image, estSynchrone) =>
+                  image == null && !estSynchrone
+                  ? SizedBox(height: hauteurProvisoire, child: enfant)
+                  : enfant,
+              errorBuilder: (_, _, _) => SizedBox(
+                height: hauteurProvisoire / 2,
+                child: const Center(child: Text(Textes.pageIllisible)),
+              ),
+            );
+          },
         );
       },
     );

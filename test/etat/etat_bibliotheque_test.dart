@@ -4,6 +4,7 @@ import 'dart:async';
 
 import 'package:bibliotheque_perso/etat/description_erreur.dart';
 import 'package:bibliotheque_perso/etat/etat_bibliotheque.dart';
+import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
@@ -126,6 +127,32 @@ void main() {
 
     expect(resultat.estReussi, isTrue);
     expect(etat.titres, isEmpty);
+  });
+
+  test('avec les téléchargements, la suppression passe par le service des '
+      'téléchargements (archives effacées)', () async {
+    final faux = FauxServiceBibliotheque()
+      ..ajouterTitreDeTest(
+        'Titre',
+        chapitres: const <Chapitre>[
+          Chapitre(id: 1, urlChapitre: 'u1', nom: 'Un', numero: 1),
+        ],
+      );
+    final telechargement = FauxServiceTelechargement(faux)
+      ..ajouterChapitreTelecharge(1);
+    final etatFaux = EtatBibliotheque(
+      faux,
+      serviceTelechargement: telechargement,
+    );
+    addTearDown(etatFaux.dispose);
+    await etatFaux.charger();
+
+    final resultat = await etatFaux.supprimerTitre(1);
+
+    expect(resultat.estReussi, isTrue);
+    expect(telechargement.titresSupprimes, <int>[1]);
+    expect(telechargement.pages, isEmpty);
+    expect(etatFaux.titres, isEmpty);
   });
 
   test(

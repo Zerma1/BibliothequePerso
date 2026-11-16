@@ -188,8 +188,28 @@ class _LigneTelechargement extends StatelessWidget {
                 : Textes.retirerDeLaFile,
             icon: const Icon(Icons.delete_outline),
             onPressed: () async {
+              // Même règle que la fiche du titre : une archive terminée se
+              // supprime après confirmation (elle a demandé un long
+              // téléchargement) ; une ligne en file se retire directement.
+              if (element.statut == StatutTelechargement.termine) {
+                final confirme = await confirmerSuppressionTelechargement(
+                  context,
+                  element.titre == null
+                      ? nomChapitre
+                      : Textes.chapitreDuTitre(element.titre!.nom, nomChapitre),
+                );
+                if (!confirme || !context.mounted) return;
+              }
               final resultat = await etat.supprimer(element.idChapitre);
-              if (context.mounted) afficherResultat(context, resultat);
+              if (context.mounted) {
+                afficherResultat(
+                  context,
+                  resultat,
+                  succes: element.statut == StatutTelechargement.termine
+                      ? Textes.telechargementSupprime
+                      : null,
+                );
+              }
             },
           ),
         ],

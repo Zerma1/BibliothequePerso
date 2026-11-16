@@ -41,6 +41,42 @@ Color couleurHorsLigne(StatutHorsLigne statut, ColorScheme couleurs) {
   }
 }
 
+/// Icône d'une archive dont la suppression automatique est prévue.
+const IconData iconeSuppressionPrevue = Icons.auto_delete_outlined;
+
+/// Icône d'une archive en double.
+const IconData iconeDoublon = Icons.content_copy;
+
+/// Couleur des suppressions prévues (rouge du thème, décision du client).
+Color couleurSuppressionPrevue(ColorScheme couleurs) => couleurs.error;
+
+/// Couleur des doublons (orange, décision du client). Le schéma Material 3
+/// n'a pas d'orange : on choisit une nuance lisible sur fond clair ou
+/// sombre.
+Color couleurDoublon(ColorScheme couleurs) =>
+    couleurs.brightness == Brightness.dark
+    ? Colors.orange.shade300
+    : Colors.orange.shade800;
+
+/// Couleur d'un état complet : rouge pour une suppression prévue, orange
+/// pour un doublon, sinon celle du statut.
+Color couleurEtatHorsLigne(EtatHorsLigne etat, ColorScheme couleurs) {
+  if (etat.aSuppressionPrevue) return couleurSuppressionPrevue(couleurs);
+  if (etat.statut == StatutHorsLigne.telecharge && etat.estDoublon) {
+    return couleurDoublon(couleurs);
+  }
+  return couleurHorsLigne(etat.statut, couleurs);
+}
+
+/// Icône d'un état complet (suppression prévue et doublon d'abord).
+IconData iconeEtatHorsLigne(EtatHorsLigne etat) {
+  if (etat.aSuppressionPrevue) return iconeSuppressionPrevue;
+  if (etat.statut == StatutHorsLigne.telecharge && etat.estDoublon) {
+    return iconeDoublon;
+  }
+  return iconeHorsLigne(etat.statut);
+}
+
 /// Indicateur de l'état hors-ligne d'un chapitre : icône colorée, ou cercle
 /// de progression avec le pourcentage pendant le téléchargement.
 class IndicateurHorsLigne extends StatelessWidget {
@@ -53,7 +89,7 @@ class IndicateurHorsLigne extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final couleurs = Theme.of(context).colorScheme;
-    final couleur = couleurHorsLigne(etat.statut, couleurs);
+    final couleur = couleurEtatHorsLigne(etat, couleurs);
     if (etat.statut == StatutHorsLigne.enCours) {
       // Cercle à la taille d'une icône : la ligne ne change pas de hauteur
       // quand le téléchargement commence ; le pourcentage est écrit dessous
@@ -82,9 +118,13 @@ class IndicateurHorsLigne extends StatelessWidget {
       );
     }
     return Icon(
-      iconeHorsLigne(etat.statut),
+      iconeEtatHorsLigne(etat),
       color: couleur,
-      semanticLabel: Textes.libelleStatutHorsLigne(etat.statut),
+      semanticLabel: etat.aSuppressionPrevue
+          ? Textes.legendeSuppressionPrevue
+          : (etat.estDoublon && etat.statut == StatutHorsLigne.telecharge
+                ? Textes.legendeDoublon
+                : Textes.libelleStatutHorsLigne(etat.statut)),
     );
   }
 }
@@ -98,26 +138,35 @@ class LegendeHorsLigne extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    Widget entree(IconData icone, Color couleur, String libelle) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Icon(icone, size: theme.textTheme.bodyMedium?.fontSize, color: couleur),
+        const SizedBox(width: espacementPetit / 2),
+        Text(libelle, style: theme.textTheme.bodySmall),
+      ],
+    );
     return Wrap(
       spacing: espacementMoyen,
       runSpacing: espacementPetit / 2,
       children: <Widget>[
         for (final statut in StatutHorsLigne.values)
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Icon(
-                iconeHorsLigne(statut),
-                size: theme.textTheme.bodyMedium?.fontSize,
-                color: couleurHorsLigne(statut, theme.colorScheme),
-              ),
-              const SizedBox(width: espacementPetit / 2),
-              Text(
-                Textes.libelleStatutHorsLigne(statut),
-                style: theme.textTheme.bodySmall,
-              ),
-            ],
+          entree(
+            iconeHorsLigne(statut),
+            couleurHorsLigne(statut, theme.colorScheme),
+            Textes.libelleStatutHorsLigne(statut),
           ),
+        // Décisions du client : rouge = supprimé dans 24 h, orange = doublon.
+        entree(
+          iconeSuppressionPrevue,
+          couleurSuppressionPrevue(theme.colorScheme),
+          Textes.legendeSuppressionPrevue,
+        ),
+        entree(
+          iconeDoublon,
+          couleurDoublon(theme.colorScheme),
+          Textes.legendeDoublon,
+        ),
       ],
     );
   }

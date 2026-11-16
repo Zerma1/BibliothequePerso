@@ -15,7 +15,7 @@ import '../services/planification_mises_a_jour.dart';
 import '../services/service_mises_a_jour.dart';
 import '../services/service_parametres.dart';
 import '../services/service_telechargement.dart';
-import '../sources/erreur_source.dart';
+import 'constantes_etat.dart';
 import 'description_erreur.dart';
 
 /// Bilan d'une vérification terminée, publié par
@@ -48,7 +48,7 @@ class FinVerification {
   int get nombreSitesEnEchec {
     final echecs = rapport?.echecs ?? const <ResultatVerificationTitre>[];
     return echecs
-        .where((resultat) => resultat.erreur is ErreurSource)
+        .where((resultat) => estErreurDeSite(resultat.erreur))
         .map((resultat) => resultat.titre.idSource ?? resultat.titre.urlTitre)
         .toSet()
         .length;
@@ -59,7 +59,7 @@ class FinVerification {
   /// sites en panne.
   int get nombreAutresEchecs {
     final echecs = rapport?.echecs ?? const <ResultatVerificationTitre>[];
-    return echecs.where((resultat) => resultat.erreur is! ErreurSource).length;
+    return echecs.where((resultat) => !estErreurDeSite(resultat.erreur)).length;
   }
 
   /// `true` si de nouveaux chapitres ont été enregistrés.
@@ -113,6 +113,9 @@ class EtatMisesAJour extends EtatNotifiant {
   final DateTime Function() _maintenant;
 
   Timer? _minuterie;
+
+  /// Contrôle court et régulier de l'échéance (veille de l'ordinateur).
+  Timer? _controleRegulier;
   bool _estDemarre = false;
   DateTime? _prochaineEcheance;
 
@@ -168,7 +171,34 @@ class EtatMisesAJour extends EtatNotifiant {
       // lieu, par exemple dans la tâche de fond).
       unawaited(_verifier(estManuelle: false));
       unawaited(_programmer());
+      // Filet de sécurité contre la mise en veille (voir [controlerEcheance]).
+      _controleRegulier = Timer.periodic(
+        intervalleControleEcheance,
+        (_) => controlerEcheance(),
+      );
     }
+  }
+
+  /// Rattrape une échéance passée sans que le minuteur ne se déclenche.
+  ///
+  /// Un `Timer` compte le temps écoulé pendant que la machine tourne, pas
+  /// celui passé en veille : un ordinateur endormi à 11:00 et réveillé à
+  /// 14:00 attendrait encore une heure la vérification de 12:00. Ce contrôle,
+  /// fait toutes les [intervalleControleEcheance] et au retour au premier
+  /// plan (appelé par l'écran d'accueil), compare l'heure réelle à la
+  /// prochaine échéance ; si elle est passée, il lance la vérification
+  /// automatique (`ServiceMisesAJour.verifierSiEcheancePassee`, qui ne fait
+  /// rien si elle a déjà eu lieu) et reprogramme le minuteur.
+  ///
+  /// La comparaison locale évite de solliciter la base (et d'afficher
+  /// l'indicateur « vérification en cours ») à chaque contrôle quand rien
+  /// n'est dû. Sans effet si la planification n'est pas active.
+  void controlerEcheance() {
+    if (!_planifier || !_estDemarre || estLibere) return;
+    final echeance = _prochaineEcheance;
+    if (echeance != null && _maintenant().isBefore(echeance)) return;
+    unawaited(_verifier(estManuelle: false));
+    unawaited(_programmer());
   }
 
   /// À appeler quand le réglage « vérifications par jour » a changé :
@@ -198,9 +228,12 @@ class EtatMisesAJour extends EtatNotifiant {
   }
 
   /// Programme un minuteur ponctuel jusqu'à la prochaine échéance ; à son
-  /// déclenchement, il vérifie puis se reprogramme. Un minuteur ponctuel
-  /// (plutôt que périodique) suit les heures fixes UTC même si l'ordinateur
-  /// a été mis en veille entre-temps.
+  /// déclenchement, il vérifie puis se reprogramme (l'échéance suivante est
+  /// recalculée sur l'heure réelle à chaque fois).
+  ///
+  /// LIMITE : ce minuteur ne compte pas le temps de mise en veille ; c'est
+  /// [controlerEcheance] (contrôle régulier et retour au premier plan) qui
+  /// rattrape une échéance passée pendant la veille.
   Future<void> _programmer() async {
     final numero = ++_numeroProgrammation;
     PlanificationMisesAJour planification;
@@ -313,6 +346,8 @@ class EtatMisesAJour extends EtatNotifiant {
   void dispose() {
     _minuterie?.cancel();
     _minuterie = null;
+    _controleRegulier?.cancel();
+    _controleRegulier = null;
     _finVerification.dispose();
     super.dispose();
   }

@@ -17,6 +17,7 @@ import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
 import '../services/service_bibliotheque.dart';
 import '../services/service_telechargement.dart';
+import 'constantes_etat.dart';
 import 'description_erreur.dart';
 import 'outils_chapitres.dart';
 
@@ -49,7 +50,7 @@ class EtatLecteur extends EtatNotifiant {
     // Si le client lance le téléchargement du chapitre depuis le lecteur, la
     // lecture démarre d'elle-même à la fin.
     _abonnement = serviceTelechargement.changements.listen(
-      (_) => unawaited(_surChangementFile()),
+      (_) => unawaited(_demanderRelectureFile()),
     );
   }
 
@@ -73,9 +74,20 @@ class EtatLecteur extends EtatNotifiant {
   DescriptionErreur? _erreur;
   Telechargement? _telechargement;
 
-  /// Pages déjà demandées, par index : une page n'est lue qu'une fois dans
-  /// l'archive tant que le chapitre reste ouvert.
+  /// Pages déjà demandées, par index. Seules les pages proches de la page
+  /// courante ([margePagesEnMemoire] de chaque côté) sont gardées : les
+  /// autres sont relues dans l'archive si le client revient en arrière.
   final Map<int, Future<Uint8List>> _pages = <int, Future<Uint8List>>{};
+
+  /// Chapitre protégé auprès du service (pas de suppression automatique de
+  /// son archive pendant la lecture), ou `null`.
+  int? _idProtege;
+
+  /// Relecture de la file en cours, et nouvelle relecture demandée pendant
+  /// celle-ci : le service prévient à chaque page téléchargée, les demandes
+  /// sont regroupées.
+  Future<void>? _relectureFile;
+  bool _relectureFileRedemandee = false;
 
   /// Numéro d'ouverture de chapitre : une lecture plus ancienne (le client
   /// enchaîne vite les chapitres) est ignorée.
@@ -128,7 +140,11 @@ class EtatLecteur extends EtatNotifiant {
   Chapitre? _voisin(int decalage) {
     final chapitre = _chapitre;
     if (chapitre == null) return null;
-    final index = _groupes.indexWhere((g) => g.numero == chapitre.numero);
+    // Recherche par identifiant et non par numéro : les oneshots partagent
+    // le numéro 0 mais forment chacun leur propre groupe.
+    final index = _groupes.indexWhere(
+      (g) => g.versions.any((version) => version.id == chapitre.id),
+    );
     final voisin = index + decalage;
     if (index < 0 || voisin < 0 || voisin >= _groupes.length) return null;
     return _groupes[voisin].versionALire;
@@ -168,9 +184,12 @@ class EtatLecteur extends EtatNotifiant {
         ? null
         : await _serviceBibliotheque.chargerSource(idSource);
     final chapitres = await _serviceBibliotheque.chargerChapitres(idTitre);
+    // Langues de ce titre (propres au titre, sinon du site, sinon réglage
+    // général) : même résolution que les téléchargements automatiques.
+    final langues = await _serviceBibliotheque.languesPourTitre(titre);
     // Ordre de lecture : numéros croissants, une version par numéro (celle
     // que le service télécharge, ou une autre déjà sur l'appareil).
-    _groupes = regrouperParNumero(chapitres, languesPreferees(_source));
+    _groupes = regrouperParNumero(chapitres, langues);
   }
 
   Chapitre? _trouver(int idChapitre) {
@@ -186,7 +205,9 @@ class EtatLecteur extends EtatNotifiant {
     final numero = ++_numeroOuverture;
     _chapitre = chapitre;
     _idChapitreDemande = chapitre.id!;
+    _proteger(chapitre.id!);
     _pages.clear();
+    _telechargement = null;
     _nombrePages = 0;
     _pageCourante = 0;
     _texte = '';
@@ -194,7 +215,9 @@ class EtatLecteur extends EtatNotifiant {
     _nature = NatureContenu.chargement;
     notifier();
     try {
-      await _lireTelechargement();
+      final telechargement = await _chargerTelechargement(chapitre.id!);
+      if (numero != _numeroOuverture) return;
+      _telechargement = telechargement;
       if (!chapitre.estTelecharge) {
         // LIMITE : la lecture en ligne d'un chapitre non téléchargé demande
         // une méthode de service qui n'existe pas encore ; le lecteur propose
@@ -224,14 +247,27 @@ class EtatLecteur extends EtatNotifiant {
     }
   }
 
-  Future<void> _lireTelechargement() async {
-    final id = _chapitre?.id;
-    if (id == null) return;
+  /// Ligne de file du chapitre [idChapitre], sans modifier l'état :
+  /// l'appelant vérifie que la réponse n'est pas périmée avant de l'appliquer.
+  Future<Telechargement?> _chargerTelechargement(int idChapitre) async {
     final file = await _serviceTelechargement.chargerFile();
-    _telechargement = file.where((t) => t.idChapitre == id).firstOrNull;
+    return file.where((t) => t.idChapitre == idChapitre).firstOrNull;
   }
 
-  /// Octets de la page [index], lus une seule fois dans l'archive.
+  /// Protège [idChapitre] contre les suppressions automatiques et libère le
+  /// chapitre protégé précédemment.
+  void _proteger(int idChapitre) {
+    final ancien = _idProtege;
+    if (ancien == idChapitre) return;
+    _serviceTelechargement.protegerChapitre(idChapitre);
+    _idProtege = idChapitre;
+    if (ancien != null) {
+      _serviceTelechargement.libererChapitre(ancien);
+    }
+  }
+
+  /// Octets de la page [index], lus une seule fois dans l'archive tant que
+  /// la page reste proche de la page courante.
   Future<Uint8List> page(int index) {
     final id = _chapitre?.id;
     if (id == null) {
@@ -258,6 +294,19 @@ class EtatLecteur extends EtatNotifiant {
     });
   }
 
+  /// Oublie les octets des pages éloignées de la page courante. Une page
+  /// encore affichée garde les siens (son widget les tient) ; seule la
+  /// prochaine demande relira l'archive.
+  void _oublierPagesEloignees() {
+    _pages.removeWhere(
+      (index, _) => (index - _pageCourante).abs() > margePagesEnMemoire,
+    );
+  }
+
+  /// Nombre de pages actuellement gardées en mémoire (tests).
+  @visibleForTesting
+  int get nombrePagesEnMemoire => _pages.length;
+
   /// Oublie une page en échec pour la relire.
   void relirePage(int index) {
     _pages.remove(index);
@@ -270,6 +319,7 @@ class EtatLecteur extends EtatNotifiant {
     if (_nature != NatureContenu.images) return;
     if (index != _pageCourante) {
       _pageCourante = index;
+      _oublierPagesEloignees();
       notifier();
     }
     if (index >= _nombrePages - 1) {
@@ -362,35 +412,63 @@ class EtatLecteur extends EtatNotifiant {
     }
     try {
       await _serviceTelechargement.telechargerChapitre(id);
-      await _lireTelechargement();
-      notifier();
+      await _demanderRelectureFile();
       return const ResultatAction<bool>.reussite(true);
     } catch (erreur, pile) {
       return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
     }
   }
 
-  Future<void> _surChangementFile() async {
-    if (estLibere || _nature != NatureContenu.nonTelecharge) return;
-    try {
-      await _lireTelechargement();
-      if (_telechargement?.statut == StatutTelechargement.termine) {
-        await _lireTitre();
-        final chapitre = _trouver(_idChapitreDemande);
-        if (chapitre != null && chapitre.estTelecharge) {
-          await _ouvrir(chapitre);
-          return;
-        }
-      }
-      notifier();
-    } catch (erreur, pile) {
-      debugPrint('Lecteur : file illisible : $erreur\n$pile');
+  /// Relit la ligne de file du chapitre affiché. Les demandes qui arrivent
+  /// pendant une relecture sont regroupées en une seule relecture à la fin.
+  Future<void> _demanderRelectureFile() {
+    final enCours = _relectureFile;
+    if (enCours != null) {
+      _relectureFileRedemandee = true;
+      return enCours;
     }
+    final nouvelle = _relireFile().whenComplete(() => _relectureFile = null);
+    _relectureFile = nouvelle;
+    return nouvelle;
+  }
+
+  Future<void> _relireFile() async {
+    do {
+      _relectureFileRedemandee = false;
+      if (estLibere || _nature != NatureContenu.nonTelecharge) return;
+      final numero = _numeroOuverture;
+      final id = _chapitre?.id;
+      if (id == null) return;
+      try {
+        final telechargement = await _chargerTelechargement(id);
+        // Un autre chapitre a été ouvert entre-temps : réponse périmée.
+        if (numero != _numeroOuverture) continue;
+        _telechargement = telechargement;
+        if (telechargement?.statut == StatutTelechargement.termine) {
+          await _lireTitre();
+          if (numero != _numeroOuverture) continue;
+          final chapitre = _trouver(_idChapitreDemande);
+          if (chapitre != null && chapitre.estTelecharge) {
+            await _ouvrir(chapitre);
+            continue;
+          }
+        }
+        notifier();
+      } catch (erreur, pile) {
+        debugPrint('Lecteur : file illisible : $erreur\n$pile');
+      }
+    } while (_relectureFileRedemandee);
   }
 
   @override
   void dispose() {
     unawaited(_abonnement.cancel());
+    final protege = _idProtege;
+    if (protege != null) {
+      // Lecteur fermé : le chapitre redevient supprimable par les règles.
+      _serviceTelechargement.libererChapitre(protege);
+      _idProtege = null;
+    }
     super.dispose();
   }
 }

@@ -231,10 +231,18 @@ class EtatBibliotheque extends EtatNotifiant {
     return resultat;
   }
 
-  /// Supprime un titre et ses chapitres, puis recharge la bibliothèque.
+  /// Supprime un titre, ses chapitres et leurs archives hors-ligne, puis
+  /// recharge la bibliothèque.
   Future<ResultatAction<bool>> supprimerTitre(int idTitre) async {
     try {
-      await _service.supprimerTitre(idTitre);
+      final telechargement = _serviceTelechargement;
+      if (telechargement != null) {
+        // Le service des téléchargements efface aussi les fichiers `.zip` ;
+        // `ServiceBibliotheque.supprimerTitre` les laisserait sur le disque.
+        await telechargement.supprimerTitre(idTitre);
+      } else {
+        await _service.supprimerTitre(idTitre);
+      }
       await charger();
       return const ResultatAction<bool>.reussite(true);
     } catch (erreur, pile) {
