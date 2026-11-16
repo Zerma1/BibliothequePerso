@@ -3,6 +3,7 @@
 library;
 
 import '../etat/description_erreur.dart';
+import '../etat/etat_bibliotheque.dart' show EtatFiltreCategorie;
 import '../etat/etat_parametres.dart';
 import '../etat/outils_chapitres.dart';
 import '../modeles/source.dart';
@@ -155,7 +156,8 @@ abstract final class Textes {
   /// Bibliothèque vide (aide au premier lancement).
   static const String bibliothequeVide =
       'Votre bibliothèque est vide.\n'
-      'Collez l\'adresse d\'un manga MangaDex pour commencer.';
+      'Appuyez sur « Ajouter un titre » et collez l\'adresse d\'un manga '
+      'MangaDex pour commencer.';
 
   /// Aucun titre pour les filtres choisis.
   static const String aucunResultat =
@@ -294,10 +296,11 @@ abstract final class Textes {
   static const String champLangue = 'Langue par défaut (facultatif)';
 
   /// Aide du champ de langue.
-  static const String aideLangue = 'Code à deux lettres : fr, en, ja…';
+  static const String aideLangue = 'Code de langue : fr, en, ja, pt-br…';
 
   /// Langue mal saisie.
-  static const String erreurLangue = 'Deux lettres attendues (par ex. fr).';
+  static const String erreurLangue =
+      'Code de langue attendu (par ex. fr ou pt-br).';
 
   /// Champ du type de site.
   static const String champTypeSite = 'Type de site';
@@ -1009,7 +1012,7 @@ abstract final class Textes {
 
   /// Langues mal saisies.
   static const String erreurLangues =
-      'Codes à deux lettres séparés par des virgules (par ex. fr,en).';
+      'Codes de langue séparés par des virgules (par ex. fr,en ou pt-br).';
 
   /// Interrupteur d'activation d'un site.
   static const String siteActif = 'Rechercher les nouveaux chapitres';
@@ -1044,6 +1047,306 @@ abstract final class Textes {
   static const String descriptionApplication =
       'Application personnelle, sans publicité, qui regroupe les titres '
       'suivis sur plusieurs sites de lecture.';
+
+  // ------------------------------------------------- Étape 6 : Mises à jour
+
+  /// Onglet des dernières parutions.
+  static const String ongletMisesAJour = 'Mises à jour';
+
+  /// Libellé accessible du badge de l'onglet Mises à jour.
+  static String titresAvecNouveaute(int nombre) => nombre <= 1
+      ? '$nombre titre avec un chapitre non lu'
+      : '$nombre titres avec un chapitre non lu';
+
+  /// Explication en haut de l'onglet Mises à jour.
+  static const String explicationMisesAJour =
+      'Titres favoris, suivis et en attente, du plus récemment paru au plus '
+      'ancien, dans les langues de chaque titre.';
+
+  /// Onglet Mises à jour vide.
+  static const String misesAJourVide =
+      'Aucun titre favori ou suivi pour l\'instant.\n'
+      'Rangez des titres dans « Favoris » ou « Suivis » pour voir ici leurs '
+      'dernières parutions.';
+
+  /// Intertitre des titres sans aucun chapitre dans leurs langues.
+  static const String sectionSansParution = 'Aucun chapitre dans vos langues';
+
+  /// Badge d'un dernier chapitre paru et pas encore lu.
+  static const String nouveau = 'Nouveau';
+
+  /// Mention d'un titre de la liste « En attente ».
+  static const String enAttente = 'En attente';
+
+  /// Dernier chapitre paru : « Chapitre 12 · FR · aujourd'hui ».
+  static String dernierChapitreParu(
+    String nomChapitre,
+    String langue,
+    DateTime date,
+    DateTime maintenant,
+  ) {
+    final morceaux = <String>[
+      nomChapitre,
+      if (langue.isNotEmpty) langue.toUpperCase(),
+      dateRelative(date, maintenant),
+    ];
+    return morceaux.join(' · ');
+  }
+
+  /// Titre sans chapitre dans ses langues.
+  static String aucuneParution(List<String> langues) {
+    final noms = <String>[
+      for (final code in langues) nomLangue(code).toLowerCase(),
+    ];
+    if (noms.isEmpty) return 'Pas encore de chapitre dans vos langues';
+    final liste = noms.length == 1
+        ? noms.single
+        : '${noms.sublist(0, noms.length - 1).join(', ')} ou ${noms.last}';
+    return 'Pas encore de chapitre en $liste';
+  }
+
+  /// Date relative : « aujourd'hui », « hier », « il y a 3 jours », puis la
+  /// date au-delà d'une semaine (jours comptés en heure locale).
+  static String dateRelative(DateTime date, DateTime maintenant) {
+    final locale = date.toLocal();
+    final aujourdhui = maintenant.toLocal();
+    final jourDate = DateTime(locale.year, locale.month, locale.day);
+    final jourActuel = DateTime(
+      aujourdhui.year,
+      aujourdhui.month,
+      aujourdhui.day,
+    );
+    final ecart = jourActuel.difference(jourDate).inDays;
+    if (ecart <= 0) return "aujourd'hui";
+    if (ecart == 1) return 'hier';
+    if (ecart < 7) return 'il y a $ecart jours';
+    return formaterDate(date);
+  }
+
+  // ------------------------------------------ Étape 6 : filtres et listes
+
+  /// Titre du panneau des catégories et info-bulle de l'entonnoir.
+  static const String filtrerParCategories = 'Filtrer par catégories';
+
+  /// Libellé accessible de l'entonnoir avec des catégories filtrées.
+  static String filtreCategoriesActif(int nombre) => nombre <= 1
+      ? 'Filtrer par catégories ($nombre catégorie filtrée)'
+      : 'Filtrer par catégories ($nombre catégories filtrées)';
+
+  /// Mode d'emploi des puces à trois états.
+  static const String aideTroisEtats =
+      'Touchez une catégorie pour l\'inclure (+), touchez-la encore pour '
+      'l\'exclure (−), une troisième fois pour l\'ignorer. Sont affichés les '
+      'titres qui ont toutes les catégories incluses et aucune des '
+      'catégories exclues.';
+
+  /// État d'une catégorie (info-bulle de sa puce).
+  static String etatFiltreCategorie(EtatFiltreCategorie etat) {
+    switch (etat) {
+      case EtatFiltreCategorie.neutre:
+        return 'Ignorée — toucher pour l\'inclure';
+      case EtatFiltreCategorie.incluse:
+        return 'Incluse — toucher pour l\'exclure';
+      case EtatFiltreCategorie.exclue:
+        return 'Exclue — toucher pour l\'ignorer';
+    }
+  }
+
+  /// Résumé du brouillon du panneau.
+  static String resumeFiltreCategories(int incluses, int exclues) {
+    if (incluses == 0 && exclues == 0) return 'Aucun filtre de catégorie.';
+    String compte(int nombre, String singulier, String pluriel) =>
+        nombre <= 1 ? '$nombre $singulier' : '$nombre $pluriel';
+    return '${compte(incluses, 'incluse', 'incluses')}, '
+        '${compte(exclues, 'exclue', 'exclues')}.';
+  }
+
+  /// Bouton : appliquer le filtre du panneau.
+  static const String appliquer = 'Appliquer';
+
+  /// Champ de recherche du panneau des catégories.
+  static const String rechercherCategorie = 'Rechercher une catégorie';
+
+  /// Bouton : remettre toutes les catégories à « ignorée ».
+  static const String effacerCategories = 'Tout effacer';
+
+  /// Aucune catégorie ne correspond à la recherche.
+  static const String aucuneCategorieTrouvee = 'Aucune catégorie trouvée.';
+
+  /// Aucune catégorie connue.
+  static const String aucuneCategorieConnue =
+      'Aucune catégorie pour l\'instant : elles viennent des sites quand '
+      'vous ajoutez des titres.';
+
+  /// Bouton de fermeture du panneau, avec le nombre de titres affichés.
+  static String afficherTitres(int nombre) =>
+      nombre <= 1 ? 'Afficher $nombre titre' : 'Afficher $nombre titres';
+
+  /// Bouton du filtre de niveau de contenu.
+  static const String boutonContenu = 'Contenu';
+
+  /// Titre du réglage des niveaux de contenu.
+  static const String niveauxContenu = 'Niveau de contenu';
+
+  /// Explication des niveaux de contenu.
+  static const String explicationNiveauxContenu =
+      'Niveaux affichés dans la bibliothèque et demandés à MangaDex lors '
+      'd\'une recherche. Les titres des sites qui n\'indiquent pas de niveau '
+      'restent toujours affichés.';
+
+  /// Bouton : niveaux de contenu par défaut.
+  static const String niveauxParDefaut =
+      'Par défaut (tout sauf pornographique)';
+
+  /// Nom affiché d'un niveau de contenu MangaDex.
+  static String libelleNiveauContenu(String niveau) {
+    switch (niveau) {
+      case 'safe':
+        return 'Tous publics';
+      case 'suggestive':
+        return 'Suggestif';
+      case 'erotica':
+        return 'Érotique';
+      case 'pornographic':
+        return 'Pornographique';
+      default:
+        return niveau;
+    }
+  }
+
+  /// Info-bulle d'une liste tenue automatiquement (« En attente »).
+  static const String listeAutomatique =
+      'Liste automatique : un titre y entre quand il n\'a aucun chapitre '
+      'dans vos langues, et en sort dès qu\'un chapitre paraît.';
+
+  /// Confirmation de l'ajout d'un titre placé dans « En attente ».
+  static String titreAjouteEnAttente(String nom) =>
+      '« $nom » ajouté. Aucun chapitre dans vos langues pour l\'instant : '
+      'il est placé dans « En attente » et vérifié plus souvent.';
+
+  // ------------------------------------------------- Étape 6 : couvertures
+
+  /// Bouton : changer la couverture d'un titre.
+  static const String changerCouverture = 'Changer la couverture';
+
+  /// Titre du dialogue de choix de la couverture.
+  static const String choisirCouverture = 'Choisir la couverture';
+
+  /// Intertitre des couvertures proposées par le site.
+  static const String couverturesDuSite = 'Couvertures proposées par le site';
+
+  /// Le site ne propose qu'une couverture.
+  static const String aucuneCouvertureSite =
+      'Le site ne propose pas d\'autre couverture pour ce titre.';
+
+  /// Légende d'une couverture du site : « Vol. 3 · JA ».
+  static String legendeCouverture(String? volume, String? langue) {
+    final morceaux = <String>[
+      volume == null || volume.isEmpty ? 'Sans volume' : 'Vol. $volume',
+      if (langue != null && langue.isNotEmpty) langue.toUpperCase(),
+    ];
+    return morceaux.join(' · ');
+  }
+
+  /// Mention de la couverture actuelle dans la liste de choix.
+  static const String couvertureActuelle = 'Actuelle';
+
+  /// Intertitre du choix d'une image de l'appareil.
+  static const String imageDeLAppareil = 'Image de l\'appareil';
+
+  /// Champ du chemin d'une image de l'appareil.
+  static const String champCheminImage = 'Chemin complet de l\'image';
+
+  /// Aide du champ du chemin d'une image.
+  static const String aideCheminImage =
+      'Fichier JPG, PNG ou WebP. Une copie est gardée avec le titre.';
+
+  /// Bouton : utiliser l'image de l'appareil.
+  static const String utiliserImage = 'Utiliser cette image';
+
+  /// Bouton : revenir à la couverture fournie par le site.
+  static const String revenirCouvertureSite = 'Revenir à la couverture du site';
+
+  /// Couverture changée.
+  static const String couvertureChangee = 'Couverture changée.';
+
+  // ---------------------------------------------- Étape 6 : rapport d'erreur
+
+  /// Bouton : exporter le rapport d'erreur.
+  static const String exporterRapport = 'Exporter le rapport d\'erreur';
+
+  /// Titre du dialogue après l'export.
+  static const String rapportEnregistre = 'Rapport d\'erreur enregistré';
+
+  /// Explication du rapport exporté.
+  static const String explicationRapport =
+      'Le rapport est enregistré dans le fichier ci-dessous. Il ne contient '
+      'pas de données personnelles (adresses e-mail, jetons et adresses IP '
+      'sont masqués) : vous pouvez l\'envoyer pour faire analyser le site.';
+
+  /// Bouton : ouvrir le dossier des rapports.
+  static const String ouvrirDossier = 'Ouvrir le dossier';
+
+  /// Bouton de fermeture d'un dialogue.
+  static const String fermer = 'Fermer';
+
+  /// Action décrite dans le rapport : ajout d'un site.
+  static const String actionRapportAjoutSite = 'Ajout d\'un site';
+
+  /// Action décrite dans le rapport : ajout d'un titre.
+  static const String actionRapportAjoutTitre = 'Ajout d\'un titre';
+
+  // ---------------------------------------- Étape 6 : téléchargements
+
+  /// Intertitre des suppressions prévues (onglet Téléchargements).
+  static String sectionSuppressionsPrevues(int nombre) =>
+      'Suppressions prévues ($nombre)';
+
+  /// Explication des suppressions prévues.
+  static const String explicationSuppressionsPrevues =
+      'Ces chapitres ne font plus partie de vos règles de téléchargement : '
+      'ils seront supprimés à la fin du compte à rebours, sauf si vous les '
+      'gardez.';
+
+  /// Intertitre de la file de téléchargement.
+  static const String sectionFile = 'File de téléchargement';
+
+  /// File vide alors que des suppressions sont prévues.
+  static const String fileVide = 'La file de téléchargement est vide.';
+
+  /// Repère d'un chapitre gardé.
+  static const String garde = 'Gardé';
+
+  /// Info-bulle du repère « gardé ».
+  static const String infoGarde =
+      'Gardé : ce chapitre ne sera jamais supprimé automatiquement.';
+
+  /// Bouton : ne plus garder un chapitre.
+  static const String nePlusGarder = 'Ne plus garder';
+
+  /// Garde retirée.
+  static const String gardeRetiree =
+      'Le chapitre suit de nouveau vos règles de téléchargement.';
+
+  // ------------------------------------- Étape 6 : surveillance « En attente »
+
+  /// Libellé de l'écart des vérifications des titres en attente.
+  static const String heuresEnAttente =
+      'Titres « En attente » vérifiés toutes les';
+
+  /// Écart en heures.
+  static String valeurHeures(int heures) => '$heures h';
+
+  /// Explication de la surveillance des titres en attente.
+  static const String explicationHeuresEnAttente =
+      'Les titres favoris, suivis ou planifiés qui n\'ont encore aucun '
+      'chapitre dans vos langues sont vérifiés plus souvent (à chaque heure '
+      'pleine par défaut), pour ne pas rater leur premier chapitre. Les '
+      'titres seulement « Planifiés » ne déclenchent jamais de notification.';
+
+  /// Réglage de la surveillance enregistré.
+  static const String surveillanceEnregistree =
+      'Surveillance des titres en attente enregistrée.';
 
   // ------------------------------------------------------------- Formatage
 

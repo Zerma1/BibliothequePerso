@@ -219,8 +219,74 @@ class _SectionMisesAJour extends StatelessWidget {
             Textes.prochaineRecherche(prochaine),
             style: theme.textTheme.bodySmall,
           ),
+        const SizedBox(height: espacementMoyen),
+        // Surveillance accrue des titres « En attente » (étape 6) : même
+        // présentation que le nombre de recherches, juste en dessous.
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Text(
+                Textes.heuresEnAttente,
+                style: theme.textTheme.titleSmall,
+              ),
+            ),
+            IconButton(
+              tooltip: Textes.diminuer,
+              icon: const Icon(Icons.remove_circle_outline),
+              onPressed:
+                  etat.estEnEnregistrementEnAttente || etat.heuresEnAttente <= 1
+                  ? null
+                  : () => _modifierEnAttente(
+                      context,
+                      etat,
+                      etat.heuresEnAttente - 1,
+                    ),
+            ),
+            Text(
+              Textes.valeurHeures(etat.heuresEnAttente),
+              style: theme.textTheme.titleMedium,
+            ),
+            IconButton(
+              tooltip: Textes.augmenter,
+              icon: const Icon(Icons.add_circle_outline),
+              onPressed:
+                  etat.estEnEnregistrementEnAttente ||
+                      etat.heuresEnAttente >= etat.maximumHeuresEnAttente
+                  ? null
+                  : () => _modifierEnAttente(
+                      context,
+                      etat,
+                      etat.heuresEnAttente + 1,
+                    ),
+            ),
+          ],
+        ),
+        Text(
+          Textes.explicationHeuresEnAttente,
+          style: theme.textTheme.bodySmall,
+        ),
       ],
     );
+  }
+
+  Future<void> _modifierEnAttente(
+    BuildContext context,
+    EtatParametres etat,
+    int heures,
+  ) async {
+    final misesAJour = context.read<EtatMisesAJour>();
+    final resultat = await etat.modifierHeuresEnAttente(heures);
+    if (resultat.estReussi) {
+      // Minuteur (ordinateur) ou tâche de fond (Android) recalés.
+      await misesAJour.replanifier();
+    }
+    if (context.mounted) {
+      afficherResultat(
+        context,
+        resultat,
+        succes: Textes.surveillanceEnregistree,
+      );
+    }
   }
 }
 
@@ -515,11 +581,6 @@ class _EtatDialogueSite extends State<_DialogueSite> {
   );
   late bool _estActive = widget.source.estActive;
 
-  /// Codes de deux lettres séparés par des virgules (espaces tolérés).
-  static final RegExp _formatLangues = RegExp(
-    '^[a-z]{$longueurCodeLangue}(,[a-z]{$longueurCodeLangue})*\$',
-  );
-
   @override
   void dispose() {
     _nom.dispose();
@@ -527,11 +588,10 @@ class _EtatDialogueSite extends State<_DialogueSite> {
     super.dispose();
   }
 
-  String? _validerLangues(String? valeur) {
-    final langues = (valeur ?? '').replaceAll(' ', '').toLowerCase();
-    if (langues.isEmpty || _formatLangues.hasMatch(langues)) return null;
-    return Textes.erreurLangues;
-  }
+  /// Codes séparés par des virgules, variantes régionales acceptées
+  /// (« fr,pt-br ») : même règle que le service.
+  String? _validerLangues(String? valeur) =>
+      EtatSources.languesValides(valeur ?? '') ? null : Textes.erreurLangues;
 
   void _valider() {
     if (!(_formulaire.currentState?.validate() ?? false)) return;

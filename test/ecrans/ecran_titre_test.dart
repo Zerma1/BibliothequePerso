@@ -93,8 +93,10 @@ void main() {
     expect(find.text('Gore'), findsOneWidget);
     expect(find.text(Textes.creditMangaDex), findsOneWidget);
     expect(find.text(Textes.ouvrirSurLeSite), findsOneWidget);
-    // La couverture est demandée avec le Referer du site du titre.
-    expect(service.referersDemandes, contains('https://mangadex.org'));
+    // La couverture est demandée au service pour ce titre (appareil
+    // d'abord, puis site avec son Referer).
+    expect(service.couverturesChargees, contains(1));
+    expect(find.text(Textes.changerCouverture), findsOneWidget);
 
     // Titres alternatifs repliés par défaut.
     expect(find.text(Textes.titresAlternatifs(2)), findsOneWidget);

@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 
 import '../services/planification_mises_a_jour.dart';
 import '../services/politique_telechargement.dart';
+import '../services/service_bibliotheque.dart';
 import '../services/service_parametres.dart';
 import '../services/service_telechargement.dart';
 import 'description_erreur.dart';
@@ -33,10 +34,19 @@ enum LimiteTelechargement {
 /// téléchargements ou en suppriment : on évite de le faire à chaque appui).
 class EtatParametres extends EtatNotifiant {
   /// Crée l'état ; appeler [charger] pour lire les réglages.
-  EtatParametres(this._serviceParametres, this._serviceTelechargement);
+  ///
+  /// [serviceBibliotheque] sert à recalculer la liste « En attente » quand
+  /// les langues changent (sans lui, elle l'est à la prochaine recherche de
+  /// nouveaux chapitres).
+  EtatParametres(
+    this._serviceParametres,
+    this._serviceTelechargement, {
+    this._serviceBibliotheque,
+  });
 
   final ServiceParametres _serviceParametres;
   final ServiceTelechargement _serviceTelechargement;
+  final ServiceBibliotheque? _serviceBibliotheque;
 
   /// Valeur maximale d'une limite (même borne que le service).
   static const int limiteMaximale = ServiceParametres.limiteMaximale;
@@ -130,6 +140,9 @@ class EtatParametres extends EtatNotifiant {
     try {
       await _serviceParametres.enregistrerVerificationsParJour(borne);
       _planification = PlanificationMisesAJour(borne);
+      // L'écart « En attente » ne dépasse jamais l'intervalle normal : le
+      // service le ramène, on relit la valeur appliquée.
+      _heuresEnAttente = await _serviceParametres.chargerHeuresEnAttente();
       return ResultatAction<PlanificationMisesAJour>.reussite(_planification);
     } catch (erreur, pile) {
       return ResultatAction<PlanificationMisesAJour>.echec(
@@ -137,6 +150,37 @@ class EtatParametres extends EtatNotifiant {
       );
     } finally {
       _estEnEnregistrementPlanification = false;
+      notifier();
+    }
+  }
+
+  int _heuresEnAttente = 1;
+  bool _estEnEnregistrementEnAttente = false;
+
+  /// Écart en heures entre deux vérifications des titres « En attente ».
+  int get heuresEnAttente => _heuresEnAttente;
+
+  /// Écart maximal autorisé : l'intervalle des vérifications normales.
+  int get maximumHeuresEnAttente =>
+      ServiceParametres.maximumHeuresEnAttente(verificationsParJour);
+
+  /// `true` pendant l'enregistrement de l'écart « En attente ».
+  bool get estEnEnregistrementEnAttente => _estEnEnregistrementEnAttente;
+
+  /// Change l'écart des vérifications des titres « En attente » (ramené
+  /// entre 1 h et l'intervalle normal) et l'enregistre aussitôt. L'écran
+  /// prévient ensuite `EtatMisesAJour.replanifier`.
+  Future<ResultatAction<int>> modifierHeuresEnAttente(int heures) async {
+    _estEnEnregistrementEnAttente = true;
+    notifier();
+    try {
+      await _serviceParametres.enregistrerHeuresEnAttente(heures);
+      _heuresEnAttente = await _serviceParametres.chargerHeuresEnAttente();
+      return ResultatAction<int>.reussite(_heuresEnAttente);
+    } catch (erreur, pile) {
+      return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnEnregistrementEnAttente = false;
       notifier();
     }
   }
@@ -229,6 +273,13 @@ class EtatParametres extends EtatNotifiant {
       // Relues : le service nettoie les codes et borne leur nombre.
       _langues = await _serviceParametres.chargerLangues();
       try {
+        // Un titre peut entrer dans « En attente » (plus aucun chapitre dans
+        // les langues) ou en sortir : classement recalculé (base seulement).
+        await _serviceBibliotheque?.classerTousEnAttente();
+      } catch (erreur, pile) {
+        debugPrint('Classement « En attente » non refait : $erreur\n$pile');
+      }
+      try {
         await _serviceTelechargement.appliquerReglesATous();
       } catch (erreur, pile) {
         debugPrint('Règles non appliquées après les langues : $erreur\n$pile');
@@ -251,6 +302,7 @@ class EtatParametres extends EtatNotifiant {
       final reglages = await _serviceParametres.chargerReglagesTelechargement();
       _langues = await _serviceParametres.chargerLangues();
       _planification = await _serviceParametres.chargerPlanification();
+      _heuresEnAttente = await _serviceParametres.chargerHeuresEnAttente();
       _derniereVerification = await _serviceParametres
           .chargerDerniereVerification();
       _enregistres = reglages;

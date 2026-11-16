@@ -46,7 +46,7 @@ void main() {
     expect(find.text('5'), findsOneWidget);
     // Sans adresse de couverture : espace réservé, aucune requête.
     expect(find.byIcon(Icons.menu_book_outlined), findsOneWidget);
-    expect(service.couverturesDemandees, isEmpty);
+    expect(service.couverturesChargees, isEmpty);
 
     await tester.tap(find.byType(CarteTitre));
     expect(appuis, 1);
@@ -65,14 +65,15 @@ void main() {
   });
 
   testWidgets(
-    'la couverture passe par le service et affiche un espace réservé en cas '
-    'd\'erreur',
+    'la couverture passe par le service (appareil puis site) et affiche un '
+    'espace réservé si elle est indisponible',
     (tester) async {
       final service = FauxServiceBibliotheque();
       await tester.pumpWidget(
         _cadre(
           CarteTitre(
             titre: Titre(
+              id: 7,
               urlTitre: 'https://exemple.test/t',
               nom: 'Sans réseau',
               urlCouverture: 'https://exemple.test/c.jpg',
@@ -83,9 +84,7 @@ void main() {
       );
       await tester.pump();
 
-      expect(service.couverturesDemandees, <String>[
-        'https://exemple.test/c.jpg',
-      ]);
+      expect(service.couverturesChargees, <int>[7]);
       expect(find.byIcon(Icons.broken_image_outlined), findsOneWidget);
       expect(find.byType(Image), findsNothing);
     },
@@ -108,7 +107,11 @@ void main() {
     await tester.pump();
 
     final image = tester.widget<Image>(find.byType(Image));
-    expect(image.image, isA<MemoryImage>());
+    // Décodée à la taille affichée (ResizeImage) pour ménager la mémoire.
+    final fournisseur = image.image;
+    expect(fournisseur, isA<ResizeImage>());
+    expect((fournisseur as ResizeImage).imageProvider, isA<MemoryImage>());
+    expect(fournisseur.width, greaterThan(0));
   });
 
   testWidgets('PastilleCategorie : étiquette ou puce de filtre', (

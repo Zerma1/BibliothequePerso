@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../etat/description_erreur.dart';
 import '../etat/etat_bibliotheque.dart';
 import '../etat/etat_sources.dart';
+import 'bouton_rapport_erreur.dart';
 import 'constantes_interface.dart';
 import 'textes.dart';
 
@@ -44,6 +45,9 @@ class _EtatDialogueAjoutTitre extends State<DialogueAjoutTitre> {
   /// l'ouverture du dialogue.
   Set<int>? _idsListesChoisies;
   String? _messageErreur;
+
+  /// Erreur du dernier essai, gardée pour le rapport d'erreur exportable.
+  DescriptionErreur? _erreur;
 
   @override
   void initState() {
@@ -83,7 +87,10 @@ class _EtatDialogueAjoutTitre extends State<DialogueAjoutTitre> {
   Future<void> _ajouter() async {
     final etat = context.read<EtatBibliotheque>();
     final etatSources = context.read<EtatSources>();
-    setState(() => _messageErreur = null);
+    setState(() {
+      _messageErreur = null;
+      _erreur = null;
+    });
     final resultat = await etat.ajouterTitre(_url.text, _idsListes(etat));
     // MangaDex est ajouté automatiquement à la première adresse collée, même
     // si la lecture du titre échoue ensuite : l'onglet Sources doit le
@@ -99,16 +106,19 @@ class _EtatDialogueAjoutTitre extends State<DialogueAjoutTitre> {
     if (erreur != null || ajout == null) {
       // L'erreur reste dans la boîte : le client peut corriger l'adresse sans
       // tout ressaisir.
-      setState(
-        () => _messageErreur = erreur == null
+      setState(() {
+        _erreur = erreur;
+        _messageErreur = erreur == null
             ? Textes.erreurInattendue
-            : Textes.messageErreur(erreur),
-      );
+            : Textes.messageErreur(erreur);
+      });
       return;
     }
-    Navigator.of(
-      context,
-    ).pop(Textes.titreAjoute(ajout.titre.nom, ajout.nombreNouveauxChapitres));
+    Navigator.of(context).pop(
+      ajout.estEnAttente
+          ? Textes.titreAjouteEnAttente(ajout.titre.nom)
+          : Textes.titreAjoute(ajout.titre.nom, ajout.nombreNouveauxChapitres),
+    );
   }
 
   @override
@@ -144,8 +154,10 @@ class _EtatDialogueAjoutTitre extends State<DialogueAjoutTitre> {
               const Text(Textes.rangerDans),
               if (etat.listes.isEmpty && etat.estEnChargement)
                 const LinearProgressIndicator(),
+              // « En attente » n'est pas proposée : l'application la tient
+              // seule (un titre sans chapitre dans vos langues y entre).
               for (final liste in etat.listes)
-                if (liste.id != null)
+                if (liste.id != null && !etat.estListeAutomatique(liste))
                   CheckboxListTile(
                     contentPadding: EdgeInsets.zero,
                     title: Text(liste.nom),
@@ -166,6 +178,13 @@ class _EtatDialogueAjoutTitre extends State<DialogueAjoutTitre> {
                   messageErreur,
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
+                if (_erreur != null && !enCours) ...<Widget>[
+                  const SizedBox(height: espacementPetit),
+                  BoutonRapportErreur(
+                    erreur: _erreur!,
+                    action: Textes.actionRapportAjoutTitre,
+                  ),
+                ],
               ],
             ],
           ),

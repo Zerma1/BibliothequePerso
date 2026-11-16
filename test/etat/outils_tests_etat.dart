@@ -16,6 +16,8 @@ import 'package:bibliotheque_perso/etat/etat_bibliotheque.dart';
 import 'package:bibliotheque_perso/etat/etat_couvertures.dart';
 import 'package:bibliotheque_perso/etat/etat_mises_a_jour.dart';
 import 'package:bibliotheque_perso/etat/etat_parametres.dart';
+import 'package:bibliotheque_perso/etat/etat_parutions.dart';
+import 'package:bibliotheque_perso/etat/etat_rapports_erreur.dart';
 import 'package:bibliotheque_perso/etat/etat_sources.dart';
 import 'package:bibliotheque_perso/etat/etat_telechargements.dart';
 import 'package:bibliotheque_perso/main.dart';
@@ -33,8 +35,10 @@ import 'package:bibliotheque_perso/services/service_ajout_site.dart';
 import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
 import 'package:bibliotheque_perso/services/service_mises_a_jour.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
+import 'package:bibliotheque_perso/services/service_rapports_erreur.dart';
 import 'package:bibliotheque_perso/services/service_telechargement.dart';
 import 'package:bibliotheque_perso/services/verrou_telechargement.dart';
+import 'package:bibliotheque_perso/sources/couverture_site.dart';
 import 'package:bibliotheque_perso/sources/detecteur_type_site.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/sources/fabrique_sources.dart';
@@ -47,6 +51,12 @@ import '../donnees/outils_tests_donnees.dart';
 import '../sources/outils_tests_sources.dart';
 
 // ---------------------------------------------------------------- Faux services
+
+/// Identifiant de la liste système « Planifié » dans les faux services.
+const int idListePlanifie = 4;
+
+/// Identifiant de la liste système « En attente » dans les faux services.
+const int idListeEnAttente = 5;
 
 /// Faux `ServiceBibliotheque` entièrement en mémoire, pour les tests de
 /// widgets (aucune base, aucun réseau, réponses immédiates ou retenues).
@@ -68,7 +78,20 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
       estSysteme: true,
       ordre: ordreListeSuivis,
     ),
-    const ListeLecture(id: 3, nom: 'À lire plus tard', ordre: 2),
+    // Même ordre que la base : listes système d'abord.
+    const ListeLecture(
+      id: idListePlanifie,
+      nom: nomListePlanifie,
+      estSysteme: true,
+      ordre: ordreListePlanifie,
+    ),
+    const ListeLecture(
+      id: idListeEnAttente,
+      nom: nomListeEnAttente,
+      estSysteme: true,
+      ordre: ordreListeEnAttente,
+    ),
+    const ListeLecture(id: 3, nom: 'À lire plus tard', ordre: 4),
   ];
 
   /// Toutes les catégories.
@@ -170,14 +193,28 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
         .length,
   );
 
+  /// Derniers niveaux de contenu reçus par [chargerTitres] (`null` : pas de
+  /// filtre).
+  List<String>? derniersNiveauxDemandes;
+
   @override
   Future<List<Titre>> chargerTitres({
     String? recherche,
     int? idListe,
     int? idCategorie,
+    List<String>? niveauxContenu,
+    bool inclureNiveauInconnu = true,
   }) async {
     await _lire();
+    derniersNiveauxDemandes = niveauxContenu;
     final texte = recherche?.toLowerCase();
+    bool niveauAccepte(Titre titre) {
+      if (niveauxContenu == null) return true;
+      final niveau = titre.niveauContenu;
+      if (niveau == null) return inclureNiveauInconnu;
+      return niveauxContenu.contains(niveau);
+    }
+
     return <Titre>[
       for (final titre in titres)
         if ((texte == null || titre.nom.toLowerCase().contains(texte)) &&
@@ -188,10 +225,106 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
             (idCategorie == null ||
                 (categoriesParTitre[titre.id] ?? const <Categorie>[]).any(
                   (categorie) => categorie.id == idCategorie,
-                )))
+                )) &&
+            niveauAccepte(titre))
           _avecNonLus(titre),
     ];
   }
+
+  /// Remplace un titre de test (niveau de contenu, couverture choisie…).
+  void remplacerTitreDeTest(Titre titre) {
+    final index = titres.indexWhere((existant) => existant.id == titre.id);
+    if (index >= 0) titres[index] = titre;
+  }
+
+  // ------------------------------------------------- Étape 6 : En attente
+
+  /// Appels à [classerTousEnAttente].
+  int nombreClassements = 0;
+
+  @override
+  Future<bool> classerEnAttente(int idTitre) async =>
+      (listesParTitre[idTitre] ?? const <int>{}).contains(idListeEnAttente);
+
+  @override
+  Future<int> classerTousEnAttente() async {
+    nombreClassements++;
+    return listesParTitre.values
+        .where((ids) => ids.contains(idListeEnAttente))
+        .length;
+  }
+
+  // ------------------------------------------------ Étape 6 : Mises à jour
+
+  /// Lignes renvoyées par [chargerDernieresParutions].
+  List<ParutionTitre> parutions = <ParutionTitre>[];
+
+  /// Nombre d'appels à [chargerDernieresParutions].
+  int nombreLecturesParutions = 0;
+
+  @override
+  Future<List<ParutionTitre>> chargerDernieresParutions() async {
+    nombreLecturesParutions++;
+    await _lire();
+    return List<ParutionTitre>.of(parutions);
+  }
+
+  // -------------------------------------------------- Étape 6 : Couvertures
+
+  /// Chemins des couvertures enregistrées sur l'appareil, par titre.
+  final Map<int, String> cheminsCouvertures = <int, String>{};
+
+  /// Titres dont la couverture a été demandée par [chargerCouverture].
+  final List<int> couverturesChargees = <int>[];
+
+  /// Couvertures proposées par le site ([recupererCouverturesDuSite]).
+  List<CouvertureSite> couverturesSite = <CouvertureSite>[];
+
+  /// Erreur levée par [recupererCouverturesDuSite] et les choix de
+  /// couverture, si définie.
+  Object? erreurCouvertures;
+
+  @override
+  Future<String?> cheminCouvertureLocale(Titre titre) async =>
+      cheminsCouvertures[titre.id];
+
+  @override
+  Future<Uint8List?> chargerCouverture(Titre titre) async {
+    if (titre.id != null) couverturesChargees.add(titre.id!);
+    return octetsCouverture;
+  }
+
+  @override
+  Future<List<CouvertureSite>> recupererCouverturesDuSite(Titre titre) async {
+    final erreur = erreurCouvertures;
+    if (erreur != null) throw erreur;
+    return List<CouvertureSite>.of(couverturesSite);
+  }
+
+  Titre _changerCouverture(int idTitre, String? choix) {
+    final erreur = erreurCouvertures;
+    if (erreur != null) throw erreur;
+    final index = titres.indexWhere((titre) => titre.id == idTitre);
+    if (index < 0) throw const ErreurService("Ce titre n'existe plus.");
+    titres[index] = choix == null
+        ? titres[index].copierAvec(effacerCouvertureChoisie: true)
+        : titres[index].copierAvec(couvertureChoisie: choix);
+    return titres[index];
+  }
+
+  @override
+  Future<Titre> choisirCouverture(int idTitre, String urlCouverture) async =>
+      _changerCouverture(idTitre, urlCouverture);
+
+  @override
+  Future<Titre> choisirCouvertureLocale(
+    int idTitre,
+    String cheminImage,
+  ) async => _changerCouverture(idTitre, cheminImage);
+
+  @override
+  Future<Titre> retablirCouvertureDuSite(int idTitre) async =>
+      _changerCouverture(idTitre, null);
 
   @override
   Future<Titre?> chargerTitre(int idTitre) async {
@@ -336,12 +469,21 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
 
   @override
   Future<void> ajouterTitreALaListe(int idListe, int idTitre) async {
+    _refuserEnAttente(idListe);
     (listesParTitre[idTitre] ??= <int>{}).add(idListe);
   }
 
   @override
   Future<void> retirerTitreDeLaListe(int idListe, int idTitre) async {
+    _refuserEnAttente(idListe);
     listesParTitre[idTitre]?.remove(idListe);
+  }
+
+  /// Même refus que le vrai service : « En attente » est automatique.
+  void _refuserEnAttente(int idListe) {
+    if (idListe == idListeEnAttente) {
+      throw const ErreurService('La liste « En attente » est automatique.');
+    }
   }
 
   @override
@@ -796,7 +938,44 @@ class FauxServiceTelechargement implements ServiceTelechargement {
     journal.add('garder:$idChapitre');
     gardes.add(idChapitre);
     planifierSuppressionDeTest(idChapitre, null);
+    _marquerGarde(idChapitre, estGarde: true);
     signaler();
+  }
+
+  @override
+  Future<void> retirerGarde(int idChapitre) async {
+    journal.add('retirerGarde:$idChapitre');
+    gardes.remove(idChapitre);
+    _marquerGarde(idChapitre, estGarde: false);
+    signaler();
+  }
+
+  void _marquerGarde(int idChapitre, {required bool estGarde}) {
+    for (final chapitres in bibliotheque.chapitresParTitre.values) {
+      for (var i = 0; i < chapitres.length; i++) {
+        if (chapitres[i].id == idChapitre) {
+          chapitres[i] = chapitres[i].copierAvec(estGarde: estGarde);
+        }
+      }
+    }
+  }
+
+  @override
+  Future<List<Chapitre>> chargerSuppressionsPrevues({int? idTitre}) async {
+    final prevues = <Chapitre>[
+      for (final MapEntry(key: id, value: chapitres)
+          in bibliotheque.chapitresParTitre.entries)
+        if (idTitre == null || id == idTitre)
+          for (final chapitre in chapitres)
+            if (chapitre.dateSuppressionPrevue != null &&
+                chapitre.estTelecharge &&
+                !gardes.contains(chapitre.id))
+              chapitre,
+    ];
+    prevues.sort(
+      (a, b) => a.dateSuppressionPrevue!.compareTo(b.dateSuppressionPrevue!),
+    );
+    return prevues;
   }
 
   @override
@@ -908,6 +1087,67 @@ class FauxServiceParametres implements ServiceParametres {
     chapitresGardes = ids.toSet();
   }
 
+  @override
+  Future<void> supprimerChapitresGardes() async {
+    chapitresGardes = <int>{};
+  }
+
+  // ------------------------------------------------------------ Étape 6
+
+  /// Écart « enregistré » des vérifications des titres en attente (`null` :
+  /// valeur par défaut).
+  int? heuresEnAttente;
+
+  /// Date de la dernière vérification des titres en attente.
+  DateTime? derniereVerificationEnAttente;
+
+  /// Niveaux de contenu « enregistrés » (`null` : valeur par défaut).
+  List<String>? niveaux;
+
+  @override
+  Future<int> chargerHeuresEnAttente() async {
+    final maximum = ServiceParametres.maximumHeuresEnAttente(
+      verificationsParJour,
+    );
+    final valeur = heuresEnAttente ?? 1;
+    return valeur.clamp(1, maximum);
+  }
+
+  @override
+  Future<void> enregistrerHeuresEnAttente(int heures) async {
+    heuresEnAttente = heures.clamp(
+      1,
+      ServiceParametres.maximumHeuresEnAttente(verificationsParJour),
+    );
+  }
+
+  @override
+  Future<PlanificationMisesAJour> chargerPlanificationEnAttente() async =>
+      PlanificationMisesAJour.toutesLesHeures(await chargerHeuresEnAttente());
+
+  @override
+  Future<DateTime?> chargerDerniereVerificationEnAttente() async =>
+      derniereVerificationEnAttente;
+
+  @override
+  Future<void> enregistrerDerniereVerificationEnAttente(DateTime date) async {
+    derniereVerificationEnAttente = date.toUtc();
+  }
+
+  @override
+  Future<List<String>> chargerNiveauxContenu() async =>
+      List<String>.of(niveaux ?? niveauxContenuParDefaut);
+
+  @override
+  Future<void> enregistrerNiveauxContenu(Iterable<String> nouveaux) async {
+    niveaux = ServiceParametres.nettoyerNiveauxContenu(nouveaux);
+  }
+
+  @override
+  Future<void> reinitialiserNiveauxContenu() async {
+    niveaux = null;
+  }
+
   /// Verrou de la file « enregistré ».
   VerrouTelechargement? verrou;
 
@@ -965,6 +1205,48 @@ class FauxServiceMisesAJour implements ServiceMisesAJour {
 
   @override
   bool get estEnCours => _estEnCours;
+
+  /// Prochaine échéance imposée à [chargerProchaineEcheance] ; `null` : elle
+  /// est calculée comme le vrai service, à partir de [parametres].
+  DateTime? prochaineEcheance;
+
+  /// Réglages lus par [chargerProchaineEcheance] (comme le vrai service) ;
+  /// `null` : planification par défaut (00:00 et 12:00 UTC).
+  FauxServiceParametres? parametres;
+
+  /// `true` si la liste « En attente » contient des titres (leur
+  /// surveillance horaire compte alors dans la prochaine échéance).
+  bool aDesTitresEnAttente = false;
+
+  @override
+  Future<DateTime> chargerProchaineEcheance(DateTime maintenant) async {
+    final imposee = prochaineEcheance;
+    if (imposee != null) return imposee;
+    final reglages = parametres;
+    final normale = PlanificationMisesAJour(
+      reglages?.verificationsParJour ??
+          PlanificationMisesAJour.parDefautParJour,
+    ).prochaineEcheance(maintenant);
+    if (reglages == null || !aDesTitresEnAttente) return normale;
+    final enAttente = (await reglages.chargerPlanificationEnAttente())
+        .prochaineEcheance(maintenant);
+    return enAttente.isBefore(normale) ? enAttente : normale;
+  }
+
+  /// Nombre d'appels à [verifierTitresEnAttente].
+  int nombreVerificationsEnAttente = 0;
+
+  @override
+  Future<RapportMisesAJour> verifierTitresEnAttente() async {
+    nombreVerificationsEnAttente++;
+    final date = DateTime.utc(2026, 11, 15, 12);
+    return RapportMisesAJour(
+      debut: date,
+      fin: date,
+      resultats: const <ResultatVerificationTitre>[],
+      estEnAttenteSeulement: true,
+    );
+  }
 
   @override
   Future<RapportMisesAJour> verifierTitresSuivis() async {
@@ -1063,6 +1345,32 @@ Future<ServicesDeTest> creerServicesReels() async {
   return services;
 }
 
+/// Faux `ServiceRapportsErreur` : n'écrit aucun fichier, garde les erreurs
+/// reçues et renvoie un chemin fictif.
+class FauxServiceRapportsErreur implements ServiceRapportsErreur {
+  /// Erreurs exportées, avec l'action décrite.
+  final List<({Object erreur, String? action})> exportes =
+      <({Object erreur, String? action})>[];
+
+  /// Erreur levée par l'export, si définie.
+  Object? erreurExport;
+
+  @override
+  String get dossierRapports => 'C:/rapports';
+
+  @override
+  Future<String> exporterRapport(
+    Object erreur, {
+    String? action,
+    TypeSource? typeDetecte,
+  }) async {
+    final panne = erreurExport;
+    if (panne != null) throw panne;
+    exportes.add((erreur: erreur, action: action));
+    return 'C:/rapports/rapport_${exportes.length}.txt';
+  }
+}
+
 // ------------------------------------------------------------------ Widgets
 
 /// Enveloppe [enfant] dans les fournisseurs de l'application et un
@@ -1074,10 +1382,13 @@ Widget envelopper(
   FauxServiceMisesAJour? misesAJour,
   FauxServiceTelechargement? telechargement,
   FauxServiceParametres? parametres,
+  FauxServiceRapportsErreur? rapports,
   bool verifierMisesAJourAuDemarrage = false,
+  DateTime Function()? maintenant,
 }) {
   final serviceTelechargement =
       telechargement ?? FauxServiceTelechargement(bibliotheque);
+  final serviceParametres = parametres ?? FauxServiceParametres();
   return MultiProvider(
     providers: [
       ChangeNotifierProvider<EtatMisesAJour>(
@@ -1088,11 +1399,20 @@ Widget envelopper(
         )..demarrer(),
       ),
       Provider<EtatCouvertures>(create: (_) => EtatCouvertures(bibliotheque)),
+      Provider<EtatRapportsErreur>(
+        create: (_) =>
+            EtatRapportsErreur(rapports ?? FauxServiceRapportsErreur()),
+      ),
       ChangeNotifierProvider<EtatBibliotheque>(
         create: (_) => EtatBibliotheque(
           bibliotheque,
           serviceTelechargement: serviceTelechargement,
+          serviceParametres: serviceParametres,
         )..charger(),
+      ),
+      ChangeNotifierProvider<EtatParutions>(
+        create: (_) =>
+            EtatParutions(bibliotheque, maintenant: maintenant)..charger(),
       ),
       ChangeNotifierProvider<EtatSources>(
         create: (_) => EtatSources(
@@ -1102,13 +1422,17 @@ Widget envelopper(
         )..charger(),
       ),
       ChangeNotifierProvider<EtatTelechargements>(
-        create: (_) =>
-            EtatTelechargements(serviceTelechargement, bibliotheque)..charger(),
+        create: (_) => EtatTelechargements(
+          serviceTelechargement,
+          bibliotheque,
+          maintenant: maintenant == null ? null : () => maintenant().toUtc(),
+        )..charger(),
       ),
       ChangeNotifierProvider<EtatParametres>(
         create: (_) => EtatParametres(
-          parametres ?? FauxServiceParametres(),
+          serviceParametres,
           serviceTelechargement,
+          serviceBibliotheque: bibliotheque,
         )..charger(),
       ),
     ],

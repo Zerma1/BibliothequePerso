@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../modeles/source.dart';
 import '../services/service_ajout_site.dart';
 import '../services/service_bibliotheque.dart';
+import '../services/service_parametres.dart';
 import '../services/service_telechargement.dart';
 import 'description_erreur.dart';
 
@@ -88,6 +89,20 @@ class EtatSources extends EtatNotifiant {
     }
     _estEnChargement = false;
     notifier();
+  }
+
+  /// `true` si [saisie] est vide ou une liste de codes de langue séparés par
+  /// des virgules (« fr », « fr,en », variantes régionales comme « pt-br »),
+  /// selon la même règle que le service des réglages.
+  static bool languesValides(String saisie) {
+    final codes = saisie
+        .split(',')
+        .map((code) => code.trim())
+        .where((code) => code.isNotEmpty)
+        .toList();
+    return codes.every(
+      (code) => ServiceParametres.nettoyerLangues(<String>[code]).isNotEmpty,
+    );
   }
 
   /// Nom proposé pour le site à [url] (hôte sans `www.`), ou une chaîne vide

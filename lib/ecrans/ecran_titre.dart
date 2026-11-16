@@ -16,6 +16,7 @@ import '../etat/outils_chapitres.dart';
 import '../modeles/chapitre.dart';
 import '../modeles/titre.dart';
 import '../widgets/constantes_interface.dart';
+import '../widgets/dialogue_couverture.dart';
 import '../widgets/editeur_langues.dart';
 import '../widgets/image_couverture.dart';
 import '../widgets/indicateur_hors_ligne.dart';
@@ -267,6 +268,13 @@ class _EnTete extends StatelessWidget {
   final bool estLarge;
   final double largeurDisponible;
 
+  Future<void> _changerCouverture(BuildContext context) async {
+    final message = await afficherDialogueCouverture(context, etat);
+    if (message != null && context.mounted) {
+      afficherMessage(context, message);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -277,17 +285,31 @@ class _EnTete extends StatelessWidget {
           (estLarge ? fractionCouvertureFiche : fractionCouvertureFicheEtroite),
       largeurMaxCouvertureFiche,
     );
+    // Le bouton de changement suit la couverture : sous elle, à la même
+    // largeur, dans les deux dispositions.
     final couverture = SizedBox(
       width: largeurCouverture,
-      child: AspectRatio(
-        aspectRatio: rapportCouverture,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(espacementPetit),
-          child: ImageCouverture(
-            urlCouverture: titre.urlCouverture,
-            referer: etat.source?.urlBase,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          AspectRatio(
+            aspectRatio: rapportCouverture,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(espacementPetit),
+              child: ImageCouverture(titre: titre),
+            ),
           ),
-        ),
+          TextButton.icon(
+            onPressed: etat.estEnChangementCouverture
+                ? null
+                : () => _changerCouverture(context),
+            icon: const Icon(Icons.photo_library_outlined),
+            label: const Text(
+              Textes.changerCouverture,
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
       ),
     );
     final informations = _Informations(etat: etat, titre: titre);
@@ -345,14 +367,21 @@ class _EnTete extends StatelessWidget {
                   FilterChip(
                     label: Text(liste.nom),
                     selected: etat.idsListesDuTitre.contains(liste.id),
-                    onSelected: (coche) async {
-                      final resultat = coche
-                          ? await etat.ajouterALaListe(liste.id!)
-                          : await etat.retirerDeLaListe(liste.id!);
-                      if (context.mounted) {
-                        afficherResultat(context, resultat);
-                      }
-                    },
+                    // « En attente » est tenue par l'application : sa puce
+                    // montre l'état du titre sans pouvoir être changée.
+                    tooltip: etat.estListeAutomatique(liste)
+                        ? Textes.listeAutomatique
+                        : null,
+                    onSelected: etat.estListeAutomatique(liste)
+                        ? null
+                        : (coche) async {
+                            final resultat = coche
+                                ? await etat.ajouterALaListe(liste.id!)
+                                : await etat.retirerDeLaListe(liste.id!);
+                            if (context.mounted) {
+                              afficherResultat(context, resultat);
+                            }
+                          },
                   ),
             ],
           ),
@@ -1046,6 +1075,38 @@ class _LigneChapitre extends StatelessWidget {
                     ],
                   ),
                 ],
+                // Repère « gardé » : le client sait pourquoi ce chapitre
+                // échappe aux règles, et peut revenir dessus.
+                if (chapitre.estGarde &&
+                    horsLigne.statut == StatutHorsLigne.telecharge)
+                  _ActionsArchive(
+                    enfants: <Widget>[
+                      Tooltip(
+                        message: Textes.infoGarde,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Icon(
+                              Icons.push_pin,
+                              size: theme.textTheme.bodySmall?.fontSize,
+                              color: couleurs.primary,
+                            ),
+                            const SizedBox(width: espacementPetit / 2),
+                            Text(
+                              Textes.garde,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: couleurs.primary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => _nePlusGarder(context),
+                        child: const Text(Textes.nePlusGarder),
+                      ),
+                    ],
+                  ),
               ],
             ),
             langue: Text(
@@ -1085,6 +1146,14 @@ class _LigneChapitre extends StatelessWidget {
     final resultat = await etat.garder(chapitre);
     if (context.mounted) {
       afficherResultat(context, resultat, succes: Textes.chapitreGarde);
+    }
+  }
+
+  /// « Ne plus garder » : le chapitre suit de nouveau les règles.
+  Future<void> _nePlusGarder(BuildContext context) async {
+    final resultat = await etat.nePlusGarder(chapitre);
+    if (context.mounted) {
+      afficherResultat(context, resultat, succes: Textes.gardeRetiree);
     }
   }
 
@@ -1137,7 +1206,11 @@ class _ActionsArchive extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: espacementPetit),
         ),
       ),
-      child: Wrap(spacing: espacementPetit / 2, children: enfants),
+      child: Wrap(
+        spacing: espacementPetit / 2,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: enfants,
+      ),
     );
   }
 }

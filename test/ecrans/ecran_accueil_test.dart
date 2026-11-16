@@ -165,8 +165,10 @@ void main() {
 
     await tester.tap(find.text(Textes.ongletParametres).first);
     await tester.pumpAndSettle();
-    // Première section de l'écran Paramètres.
-    expect(find.text(Textes.sectionMisesAJour), findsOneWidget);
+    // Section de l'écran Paramètres (le même mot nomme aussi l'onglet
+    // « Mises à jour » du rail).
+    expect(find.text(Textes.sectionMisesAJour), findsNWidgets(2));
+    expect(find.text(Textes.heuresEnAttente), findsOneWidget);
   });
 
   testWidgets('écran d\'erreur de démarrage lisible', (tester) async {

@@ -80,35 +80,207 @@ class EcranTelechargements extends StatelessWidget {
     if (!etat.estCharge) {
       return const VueChargement();
     }
-    if (etat.elements.isEmpty) {
+    if (etat.estVide) {
       return const VueVide(
         message: Textes.telechargementsVide,
         icone: Icons.download_for_offline_outlined,
       );
     }
-    return ListView.separated(
-      padding: const EdgeInsets.only(bottom: espacementGrand),
-      itemCount: etat.elements.length,
-      separatorBuilder: (_, _) => const Divider(height: 1),
-      itemBuilder: (context, index) {
-        final element = etat.elements[index];
-        return _LigneTelechargement(
+    final suppressions = etat.suppressionsPrevues;
+    // Une seule liste construite à la demande : les suppressions prévues
+    // d'abord (elles attendent une décision du client avant l'échéance),
+    // puis la file.
+    final elements = <Widget Function(BuildContext)>[
+      if (suppressions.isNotEmpty) ...<Widget Function(BuildContext)>[
+        (context) => const _IntertitreSuppressions(),
+        for (final suppression in suppressions)
+          (context) => _LigneSuppressionPrevue(
+            key: ValueKey<String>('suppression-${suppression.idChapitre}'),
+            etat: etat,
+            element: suppression,
+          ),
+        (context) => const _Intertitre(texte: Textes.sectionFile),
+        if (etat.elements.isEmpty)
+          (context) => const Padding(
+            padding: EdgeInsets.symmetric(horizontal: espacementMoyen),
+            child: Text(Textes.fileVide),
+          ),
+      ],
+      for (final element in etat.elements)
+        (context) => Column(
           key: ValueKey<int>(element.idChapitre),
-          etat: etat,
-          element: element,
-        );
-      },
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            _LigneTelechargement(etat: etat, element: element),
+            const Divider(height: 1),
+          ],
+        ),
+    ];
+    return ListView.builder(
+      padding: const EdgeInsets.only(bottom: espacementGrand),
+      itemCount: elements.length,
+      itemBuilder: (context, index) => elements[index](context),
+    );
+  }
+}
+
+/// Intertitre d'une section de l'écran.
+class _Intertitre extends StatelessWidget {
+  const _Intertitre({required this.texte, this.couleur});
+
+  final String texte;
+  final Color? couleur;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        espacementMoyen,
+        espacementMoyen,
+        espacementMoyen,
+        espacementPetit,
+      ),
+      child: Text(
+        texte,
+        style: theme.textTheme.titleSmall?.copyWith(
+          color: couleur ?? theme.colorScheme.primary,
+        ),
+      ),
+    );
+  }
+}
+
+/// Intertitre rouge des suppressions prévues, avec son explication.
+class _IntertitreSuppressions extends StatelessWidget {
+  const _IntertitreSuppressions();
+
+  @override
+  Widget build(BuildContext context) {
+    final etat = context.watch<EtatTelechargements>();
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        _Intertitre(
+          texte: Textes.sectionSuppressionsPrevues(
+            etat.suppressionsPrevues.length,
+          ),
+          couleur: couleurSuppressionPrevue(theme.colorScheme),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            espacementMoyen,
+            0,
+            espacementMoyen,
+            espacementPetit,
+          ),
+          child: Text(
+            Textes.explicationSuppressionsPrevues,
+            style: theme.textTheme.bodySmall,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Un chapitre dont la suppression est prévue : en rouge, avec le compte à
+/// rebours et les boutons « Garder » / « Supprimer maintenant » (mêmes
+/// couleurs et mêmes mots que la fiche du titre).
+class _LigneSuppressionPrevue extends StatelessWidget {
+  const _LigneSuppressionPrevue({
+    super.key,
+    required this.etat,
+    required this.element,
+  });
+
+  final EtatTelechargements etat;
+  final ElementSuppressionPrevue element;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final couleurs = theme.colorScheme;
+    final rouge = couleurSuppressionPrevue(couleurs);
+    final chapitre = element.chapitre;
+    final nomChapitre = Textes.nomChapitre(chapitre.nom, chapitre.numero);
+    return Ink(
+      // Même fond rouge léger que sur la fiche : la ligne se repère d'un
+      // coup d'œil.
+      color: couleurs.errorContainer.withValues(
+        alpha: opaciteFondSuppressionPrevue,
+      ),
+      child: ListTile(
+        leading: Icon(Icons.auto_delete_outlined, color: rouge),
+        title: Text(
+          element.titre?.nom ?? Textes.titreInconnu,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              chapitre.langue.isEmpty
+                  ? nomChapitre
+                  : '$nomChapitre · ${chapitre.langue.toUpperCase()}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            Text(
+              Textes.suppressionDans(element.tempsRestant(etat.maintenant)),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: rouge,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            // Boutons sous le texte (et non à droite) : ils restent lisibles
+            // sur un téléphone étroit et passent à la ligne si besoin.
+            Wrap(
+              spacing: espacementPetit,
+              children: <Widget>[
+                TextButton(
+                  onPressed: () async {
+                    final resultat = await etat.garder(element.idChapitre);
+                    if (context.mounted) {
+                      afficherResultat(
+                        context,
+                        resultat,
+                        succes: Textes.chapitreGarde,
+                      );
+                    }
+                  },
+                  child: const Text(Textes.garder),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(foregroundColor: rouge),
+                  onPressed: () async {
+                    final resultat = await etat.supprimerMaintenant(
+                      element.idChapitre,
+                    );
+                    if (context.mounted) {
+                      afficherResultat(
+                        context,
+                        resultat,
+                        succes: Textes.telechargementSupprime,
+                      );
+                    }
+                  },
+                  child: const Text(Textes.supprimerMaintenant),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
 
 /// Une ligne de la file.
 class _LigneTelechargement extends StatelessWidget {
-  const _LigneTelechargement({
-    super.key,
-    required this.etat,
-    required this.element,
-  });
+  const _LigneTelechargement({required this.etat, required this.element});
 
   final EtatTelechargements etat;
   final ElementTelechargement element;
@@ -162,6 +334,29 @@ class _LigneTelechargement extends StatelessWidget {
                   : null,
             ),
           ),
+          // Repère « gardé » : le client sait que ce chapitre échappe aux
+          // règles de suppression.
+          if (etat.estGarde(element.idChapitre))
+            Tooltip(
+              message: Textes.infoGarde,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(
+                    Icons.push_pin,
+                    size: theme.textTheme.bodySmall?.fontSize,
+                    color: theme.colorScheme.primary,
+                  ),
+                  const SizedBox(width: espacementPetit / 2),
+                  Text(
+                    Textes.garde,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           // Barre de progression seulement pendant le téléchargement : sans
           // nombre de pages connu, elle reste indéterminée.
           if (estEnCours) ...<Widget>[

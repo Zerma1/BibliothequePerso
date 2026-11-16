@@ -10,20 +10,15 @@ import 'textes.dart';
 
 /// Couverture et nom d'un titre, avec le nombre de chapitres non lus en
 /// badge.
+///
+/// La couverture vient de l'appareil quand elle y est enregistrée (lisible
+/// hors-ligne), sinon du site (voir [ImageCouverture]).
 class CarteTitre extends StatelessWidget {
   /// Crée la carte de [titre] ; [surAppui] ouvre sa fiche.
-  const CarteTitre({
-    super.key,
-    required this.titre,
-    this.surAppui,
-    this.referer,
-  });
+  const CarteTitre({super.key, required this.titre, this.surAppui});
 
   /// Titre affiché.
   final Titre titre;
-
-  /// URL de base du site du titre, envoyée avec la demande de couverture.
-  final String? referer;
 
   /// Action à l'appui sur la carte.
   final VoidCallback? surAppui;
@@ -45,10 +40,7 @@ class CarteTitre extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: <Widget>[
-                  ImageCouverture(
-                    urlCouverture: titre.urlCouverture,
-                    referer: referer,
-                  ),
+                  ImageCouverture(titre: titre),
                   if (nonLus > 0)
                     Positioned(
                       top: espacementPetit,
