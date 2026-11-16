@@ -1,8 +1,4 @@
-# IntelliJ : on garde la configuration partageable, pas l'état personnel
-.idea/workspace.xml
-.idea/shelf/
-.idea/tasks.xml
-.idea/usage.statistics.xml
+# IntelliJ : tout le dossier .idea est suivi dans Git (demande du client)
 out/
 
 # Claude Code : réglages locaux personnels
@@ -10,7 +6,17 @@ out/
 
 # Flutter / Dart (complété par flutter create)
 .dart_tool/
-build/
+# build/ est ignoré, SAUF l'application Windows prête à lancer
+# (build/windows/x64/runner/Release/), suivie dans Git à la demande du client.
+# Les fichiers intermédiaires (CMake, .obj, Debug) restent ignorés.
+build/*
+!build/windows/
+build/windows/*
+!build/windows/x64/
+build/windows/x64/*
+!build/windows/x64/runner/
+build/windows/x64/runner/*
+!build/windows/x64/runner/Release/
 .flutter-plugins
 .flutter-plugins-dependencies
 *.iml.bak
@@ -46,7 +52,6 @@ desktop.ini
 .DS_Store
 
 # IntelliJ : bibliothèques générées avec des chemins propres à la machine
-.idea/libraries/Dart_Packages.xml
 
 # Fichiers à installer (exe, apk) préparés pour une version : jamais dans Git
 livraisons/

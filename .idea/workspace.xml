@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="3f0cf813-16a8-467c-bcb4-be77744a1ce9" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/libraries/Flutter_Plugins.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/libraries/Flutter_Plugins.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/bibliotheque_perso.iml" beforeDir="false" afterPath="$PROJECT_DIR$/bibliotheque_perso.iml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/donnees/constantes_donnees.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/donnees/constantes_donnees.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/donnees/depot_chapitres.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/donnees/depot_chapitres.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/donnees/depot_telechargements.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/donnees/depot_telechargements.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/donnees/depot_titres.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/donnees/depot_titres.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/donnees/migrations.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/donnees/migrations.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/donnees/stockage_telechargements.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/donnees/stockage_telechargements.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/ecrans/ecran_accueil.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/ecrans/ecran_accueil.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/ecrans/ecran_lecteur.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/ecrans/ecran_lecteur.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/ecrans/ecran_telechargements.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/ecrans/ecran_telechargements.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/ecrans/ecran_titre.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/ecrans/ecran_titre.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/etat/constantes_etat.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/etat/constantes_etat.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/etat/description_erreur.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/etat/description_erreur.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/etat/etat_bibliotheque.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/etat/etat_bibliotheque.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/etat/etat_lecteur.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/etat/etat_lecteur.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/etat/etat_mises_a_jour.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/etat/etat_mises_a_jour.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/etat/etat_titre.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/etat/etat_titre.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/modeles/chapitre.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/modeles/chapitre.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/modeles/titre.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/modeles/titre.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/services/politique_telechargement.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/services/politique_telechargement.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/services/service_bibliotheque.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/services/service_bibliotheque.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/services/service_parametres.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/services/service_parametres.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/services/service_telechargement.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/services/service_telechargement.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/widgets/messages.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/widgets/messages.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/widgets/textes.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/widgets/textes.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/donnees/depot_chapitres_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/donnees/depot_chapitres_test.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/donnees/depot_telechargements_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/donnees/depot_telechargements_test.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/donnees/migrations_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/donnees/migrations_test.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/donnees/stockage_telechargements_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/donnees/stockage_telechargements_test.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/ecrans/ecran_telechargements_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/ecrans/ecran_telechargements_test.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/etat/etat_bibliotheque_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/etat/etat_bibliotheque_test.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/etat/etat_lecteur_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/etat/etat_lecteur_test.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/etat/etat_mises_a_jour_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/etat/etat_mises_a_jour_test.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/etat/etat_titre_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/etat/etat_titre_test.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/etat/outils_tests_etat.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/etat/outils_tests_etat.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/services/politique_telechargement_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/services/politique_telechargement_test.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/services/service_bibliotheque_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/services/service_bibliotheque_test.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/services/service_telechargement_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/services/service_telechargement_test.dart" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="CopilotPersistence">
+    <persistenceIdMap>
+      <entry key="_D:/Projet/Bibliotheque perso" value="3M8rJcklILuNPgrMytX19fSblo4" />
+      <entry key="_E:/Projet/Bibliotheque perso" value="3M8jrUjW4WXuwVB3OdNd5Sbmtex" />
+    </persistenceIdMap>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;Zerma1&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/Zerma1/BibliothequePerso.git&quot;,
+    &quot;accountId&quot;: &quot;0061fd49-b9fc-4d00-9558-98b22760fa18&quot;
+  }
+}</component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 0,
+  &quot;fromUser&quot;: false
+}</component>
+  <component name="ProjectId" id="3M8jrYYPkbhLFTejLvNU4AlC2MZ" />
+  <component name="ProjectSessionTemplates">
+    <option name="panelTemplate">
+      <template>
+        <option name="ensembleEnabled" value="false" />
+        <option name="modeId" value="Agent" />
+        <option name="model">
+          <model>
+            <option name="modelType" value="builtin_id" />
+            <option name="modelValue" value="auto" />
+          </model>
+        </option>
+        <option name="targetType" value="BACKGROUND" />
+        <option name="worktreeMode" value="WORKSPACE" />
+      </template>
+    </option>
+    <option name="version" value="1" />
+  </component>
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Flutter.main.dart.executor": "Run",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
+    "copilot.chat.legacySessionMetadata.migrated": "true",
+    "dart.analysis.tool.window.visible": "false",
+    "git-widget-placeholder": "dev",
+    "junie.onboarding.icon.badge.shown": "true",
+    "kotlin-language-version-configured": "true",
+    "last_opened_file_path": "D:/Projet/Bibliotheque perso",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "python.packages.toolwindow.project.migrated.to.right.top.v2": "true",
+    "settings.editor.selected.configurable": "preferences.pluginManager",
+    "show.migrate.to.gradle.popup": "false",
+    "to.speed.mode.migration.done": "true"
+  }
+}]]></component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-jdk-30f59d01ecdd-ac68fc9d2b05-intellij.indexing.shared.core-IU-263.7307.200" />
+        <option value="bundled-js-predefined-d6986cc7102b-56aff7b04f6f-JavaScript-IU-263.7307.200" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="3f0cf813-16a8-467c-bcb4-be77744a1ce9" name="Changes" comment="" />
+      <created>1794739287870</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1794739287870</updated>
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+</project>
