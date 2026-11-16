@@ -34,6 +34,10 @@ enum NatureContenu {
 
   /// Chapitre seulement listé : rien à lire hors-ligne.
   nonTelecharge,
+
+  /// Chapitre hébergé sur un site externe : il se lit seulement sur ce site
+  /// (PLAYBOOK.md section 10).
+  externe,
 }
 
 /// Lecteur d'un titre, ouvert sur un chapitre.
@@ -137,17 +141,51 @@ class EtatLecteur extends EtatNotifiant {
   /// Chapitre suivant (numéro supérieur), ou `null`.
   Chapitre? get chapitreSuivant => _voisin(1);
 
-  Chapitre? _voisin(int decalage) {
+  /// Chapitres externes qui suivent immédiatement le chapitre affiché (avant
+  /// le prochain chapitre lisible ici), dans l'ordre de lecture : le bouton
+  /// « Chapitre suivant » les saute, la fin du chapitre propose leur lien.
+  List<Chapitre> get chapitresExternesSuivants {
+    final index = _indexCourant();
+    if (index < 0) return const <Chapitre>[];
+    final externes = <Chapitre>[];
+    for (var i = index + 1; i < _groupes.length; i++) {
+      if (_groupes[i].versionLisible != null) break;
+      externes.add(_groupes[i].retenu);
+    }
+    return externes;
+  }
+
+  /// Nom du site où se lit [chapitre] s'il est externe, sinon `null`.
+  String? nomSiteExterneDe(Chapitre chapitre) => chapitre.estExterne
+      ? ServiceBibliotheque.nomSiteExterne(chapitre.urlExterne!)
+      : null;
+
+  /// Index du groupe du chapitre affiché, ou -1.
+  int _indexCourant() {
     final chapitre = _chapitre;
-    if (chapitre == null) return null;
+    if (chapitre == null) return -1;
     // Recherche par identifiant et non par numéro : les oneshots partagent
     // le numéro 0 mais forment chacun leur propre groupe.
-    final index = _groupes.indexWhere(
+    return _groupes.indexWhere(
       (g) => g.versions.any((version) => version.id == chapitre.id),
     );
-    final voisin = index + decalage;
-    if (index < 0 || voisin < 0 || voisin >= _groupes.length) return null;
-    return _groupes[voisin].versionALire;
+  }
+
+  /// Premier chapitre lisible dans l'application dans la direction
+  /// [decalage] : les numéros publiés seulement sur un site externe sont
+  /// sautés (ils ne s'ouvrent jamais dans le lecteur).
+  Chapitre? _voisin(int decalage) {
+    final index = _indexCourant();
+    if (index < 0) return null;
+    for (
+      var i = index + decalage;
+      i >= 0 && i < _groupes.length;
+      i += decalage
+    ) {
+      final lisible = _groupes[i].versionLisible;
+      if (lisible != null) return lisible;
+    }
+    return null;
   }
 
   /// Charge le titre, ses chapitres et ouvre le chapitre demandé.
@@ -205,13 +243,21 @@ class EtatLecteur extends EtatNotifiant {
     final numero = ++_numeroOuverture;
     _chapitre = chapitre;
     _idChapitreDemande = chapitre.id!;
-    _proteger(chapitre.id!);
     _pages.clear();
     _telechargement = null;
     _nombrePages = 0;
     _pageCourante = 0;
     _texte = '';
     _erreur = null;
+    if (chapitre.estExterne) {
+      // Garde-fou : la fiche et la navigation n'ouvrent jamais un chapitre
+      // externe, mais s'il arrive ici, le lecteur ne lit rien et propose
+      // seulement le lien vers le site de l'éditeur.
+      _nature = NatureContenu.externe;
+      notifier();
+      return;
+    }
+    _proteger(chapitre.id!);
     _nature = NatureContenu.chargement;
     notifier();
     try {

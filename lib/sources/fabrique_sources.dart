@@ -20,9 +20,14 @@ class FabriqueSources {
 
   /// Renvoie l'adaptateur de [source].
   ///
+  /// [niveauxContenuRecherche] : niveaux de contenu acceptés par la recherche
+  /// (valeurs de `niveauxContenu`, lib/modeles/constantes.dart) ; `null`
+  /// garde le défaut du site (MangaDex : tout sauf `pornographic`). Ignoré
+  /// par les sites qui n'ont pas cette notion.
+  ///
   /// Lève une [ErreurSource] si le type n'a pas encore d'adaptateur (Madara,
   /// MangaThemesia et générique arrivent à l'étape 6 de la feuille de route).
-  SourceSite creer(Source source) {
+  SourceSite creer(Source source, {List<String>? niveauxContenuRecherche}) {
     switch (source.typeSource) {
       case TypeSource.mangaDex:
         // Les langues de la source (« fr,en », par ordre de préférence)
@@ -44,6 +49,7 @@ class FabriqueSources {
           languesPreferees: preferees.isEmpty
               ? const <String>['fr', 'en']
               : preferees,
+          niveauxContenuRecherche: niveauxContenuRecherche,
         );
       case TypeSource.madara:
       case TypeSource.mangaThemesia:
@@ -51,7 +57,8 @@ class FabriqueSources {
         throw ErreurSource(
           source.urlBase,
           'Aucun adaptateur disponible pour le type '
-          '« ${source.typeSource.name} » (prévu à l\'étape 6)',
+          "« ${source.typeSource.name} » (prévu à l'étape 6)",
+          typeDetecte: source.typeSource,
         );
     }
   }

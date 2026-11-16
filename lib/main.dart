@@ -11,6 +11,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:material_ui/material_ui.dart';
+import 'package:path/path.dart' as chemins;
 import 'package:provider/provider.dart';
 import 'package:sqflite/sqflite.dart' show Database, DatabaseFactory;
 import 'package:workmanager/workmanager.dart';
@@ -27,20 +28,27 @@ import 'donnees/stockage_telechargements.dart';
 import 'ecrans/ecran_accueil.dart';
 import 'ecrans/ecran_erreur_demarrage.dart';
 import 'etat/etat_bibliotheque.dart';
+import 'etat/etat_export.dart';
 import 'etat/etat_couvertures.dart';
 import 'etat/etat_mises_a_jour.dart';
 import 'etat/etat_parametres.dart';
+import 'etat/etat_parutions.dart';
+import 'etat/etat_rapports_erreur.dart';
 import 'etat/etat_sources.dart';
 import 'etat/etat_telechargements.dart';
+import 'services/constantes_services.dart' show nomDossierRapports;
 import 'services/service_ajout_site.dart';
 import 'services/service_bibliotheque.dart';
+import 'services/service_export.dart';
 import 'services/planification_mises_a_jour.dart';
 import 'services/service_mises_a_jour.dart';
 import 'services/service_parametres.dart';
+import 'services/service_rapports_erreur.dart';
 import 'services/service_telechargement.dart';
 import 'sources/client_http_poli.dart';
 import 'sources/detecteur_type_site.dart';
 import 'sources/fabrique_sources.dart';
+import 'widgets/constantes_interface.dart' show versionApplication;
 import 'widgets/textes.dart';
 
 /// Nom unique de la tâche périodique Android. WorkManager s'en sert pour
@@ -81,7 +89,15 @@ class ServicesApplication {
     required this.serviceMisesAJour,
     required this.serviceParametres,
     required this.serviceTelechargement,
+    required this.serviceRapportsErreur,
+    required this.serviceExport,
   });
+
+  /// Export des titres et des sites (section « Sauvegarde et export »).
+  final ServiceExport serviceExport;
+
+  /// Export des rapports d'erreur (ajout d'un site ou d'un titre échoué).
+  final ServiceRapportsErreur serviceRapportsErreur;
 
   /// Base SQLite ouverte.
   final Database base;
@@ -139,6 +155,7 @@ ServicesApplication assemblerServices(
     depotSources,
     DetecteurTypeSite(clientUtilise),
   );
+  final serviceParametres = ServiceParametres(DepotParametres(base));
   final serviceBibliotheque = ServiceBibliotheque(
     depotSources: depotSources,
     depotTitres: depotTitres,
@@ -148,8 +165,12 @@ ServicesApplication assemblerServices(
     fabriqueSources: fabriqueSources,
     serviceAjoutSite: serviceAjoutSite,
     client: clientUtilise,
+    // Réglages du client (langues générales, niveaux de contenu) : sans eux,
+    // le service appliquerait les valeurs par défaut.
+    serviceParametres: serviceParametres,
+    // Couvertures enregistrées sur l'appareil, lisibles hors-ligne.
+    stockage: stockage,
   );
-  final serviceParametres = ServiceParametres(DepotParametres(base));
   final serviceMisesAJour = ServiceMisesAJour(
     depotTitres: depotTitres,
     depotListes: depotListes,
@@ -178,6 +199,26 @@ ServicesApplication assemblerServices(
     serviceMisesAJour: serviceMisesAJour,
     serviceParametres: serviceParametres,
     serviceTelechargement: serviceTelechargement,
+    // Rapports d'erreur à côté des archives :
+    // `<dossier racine>/rapports/` (par défaut
+    // `Documents/bibliotheque_perso/rapports/`).
+    serviceRapportsErreur: ServiceRapportsErreur(
+      chemins.join(stockage.dossierRacine, nomDossierRapports),
+      versionApplication: versionApplication,
+    ),
+    // Exports à côté des rapports : `<dossier racine>/exports/`.
+    serviceExport: ServiceExport(
+      depotSources: depotSources,
+      depotTitres: depotTitres,
+      depotChapitres: depotChapitres,
+      depotListes: depotListes,
+      depotCategories: DepotCategories(base),
+      dossierExports: ServiceExport.cheminDossierExports(
+        stockage.dossierRacine,
+      ),
+      serviceParametres: serviceParametres,
+      versionApplication: versionApplication,
+    ),
   );
 }
 
@@ -339,8 +380,16 @@ bool _workmanagerInitialise = false;
 ///
 /// Une erreur ici n'empêche pas l'application de fonctionner : seules les
 /// vérifications en arrière-plan seraient perdues.
+///
+/// [enAttente] : planification de la surveillance des titres « En attente »
+/// (étape 6, à chaque heure pleine par défaut) ; la tâche passe alors au
+/// rythme le plus rapide des deux, et `verifierSiEcheancePassee` choisit à
+/// chaque passage la vérification due (complète ou « En attente »).
+// LIMITE : la tâche garde ce rythme même quand la liste « En attente » est
+// vide ; chaque passage sans échéance due ne lit que la base (aucun réseau).
 Future<void> planifierMisesAJourAndroid(
   PlanificationMisesAJour planification, {
+  PlanificationMisesAJour? enAttente,
   DateTime? maintenant,
 }) async {
   try {
@@ -349,13 +398,21 @@ Future<void> planifierMisesAJourAndroid(
       _workmanagerInitialise = true;
     }
     final instant = (maintenant ?? DateTime.now()).toUtc();
+    var frequence = frequenceTacheAndroid(planification);
+    var prochaine = planification.prochaineEcheance(instant);
+    if (enAttente != null) {
+      final frequenceEnAttente = frequenceTacheAndroid(enAttente);
+      if (frequenceEnAttente < frequence) frequence = frequenceEnAttente;
+      final prochaineEnAttente = enAttente.prochaineEcheance(instant);
+      if (prochaineEnAttente.isBefore(prochaine)) {
+        prochaine = prochaineEnAttente;
+      }
+    }
     await Workmanager().registerPeriodicTask(
       nomUniqueTacheMisesAJour,
       nomTacheMisesAJour,
-      frequency: frequenceTacheAndroid(planification),
-      initialDelay: planification
-          .prochaineEcheance(instant)
-          .difference(instant),
+      frequency: frequence,
+      initialDelay: prochaine.difference(instant),
       // Inutile de réveiller l'appareil sans réseau : toutes les
       // vérifications échoueraient.
       constraints: Constraints(networkType: NetworkType.connected),
@@ -364,6 +421,17 @@ Future<void> planifierMisesAJourAndroid(
   } catch (erreur, pile) {
     debugPrint('Planification des mises à jour impossible : $erreur\n$pile');
   }
+}
+
+/// Lit les deux planifications enregistrées (vérification complète et titres
+/// « En attente ») puis (ré)enregistre la tâche de fond Android.
+Future<void> planifierAndroidDepuisReglages(
+  ServiceParametres serviceParametres,
+) async {
+  await planifierMisesAJourAndroid(
+    await serviceParametres.chargerPlanification(),
+    enAttente: await serviceParametres.chargerPlanificationEnAttente(),
+  );
 }
 
 /// Ouvre la base et affiche l'application, ou un écran d'erreur lisible si
@@ -386,9 +454,7 @@ Future<void> demarrer() async {
     if (Platform.isAndroid) {
       // Sans attendre : l'affichage ne dépend pas de la tâche de fond.
       unawaited(
-        services.serviceParametres
-            .chargerPlanification()
-            .then(planifierMisesAJourAndroid)
+        planifierAndroidDepuisReglages(services.serviceParametres)
             .catchError((Object erreur, StackTrace pile) {
               debugPrint('Planification Android impossible : $erreur\n$pile');
             }),
@@ -400,6 +466,8 @@ Future<void> demarrer() async {
       serviceMisesAJour: services.serviceMisesAJour,
       serviceTelechargement: services.serviceTelechargement,
       serviceParametres: services.serviceParametres,
+      serviceRapportsErreur: services.serviceRapportsErreur,
+      serviceExport: services.serviceExport,
     );
   } catch (erreur, pile) {
     debugPrint('Démarrage impossible : $erreur\n$pile');
@@ -423,6 +491,8 @@ Widget construireApplication({
   required ServiceMisesAJour serviceMisesAJour,
   required ServiceTelechargement serviceTelechargement,
   required ServiceParametres serviceParametres,
+  ServiceRapportsErreur? serviceRapportsErreur,
+  ServiceExport? serviceExport,
 }) {
   // Les états sont fournis au-dessus de MaterialApp : les écrans ouverts par
   // Navigator et les boîtes de dialogue y ont accès.
@@ -431,11 +501,27 @@ Widget construireApplication({
       Provider<EtatCouvertures>(
         create: (_) => EtatCouvertures(serviceBibliotheque),
       ),
+      // Sans service (tests), le bouton « Exporter le rapport d'erreur »
+      // n'est simplement pas affiché.
+      if (serviceRapportsErreur != null)
+        Provider<EtatRapportsErreur>(
+          create: (_) => EtatRapportsErreur(serviceRapportsErreur),
+        ),
+      // Sans service (tests), la section « Sauvegarde et export » est
+      // masquée.
+      if (serviceExport != null)
+        ChangeNotifierProvider<EtatExport>(
+          create: (_) => EtatExport(serviceExport),
+        ),
       ChangeNotifierProvider<EtatBibliotheque>(
         create: (_) => EtatBibliotheque(
           serviceBibliotheque,
           serviceTelechargement: serviceTelechargement,
+          serviceParametres: serviceParametres,
         )..charger(),
+      ),
+      ChangeNotifierProvider<EtatParutions>(
+        create: (_) => EtatParutions(serviceBibliotheque)..charger(),
       ),
       ChangeNotifierProvider<EtatSources>(
         create: (_) => EtatSources(
@@ -450,8 +536,11 @@ Widget construireApplication({
               ..charger(),
       ),
       ChangeNotifierProvider<EtatParametres>(
-        create: (_) =>
-            EtatParametres(serviceParametres, serviceTelechargement)..charger(),
+        create: (_) => EtatParametres(
+          serviceParametres,
+          serviceTelechargement,
+          serviceBibliotheque: serviceBibliotheque,
+        )..charger(),
       ),
       // Sur ordinateur, vérification au démarrage si une échéance a été
       // manquée, puis à chaque échéance tant que l'application est ouverte ;
@@ -464,7 +553,7 @@ Widget construireApplication({
           serviceParametres: serviceParametres,
           serviceTelechargement: serviceTelechargement,
           surChangementPlanification: Platform.isAndroid
-              ? (planification) => planifierMisesAJourAndroid(planification)
+              ? (_) => planifierAndroidDepuisReglages(serviceParametres)
               : null,
         )..demarrer(),
       ),

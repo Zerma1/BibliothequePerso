@@ -52,6 +52,8 @@ class Titre {
     this.dateDerniereVerification,
     this.nombreChapitresNonLus = 0,
     this.languesPreferees,
+    this.niveauContenu,
+    this.couvertureChoisie,
   }) : titresAlternatifs = List<TitreAlternatif>.unmodifiable(
          titresAlternatifs,
        );
@@ -105,6 +107,27 @@ class Titre {
   /// depuis le site (voir `DepotTitres.enregistrerLanguesPreferees`).
   final String? languesPreferees;
 
+  /// Niveau de contenu indiqué par le site, tel que MangaDex le nomme
+  /// (`safe`, `suggestive`, `erotica`, `pornographic` : voir
+  /// `niveauxContenu` dans `constantes.dart`), ou `null` si le site ne le
+  /// donne pas.
+  ///
+  /// Texte libre plutôt qu'énumération : une valeur inconnue ajoutée un jour
+  /// par MangaDex ne doit pas rendre la ligne illisible.
+  final String? niveauContenu;
+
+  /// Couverture choisie par le client : URL d'une autre couverture du site
+  /// (MangaDex : une par volume) ou chemin d'une image de l'appareil, ou
+  /// `null` pour la couverture du site ([urlCouverture]).
+  ///
+  /// Choix du client : jamais écrasé par une ré-actualisation du titre
+  /// depuis le site (voir `DepotTitres.enregistrerCouvertureChoisie`).
+  final String? couvertureChoisie;
+
+  /// Couverture à afficher : [couvertureChoisie] si le client en a choisi
+  /// une, sinon [urlCouverture].
+  String? get couvertureAffichee => couvertureChoisie ?? urlCouverture;
+
   /// [languesPreferees] découpées en liste (`fr,en` → `['fr', 'en']`), vide
   /// si aucune langue n'est choisie pour ce titre.
   List<String> get listeLanguesPreferees {
@@ -137,6 +160,8 @@ class Titre {
         dateDerniereVerification,
       ),
       'langues_preferees': languesPreferees,
+      'niveau_contenu': niveauContenu,
+      'couverture_choisie': couvertureChoisie,
     };
   }
 
@@ -167,15 +192,23 @@ class Titre {
       nombreChapitresNonLus:
           map.lireEntierOptionnel('nombre_chapitres_non_lus', _entite) ?? 0,
       languesPreferees: map.lireTexteOptionnel('langues_preferees', _entite),
+      niveauContenu: map.lireTexteOptionnel('niveau_contenu', _entite),
+      couvertureChoisie: map.lireTexteOptionnel('couverture_choisie', _entite),
     );
   }
 
   /// Renvoie une copie avec les champs donnés remplacés.
   ///
   /// LIMITE : un champ nullable ne peut pas être remis à `null` par cette
-  /// méthode (un argument `null` signifie « inchangé »), sauf
-  /// [languesPreferees] : `effacerLanguesPreferees: true` le remet à `null`
-  /// (retour au réglage général) et l'emporte sur [languesPreferees].
+  /// méthode (un argument `null` signifie « inchangé »), sauf :
+  /// - [languesPreferees] : `effacerLanguesPreferees: true` le remet à
+  ///   `null` (retour au réglage général) ;
+  /// - [couvertureChoisie] : `effacerCouvertureChoisie: true` le remet à
+  ///   `null` (retour à la couverture du site) ;
+  /// - [niveauContenu] : `effacerNiveauContenu: true` le remet à `null`.
+  ///
+  /// Un indicateur `effacer…` l'emporte sur la valeur donnée pour le même
+  /// champ.
   Titre copierAvec({
     int? id,
     int? idSource,
@@ -191,6 +224,10 @@ class Titre {
     int? nombreChapitresNonLus,
     String? languesPreferees,
     bool effacerLanguesPreferees = false,
+    String? niveauContenu,
+    bool effacerNiveauContenu = false,
+    String? couvertureChoisie,
+    bool effacerCouvertureChoisie = false,
   }) {
     return Titre(
       id: id ?? this.id,
@@ -210,6 +247,12 @@ class Titre {
       languesPreferees: effacerLanguesPreferees
           ? null
           : languesPreferees ?? this.languesPreferees,
+      niveauContenu: effacerNiveauContenu
+          ? null
+          : niveauContenu ?? this.niveauContenu,
+      couvertureChoisie: effacerCouvertureChoisie
+          ? null
+          : couvertureChoisie ?? this.couvertureChoisie,
     );
   }
 
@@ -229,7 +272,9 @@ class Titre {
             listesEgales(other.titresAlternatifs, titresAlternatifs) &&
             other.dateDerniereVerification == dateDerniereVerification &&
             other.nombreChapitresNonLus == nombreChapitresNonLus &&
-            other.languesPreferees == languesPreferees;
+            other.languesPreferees == languesPreferees &&
+            other.niveauContenu == niveauContenu &&
+            other.couvertureChoisie == couvertureChoisie;
   }
 
   @override
@@ -247,6 +292,8 @@ class Titre {
     dateDerniereVerification,
     nombreChapitresNonLus,
     languesPreferees,
+    niveauContenu,
+    couvertureChoisie,
   );
 
   @override

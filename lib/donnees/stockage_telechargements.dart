@@ -5,6 +5,7 @@
 /// <dossier racine>/<type>/<nom du titre>/ch<numero>.<langue>.zip
 ///     img1.jpg, img2.jpg, img3.webp, …   (chapitre en images)
 ///     contenu.html                        (chapitre texte)
+/// <dossier racine>/<type>/<nom du titre>/couverture.<ext>
 /// ```
 ///
 /// API du paquet `archive` 4.7.1 utilisées (vérifiées dans le code et la
@@ -138,6 +139,17 @@ class StockageTelechargements {
   // Nom d'une page dans une archive : `img<n>.<extension>`, n ≥ 1.
   static final RegExp _nomPage = RegExp(
     '^$prefixePageArchive([1-9][0-9]*)\\.([a-z0-9]+)\$',
+  );
+
+  // Fichier de couverture : `couverture.<ext>`.
+  static final RegExp _nomCouverture = RegExp(
+    '^$nomFichierCouverture\\.[a-z0-9]{1,$longueurMaxExtensionPage}\$',
+  );
+
+  // Couverture en cours d'écriture : `couverture.<ext>.part`.
+  static final RegExp _nomCouverturePartielle = RegExp(
+    '^$nomFichierCouverture\\.[a-z0-9]{1,$longueurMaxExtensionPage}'
+    '${RegExp.escape(suffixeArchivePartielle)}\$',
   );
 
   // ---------------------------------------------------------------------
@@ -771,6 +783,211 @@ class StockageTelechargements {
   }
 
   // ---------------------------------------------------------------------
+  // Couvertures
+  // ---------------------------------------------------------------------
+
+  /// Nom du fichier de couverture pour une extension d'image :
+  /// `couverture.<ext>` (`couverture.jpg`).
+  ///
+  /// Lève une [ArgumentError] si l'extension est invalide (voir
+  /// [normaliserExtension]).
+  static String nomFichierCouvertureAvec(String extension) {
+    return '$nomFichierCouverture.${normaliserExtension(extension)}';
+  }
+
+  /// Enregistre l'image de couverture d'un titre dans le dossier du titre
+  /// (`<racine>/<type>/<nom du titre>/couverture.<ext>`), pour qu'elle reste
+  /// lisible hors-ligne, et renvoie son chemin complet.
+  ///
+  /// [octets] sont déjà récupérés par le service (couverture du site, autre
+  /// couverture choisie ou image de l'appareil) ; [extension] est celle
+  /// d'origine (`jpg`, `.png`…, voir [extensionDepuisUrl]). Comme les
+  /// archives, l'image est écrite dans un `.part` puis renommée : une
+  /// écriture interrompue ne remplace jamais une couverture valide. Une
+  /// couverture précédente d'une autre extension est ensuite supprimée.
+  ///
+  /// [nomSource] : même valeur que pour les chapitres du titre (voir
+  /// [nomDossierTitre]).
+  ///
+  /// LIMITE : le dossier dépend du nom du titre ; si le site renomme le
+  /// titre, la couverture reste dans l'ancien dossier jusqu'au prochain
+  /// enregistrement (le service la réenregistre à l'actualisation).
+  ///
+  /// Lève une [ArgumentError] si l'extension est invalide, une
+  /// [ErreurStockage] si [octets] est vide ou dépasse
+  /// [tailleMaxCouverture], ou si le disque refuse l'écriture.
+  Future<String> enregistrerCouverture(
+    Titre titre,
+    List<int> octets,
+    String extension, {
+    String? nomSource,
+  }) async {
+    final nomFichier = nomFichierCouvertureAvec(extension);
+    final dossier = cheminDossierTitre(titre, nomSource: nomSource);
+    final cheminFinal = chemins.join(dossier, nomFichier);
+    if (octets.isEmpty) {
+      throw ErreurStockage('La couverture est vide.', chemin: cheminFinal);
+    }
+    if (octets.length > tailleMaxCouverture) {
+      throw ErreurStockage(
+        'La couverture est trop volumineuse '
+        '(${octets.length} octets, au plus $tailleMaxCouverture).',
+        chemin: cheminFinal,
+      );
+    }
+    final cheminPartiel = '$cheminFinal$suffixeArchivePartielle';
+    final cle = chemins.normalize(cheminPartiel);
+    if (!_ecrituresOuvertes.add(cle)) {
+      throw ErreurStockage(
+        "Cette couverture est déjà en cours d'écriture.",
+        chemin: cheminFinal,
+      );
+    }
+    try {
+      await Directory(dossier).create(recursive: true);
+      await File(cheminPartiel).writeAsBytes(octets, flush: true);
+      // Renommage dans le même dossier : atomique, remplace l'ancienne
+      // couverture de même extension.
+      await File(cheminPartiel).rename(cheminFinal);
+      for (final autre in await _fichiersCouverture(Directory(dossier))) {
+        if (chemins.basename(autre.path) != nomFichier) {
+          await _supprimerSansErreur(autre);
+        }
+      }
+      return cheminFinal;
+    } on FileSystemException catch (erreur) {
+      await _supprimerSansErreur(File(cheminPartiel));
+      throw ErreurStockage(
+        "Impossible d'enregistrer la couverture.",
+        chemin: cheminFinal,
+        cause: erreur,
+      );
+    } finally {
+      _ecrituresOuvertes.remove(cle);
+    }
+  }
+
+  /// Chemin complet de la couverture enregistrée d'un titre, ou `null` si
+  /// aucune n'est enregistrée.
+  ///
+  /// Pratique pour l'affichage (`Image.file`), qui lit le fichier sans tout
+  /// charger en mémoire à l'avance.
+  Future<String?> cheminCouverture(Titre titre, {String? nomSource}) async {
+    final fichiers = await _fichiersCouvertureDuTitre(titre, nomSource);
+    return fichiers.isEmpty ? null : fichiers.first.path;
+  }
+
+  /// Octets de la couverture enregistrée d'un titre, ou `null` si aucune
+  /// n'est enregistrée.
+  ///
+  /// Lève une [ErreurStockage] si le fichier existe mais ne peut pas être
+  /// lu.
+  Future<Uint8List?> chargerCouverture(Titre titre, {String? nomSource}) async {
+    final fichiers = await _fichiersCouvertureDuTitre(titre, nomSource);
+    if (fichiers.isEmpty) {
+      return null;
+    }
+    try {
+      return await fichiers.first.readAsBytes();
+    } on PathNotFoundException {
+      // Supprimée entre la recherche et la lecture.
+      return null;
+    } on FileSystemException catch (erreur) {
+      throw ErreurStockage(
+        'Impossible de lire la couverture.',
+        chemin: fichiers.first.path,
+        cause: erreur,
+      );
+    }
+  }
+
+  /// Supprime la couverture enregistrée d'un titre (toutes extensions, et un
+  /// éventuel `.part` qui n'est pas en cours d'écriture), puis le dossier du
+  /// titre s'il est devenu vide. Renvoie `true` si une couverture a été
+  /// supprimée.
+  ///
+  /// À appeler à la suppression du titre, **après** ses archives : le
+  /// dossier n'est retiré que s'il ne contient plus rien.
+  ///
+  /// Lève une [ErreurStockage] si le disque refuse la suppression.
+  Future<bool> supprimerCouverture(Titre titre, {String? nomSource}) async {
+    final dossier = Directory(cheminDossierTitre(titre, nomSource: nomSource));
+    try {
+      if (!await dossier.exists()) {
+        return false;
+      }
+      var supprimee = false;
+      await for (final entite in dossier.list(followLinks: false)) {
+        if (entite is! File) {
+          continue;
+        }
+        final nom = chemins.basename(entite.path);
+        final estCouverture = _nomCouverture.hasMatch(nom);
+        final estPartielle =
+            _nomCouverturePartielle.hasMatch(nom) &&
+            !_ecrituresOuvertes.contains(chemins.normalize(entite.path));
+        if (!estCouverture && !estPartielle) {
+          continue;
+        }
+        try {
+          await entite.delete();
+          supprimee = supprimee || estCouverture;
+        } on PathNotFoundException {
+          // Déjà supprimée par un autre isolat.
+        }
+      }
+      await _supprimerDossierSiVide(dossier);
+      return supprimee;
+    } on FileSystemException catch (erreur) {
+      throw ErreurStockage(
+        'Impossible de supprimer la couverture.',
+        chemin: dossier.path,
+        cause: erreur,
+      );
+    }
+  }
+
+  /// Fichiers de couverture (`couverture.<ext>`, sans les `.part`) du
+  /// dossier d'un titre, le plus récent d'abord.
+  Future<List<File>> _fichiersCouvertureDuTitre(
+    Titre titre,
+    String? nomSource,
+  ) async {
+    try {
+      return await _fichiersCouverture(
+        Directory(cheminDossierTitre(titre, nomSource: nomSource)),
+      );
+    } on FileSystemException catch (erreur) {
+      throw ErreurStockage(
+        'Impossible de chercher la couverture.',
+        chemin: cheminDossierTitre(titre, nomSource: nomSource),
+        cause: erreur,
+      );
+    }
+  }
+
+  /// Fichiers `couverture.<ext>` de [dossier], le plus récent d'abord (en
+  /// principe un seul : [enregistrerCouverture] retire les autres).
+  static Future<List<File>> _fichiersCouverture(Directory dossier) async {
+    if (!await dossier.exists()) {
+      return <File>[];
+    }
+    final trouves = <(DateTime, File)>[];
+    await for (final entite in dossier.list(followLinks: false)) {
+      if (entite is File &&
+          _nomCouverture.hasMatch(chemins.basename(entite.path))) {
+        try {
+          trouves.add((await entite.lastModified(), entite));
+        } on PathNotFoundException {
+          // Remplacée ou supprimée pendant la recherche.
+        }
+      }
+    }
+    trouves.sort((a, b) => b.$1.compareTo(a.$1));
+    return trouves.map((trouve) => trouve.$2).toList();
+  }
+
+  // ---------------------------------------------------------------------
   // Suppression et nettoyage
   // ---------------------------------------------------------------------
 
@@ -828,9 +1045,9 @@ class StockageTelechargements {
     }
   }
 
-  /// Supprime les `.zip.part` laissés par des écritures interrompues
-  /// (application fermée ou tuée pendant un téléchargement) et renvoie leur
-  /// nombre.
+  /// Supprime les `.zip.part` (et `couverture.<ext>.part`) laissés par des
+  /// écritures interrompues (application fermée ou tuée pendant un
+  /// téléchargement) et renvoie leur nombre.
   ///
   /// À appeler au démarrage, avant de relancer la file. Les écritures en
   /// cours dans cette instance sont toujours épargnées.
@@ -864,7 +1081,10 @@ class StockageTelechargements {
         followLinks: false,
       )) {
         if (entite is! File ||
-            !entite.path.endsWith(suffixe) ||
+            !(entite.path.endsWith(suffixe) ||
+                _nomCouverturePartielle.hasMatch(
+                  chemins.basename(entite.path),
+                )) ||
             _ecrituresOuvertes.contains(chemins.normalize(entite.path))) {
           continue;
         }

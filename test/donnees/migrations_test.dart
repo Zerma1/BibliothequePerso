@@ -20,8 +20,8 @@ void main() {
     await base.close();
   });
 
-  test('la version du schéma est 4 et correspond à la base ouverte', () async {
-    expect(versionSchema, 4);
+  test('la version du schéma est 6 et correspond à la base ouverte', () async {
+    expect(versionSchema, 6);
     expect(await base.getVersion(), versionSchema);
   });
 
@@ -53,7 +53,8 @@ void main() {
 
   test('la migration 1 crée Favoris et Suivis en listes système', () async {
     final lignes = await base.query('listes', orderBy: 'ordre');
-    expect(lignes, hasLength(2));
+    // + Planifié et En attente (migration 5).
+    expect(lignes, hasLength(4));
     // La migration écrit ces valeurs en dur : ce test garantit qu'elles
     // restent alignées avec les constantes utilisées par le reste du code.
     expect(lignes[0]['nom'], nomListeFavoris);
@@ -133,7 +134,7 @@ void main() {
             (await version2.query('titres')).single['nom'],
             'Titre existant',
           );
-          expect(await version2.query('listes'), hasLength(2));
+          expect(await version2.query('listes'), hasLength(4));
           expect(await version2.query('telechargements'), isEmpty);
 
           // La nouvelle table est utilisable avec les données existantes.
@@ -212,7 +213,7 @@ void main() {
               .single;
           expect(telechargement['statut'], 'echec');
           expect(telechargement['message_erreur'], 'Erreur 403');
-          expect(await version3.query('listes'), hasLength(2));
+          expect(await version3.query('listes'), hasLength(4));
           // La nouvelle table est vide (pas de valeur par défaut en base) et
           // utilisable.
           expect(await version3.query('parametres'), isEmpty);
@@ -281,7 +282,7 @@ void main() {
           fabrique: databaseFactoryFfi,
         );
         try {
-          expect(await version4.getVersion(), 4);
+          expect(await version4.getVersion(), versionSchema);
           final chapitre = (await version4.query('chapitres')).single;
           expect(chapitre['nom'], 'Chapitre 1');
           expect(chapitre['est_lu'], 1);
@@ -300,7 +301,7 @@ void main() {
             'termine',
           );
           expect((await version4.query('parametres')).single['valeur'], 'fr');
-          expect(await version4.query('listes'), hasLength(2));
+          expect(await version4.query('listes'), hasLength(4));
 
           final index = await version4.rawQuery(
             "SELECT name FROM sqlite_master WHERE type = 'index' "
@@ -319,6 +320,373 @@ void main() {
       }
     },
   );
+
+  test(
+    'la migration 5 crée Planifié et En attente en listes système',
+    () async {
+      final lignes = await base.query('listes', orderBy: 'ordre');
+      // Valeurs écrites en dur dans la migration : alignées sur les constantes.
+      expect(lignes[2]['nom'], nomListePlanifie);
+      expect(lignes[2]['est_systeme'], 1);
+      expect(lignes[2]['ordre'], ordreListePlanifie);
+      expect(lignes[3]['nom'], nomListeEnAttente);
+      expect(lignes[3]['est_systeme'], 1);
+      expect(lignes[3]['ordre'], ordreListeEnAttente);
+    },
+  );
+
+  test('la migration 4 → 5 conserve les données, ajoute les colonnes et les '
+      'listes système', () async {
+    final dossier = await Directory.systemTemp.createTemp('migration5_test_');
+    final chemin = p.join(dossier.path, 'version4.db');
+    try {
+      final version4 = await databaseFactoryFfi.openDatabase(
+        chemin,
+        options: OpenDatabaseOptions(
+          version: 4,
+          onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+          onCreate: (db, version) => appliquerMigrations(db, 0, 4),
+        ),
+      );
+      final idSource = await version4.insert('sources', <String, Object?>{
+        'nom': 'MangaDex',
+        'url_base': 'https://mangadex.org',
+        'type_source': 'mangaDex',
+      });
+      final idTitre = await version4.insert('titres', <String, Object?>{
+        'id_source': idSource,
+        'url_titre': 'https://mangadex.org/title/abc',
+        'nom': 'Titre existant',
+        'type_titre': 'manga',
+        'langues_preferees': 'fr,en',
+      });
+      await version4.insert('chapitres', <String, Object?>{
+        'id_titre': idTitre,
+        'url_chapitre': 'https://mangadex.org/chapter/1',
+        'nom': 'Chapitre 1',
+        'numero': 1.0,
+        'langue': 'fr',
+        'est_lu': 1,
+        'est_telecharge': 1,
+        'nom_archive': 'manga/Titre existant/ch1.fr.zip',
+        'date_suppression_prevue': 1000,
+      });
+      // Listes du client existantes : « Lus en 2026 » (position 2) et une
+      // liste nommée comme une nouvelle liste système, avec un titre.
+      await version4.insert('listes', <String, Object?>{
+        'nom': 'Lus en 2026',
+        'ordre': 2,
+      });
+      final idPlanifieClient = await version4.insert(
+        'listes',
+        <String, Object?>{'nom': 'planifié', 'ordre': 3},
+      );
+      await version4.insert('titres_listes', <String, Object?>{
+        'id_titre': idTitre,
+        'id_liste': idPlanifieClient,
+      });
+      await version4.insert('parametres', <String, Object?>{
+        'cle': 'telechargement.gardes',
+        'valeur': '1',
+      });
+      await version4.close();
+
+      final version5 = await ouvrirBaseDeDonnees(
+        chemin: chemin,
+        fabrique: databaseFactoryFfi,
+      );
+      try {
+        // Toutes les migrations suivantes sont appliquées.
+        expect(await version5.getVersion(), versionSchema);
+        final chapitre = (await version5.query('chapitres')).single;
+        expect(chapitre['nom'], 'Chapitre 1');
+        expect(chapitre['est_lu'], 1);
+        expect(chapitre['est_telecharge'], 1);
+        expect(chapitre['nom_archive'], 'manga/Titre existant/ch1.fr.zip');
+        expect(chapitre['date_suppression_prevue'], 1000);
+        // Valeur par défaut : non gardé (la reprise est faite par les
+        // services, qui lisent toujours `parametres`).
+        expect(chapitre['est_garde'], 0);
+        expect((await version5.query('parametres')).single['valeur'], '1');
+
+        final titre = (await version5.query('titres')).single;
+        expect(titre['nom'], 'Titre existant');
+        expect(titre['langues_preferees'], 'fr,en');
+        expect(titre.containsKey('niveau_contenu'), isTrue);
+        expect(titre['niveau_contenu'], isNull);
+        expect(titre.containsKey('couverture_choisie'), isTrue);
+        expect(titre['couverture_choisie'], isNull);
+
+        final listes = await version5.query('listes', orderBy: 'ordre, nom');
+        expect(
+          listes.map((liste) => (liste['nom'], liste['est_systeme'])),
+          <(String, int)>[
+            (nomListeFavoris, 1),
+            (nomListeSuivis, 1),
+            (nomListePlanifie, 1),
+            (nomListeEnAttente, 1),
+            ('Lus en 2026', 0),
+          ],
+        );
+        // La liste du client devenue « Planifié » garde son identifiant et
+        // ses titres ; l'autre liste du client passe après les listes
+        // système.
+        final planifie = listes[2];
+        expect(planifie['id'], idPlanifieClient);
+        expect(planifie['ordre'], ordreListePlanifie);
+        expect(listes[4]['ordre'], 4);
+        expect(
+          await version5.query(
+            'titres_listes',
+            where: 'id_liste = ?',
+            whereArgs: <Object?>[idPlanifieClient],
+          ),
+          hasLength(1),
+        );
+
+        final index = await version5.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+          <Object?>['index_chapitres_gardes'],
+        );
+        expect(index, hasLength(1));
+
+        // CHECK : est_garde n'accepte que 0 ou 1.
+        await expectLater(
+          version5.update('chapitres', <String, Object?>{'est_garde': 2}),
+          throwsA(isA<DatabaseException>()),
+        );
+      } finally {
+        await version5.close();
+      }
+    } finally {
+      await dossier.delete(recursive: true);
+    }
+  });
+
+  /// Crée une base fichier en schéma v4 avec un titre, puis appelle
+  /// [preparer] pour y ajouter les listes du client, et l'ouvre avec le code
+  /// actuel. Renvoie la base mise à niveau (à fermer par l'appelant) et le
+  /// dossier temporaire (à supprimer).
+  Future<(Database, Directory)> monterDepuisV4(
+    Future<void> Function(Database base, int idTitre) preparer,
+  ) async {
+    final dossier = await Directory.systemTemp.createTemp('migration5b_test_');
+    final chemin = p.join(dossier.path, 'version4.db');
+    final version4 = await databaseFactoryFfi.openDatabase(
+      chemin,
+      options: OpenDatabaseOptions(
+        version: 4,
+        onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+        onCreate: (db, version) => appliquerMigrations(db, 0, 4),
+      ),
+    );
+    final idSource = await version4.insert('sources', <String, Object?>{
+      'nom': 'MangaDex',
+      'url_base': 'https://mangadex.org',
+      'type_source': 'mangaDex',
+    });
+    final idTitre = await version4.insert('titres', <String, Object?>{
+      'id_source': idSource,
+      'url_titre': 'https://mangadex.org/title/abc',
+      'nom': 'Titre existant',
+      'type_titre': 'manga',
+    });
+    await preparer(version4, idTitre);
+    await version4.close();
+    final misANiveau = await ouvrirBaseDeDonnees(
+      chemin: chemin,
+      fabrique: databaseFactoryFfi,
+    );
+    return (misANiveau, dossier);
+  }
+
+  test("la migration 4 → 5 renomme la liste « en attente » du client en "
+      "« En attente (perso) » avec ses titres", () async {
+    late int idListeClient;
+    final (version5, dossier) = await monterDepuisV4((base, idTitre) async {
+      idListeClient = await base.insert('listes', <String, Object?>{
+        'nom': 'en attente',
+        'ordre': 2,
+      });
+      await base.insert('titres_listes', <String, Object?>{
+        'id_titre': idTitre,
+        'id_liste': idListeClient,
+      });
+    });
+    try {
+      expect(await version5.getVersion(), versionSchema);
+      // La liste système est créée, vide.
+      final systeme = (await version5.query(
+        'listes',
+        where: 'nom = ?',
+        whereArgs: <Object?>[nomListeEnAttente],
+      )).single;
+      expect(systeme['est_systeme'], 1);
+      expect(systeme['ordre'], ordreListeEnAttente);
+      expect(systeme['id'], isNot(idListeClient));
+      expect(
+        await version5.query(
+          'titres_listes',
+          where: 'id_liste = ?',
+          whereArgs: <Object?>[systeme['id']],
+        ),
+        isEmpty,
+      );
+      // La liste du client est renommée et garde ses titres.
+      final perso = (await version5.query(
+        'listes',
+        where: 'id = ?',
+        whereArgs: <Object?>[idListeClient],
+      )).single;
+      expect(perso['nom'], 'En attente (perso)');
+      expect(perso['est_systeme'], 0);
+      expect(
+        await version5.query(
+          'titres_listes',
+          where: 'id_liste = ?',
+          whereArgs: <Object?>[idListeClient],
+        ),
+        hasLength(1),
+      );
+      expect(await version5.query('listes'), hasLength(5));
+    } finally {
+      await version5.close();
+      await dossier.delete(recursive: true);
+    }
+  });
+
+  test("la migration 4 → 5 numérote le nouveau nom si « En attente (perso) » "
+      'existe déjà', () async {
+    late int idListeClient;
+    final (version5, dossier) = await monterDepuisV4((base, idTitre) async {
+      idListeClient = await base.insert('listes', <String, Object?>{
+        'nom': 'EN ATTENTE',
+        'ordre': 2,
+      });
+      await base.insert('listes', <String, Object?>{
+        'nom': 'en attente (perso)',
+        'ordre': 3,
+      });
+    });
+    try {
+      final perso = (await version5.query(
+        'listes',
+        where: 'id = ?',
+        whereArgs: <Object?>[idListeClient],
+      )).single;
+      expect(perso['nom'], 'En attente (perso 2)');
+      final noms = (await version5.query('listes'))
+          .map((liste) => liste['nom'])
+          .toSet();
+      expect(
+        noms,
+        containsAll(<String>[
+          nomListeEnAttente,
+          'en attente (perso)',
+          'En attente (perso 2)',
+        ]),
+      );
+    } finally {
+      await version5.close();
+      await dossier.delete(recursive: true);
+    }
+  });
+
+  test('la migration 5 → 6 conserve les données et ajoute url_externe '
+      '(NULL = chapitre hébergé)', () async {
+    final dossier = await Directory.systemTemp.createTemp('migration6_test_');
+    final chemin = p.join(dossier.path, 'version5.db');
+    try {
+      final version5 = await databaseFactoryFfi.openDatabase(
+        chemin,
+        options: OpenDatabaseOptions(
+          version: 5,
+          onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+          onCreate: (db, version) => appliquerMigrations(db, 0, 5),
+        ),
+      );
+      final idSource = await version5.insert('sources', <String, Object?>{
+        'nom': 'MangaDex',
+        'url_base': 'https://mangadex.org',
+        'type_source': 'mangaDex',
+      });
+      final idTitre = await version5.insert('titres', <String, Object?>{
+        'id_source': idSource,
+        'url_titre': 'https://mangadex.org/title/ruri',
+        'nom': 'Ruri Dragon',
+        'type_titre': 'manga',
+        'niveau_contenu': 'safe',
+        'couverture_choisie': 'https://exemple.org/vol2.jpg',
+      });
+      final idChapitre = await version5.insert('chapitres', <String, Object?>{
+        'id_titre': idTitre,
+        'url_chapitre': 'https://mangadex.org/chapter/1',
+        'nom': 'Chapitre 1',
+        'numero': 1.0,
+        'langue': 'fr',
+        'est_lu': 1,
+        'est_telecharge': 1,
+        'nom_archive': 'manga/Ruri Dragon/ch1.fr.zip',
+        'date_suppression_prevue': 1000,
+        'est_garde': 1,
+      });
+      await version5.insert('telechargements', <String, Object?>{
+        'id_chapitre': idChapitre,
+        'statut': 'termine',
+        'date_ajout': 1,
+        'date_maj': 2,
+      });
+      await version5.insert('listes', <String, Object?>{
+        'nom': 'Lus en 2026',
+        'ordre': 4,
+      });
+      expect(await version5.getVersion(), 5);
+      await version5.close();
+
+      final version6 = await ouvrirBaseDeDonnees(
+        chemin: chemin,
+        fabrique: databaseFactoryFfi,
+      );
+      try {
+        expect(await version6.getVersion(), versionSchema);
+        final chapitre = (await version6.query('chapitres')).single;
+        expect(chapitre['nom'], 'Chapitre 1');
+        expect(chapitre['est_lu'], 1);
+        expect(chapitre['est_telecharge'], 1);
+        expect(chapitre['nom_archive'], 'manga/Ruri Dragon/ch1.fr.zip');
+        expect(chapitre['date_suppression_prevue'], 1000);
+        expect(chapitre['est_garde'], 1);
+        // Les lignes existantes reçoivent NULL : chapitre hébergé.
+        expect(chapitre.containsKey('url_externe'), isTrue);
+        expect(chapitre['url_externe'], isNull);
+
+        final titre = (await version6.query('titres')).single;
+        expect(titre['niveau_contenu'], 'safe');
+        expect(titre['couverture_choisie'], 'https://exemple.org/vol2.jpg');
+        expect(
+          (await version6.query('telechargements')).single['statut'],
+          'termine',
+        );
+        expect(await version6.query('listes'), hasLength(5));
+
+        // La colonne est utilisable et accepte NULL.
+        await version6.update(
+          'chapitres',
+          <String, Object?>{'url_externe': 'https://editeur.example/ch1'},
+          where: 'id = ?',
+          whereArgs: <Object?>[idChapitre],
+        );
+        expect(
+          (await version6.query('chapitres')).single['url_externe'],
+          'https://editeur.example/ch1',
+        );
+      } finally {
+        await version6.close();
+      }
+    } finally {
+      await dossier.delete(recursive: true);
+    }
+  });
 
   test('nom_archive est unique, mais plusieurs NULL sont permis', () async {
     final idSource = await base.insert('sources', <String, Object?>{

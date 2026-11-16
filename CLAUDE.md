@@ -53,8 +53,10 @@ limité à son scope :
 
 ## Branches et versions (détail : PLAYBOOK.md section 12)
 
-- **On code uniquement sur `dev`**, et on y teste en local. `main` sert seulement à publier
-  les versions validées par le client. Ne jamais commiter sur `main`.
+- **On code uniquement sur `dev`**, et on y teste en local. `test` reçoit les versions de
+  test (`X.Y.Z-test.N`) à essayer par le client ; `main` sert seulement à publier les versions
+  validées par le client. Ne jamais commiter sur `test` ni sur `main` : procédure dans
+  `docs/DEPLOIEMENT.md`.
 - Versions au format `X.Y.Z` : X = rupture, Y = nouvelle fonctionnalité, Z = correction.
   Dans `pubspec.yaml` : `version: X.Y.Z+N`. Étiquette `vX.Y.Z` sur `main` à chaque version.
 
@@ -66,10 +68,10 @@ limité à son scope :
 - Commandes : `flutter pub get`, `flutter analyze`, `flutter test`, `flutter run -d windows`,
   `flutter build windows`, `flutter build apk --release`.
 
-## État actuel (2026-11-15)
+## État actuel (2026-11-16)
 
-Étapes 0 à 4 faites, étape 5 en cours (services de téléchargement faits ; interface en cours). Feuille de route étendue (étapes 6 à 9) après les retours du client
-du 2026-11-15. Dépôt Git avec les branches `main` et `dev`.
+Étapes 0 à 5 faites : version de test `0.1.0-test.1` sur la branche `test`, en attente de
+l'essai et de l'accord du client. Étape 6 en cours (suivi dans `docs/TACHES_EN_COURS.md`).
 
 ## Pièges connus
 
@@ -90,6 +92,10 @@ cause et solution). Toute erreur inattendue ou récurrente est confiée à `anal
   échappement dans un fichier, utiliser `\x..` et vérifier les octets (voir E7).
 - Le C++ Windows est compilé avec `/utf-8` (`windows/CMakeLists.txt`) : ne pas retirer
   cette option, sinon les accents des textes natifs sont abîmés.
+- Toute requête vers un serveur MangaDex (`mangadex.org`, `*.mangadex.org`,
+  `*.mangadex.network`) envoie le User-Agent de l'application : avec un User-Agent de
+  navigateur, MangaDex renvoie une page anti-robot HTML (code 200) au lieu de l'image (E10).
+  Un essai réel d'image vérifie le type des octets, pas seulement leur présence.
 - Le cache pub réel est `C:\Users\bapti\AppData\Local\Pub\Cache` (et non `D:\dev\pub-cache`
   comme l'indique le README). Le projet étant sur D:, le cache Kotlin incrémental plante entre
   les deux disques : d'où `kotlin.incremental=false` dans `android/gradle.properties`.

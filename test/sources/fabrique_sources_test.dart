@@ -112,13 +112,27 @@ void main() {
           Source(nom: 'Site', urlBase: 'https://exemple.org', typeSource: type),
         ),
         throwsA(
-          isA<ErreurSource>().having(
-            (e) => e.url,
-            'url',
-            'https://exemple.org',
-          ),
+          isA<ErreurSource>()
+              .having((e) => e.url, 'url', 'https://exemple.org')
+              // Le type est gardé pour le rapport d'erreur exportable.
+              .having((e) => e.typeDetecte, 'typeDetecte', type),
         ),
       );
     }
+  });
+
+  test('niveaux de contenu de la recherche transmis à SourceMangaDex', () {
+    const source = Source(
+      nom: 'MangaDex',
+      urlBase: 'https://mangadex.org',
+      typeSource: TypeSource.mangaDex,
+    );
+    final sansFiltre = fabrique.creer(source) as SourceMangaDex;
+    expect(sansFiltre.niveauxContenuRecherche, isNull);
+    final filtre = fabrique.creer(
+      source,
+      niveauxContenuRecherche: <String>['safe', 'erotica'],
+    ) as SourceMangaDex;
+    expect(filtre.niveauxContenuRecherche, <String>['safe', 'erotica']);
   });
 }

@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 
 import 'constantes_sources.dart';
 import 'erreur_source.dart';
+import 'rapport_erreur_source.dart';
 
 /// Fonction qui donne l'heure courante (remplaçable dans les tests).
 typedef FonctionHorloge = DateTime Function();
@@ -153,12 +154,15 @@ class ClientHttpPoli {
   ///
   /// [referer] est envoyé dans l'en-tête `Referer`, que beaucoup de sites
   /// exigent pour servir leurs images. Lève une [ErreurSource] en cas d'échec.
+  ///
+  /// [exigerImage] : voir [recupererOctetsAvecDetails].
   Future<Uint8List> recupererOctets(
     Uri uri, {
     String? referer,
     String? userAgent,
     Map<String, String> enTetes = const <String, String>{},
     LimiteRequetes? limite,
+    bool exigerImage = false,
   }) async {
     final reponse = await recupererOctetsAvecDetails(
       uri,
@@ -166,6 +170,7 @@ class ClientHttpPoli {
       userAgent: userAgent,
       enTetes: enTetes,
       limite: limite,
+      exigerImage: exigerImage,
     );
     return reponse.octets;
   }
@@ -182,6 +187,14 @@ class ClientHttpPoli {
   /// En cas d'échec, l'[ErreurSource] levée porte [ErreurSource.codeStatut],
   /// [ErreurSource.octetsRecus] et [ErreurSource.duree] de la dernière
   /// tentative.
+  ///
+  /// [exigerImage] : `true` pour lever une [ErreurSource] si le
+  /// `Content-Type` de la réponse finale (après les redirections suivies par
+  /// `package:http`) est absent ou n'est pas `image/*`. Une page anti-robot
+  /// HTML servie en 200 n'est alors plus prise pour une image (journal des
+  /// erreurs, E10). L'erreur porte le code de statut, la taille, la durée et
+  /// un extrait nettoyé de la réponse ; aucune nouvelle tentative (la même
+  /// requête recevrait la même page).
   Future<ReponseOctets> recupererOctetsAvecDetails(
     Uri uri, {
     String? referer,
@@ -189,6 +202,7 @@ class ClientHttpPoli {
     Map<String, String> enTetes = const <String, String>{},
     LimiteRequetes? limite,
     int? nouvellesTentatives,
+    bool exigerImage = false,
   }) async {
     final (reponse, duree) = await _executer(
       uri,
@@ -198,6 +212,29 @@ class ClientHttpPoli {
       limite: limite,
       nouvellesTentatives: _plafonnerTentatives(nouvellesTentatives),
     );
+    if (exigerImage) {
+      String? typeContenu;
+      for (final entree in reponse.headers.entries) {
+        if (entree.key.toLowerCase() == 'content-type') {
+          typeContenu = entree.value;
+        }
+      }
+      // Type MIME sans paramètres (« image/jpeg; charset=… » → image/jpeg),
+      // insensible à la casse (RFC 9110 : les types ne le sont pas).
+      final type = typeContenu?.split(';').first.trim().toLowerCase() ?? '';
+      if (!type.startsWith('image/')) {
+        final extrait = _extrait(reponse);
+        throw ErreurSource(
+          uri.toString(),
+          "Réponse qui n'est pas une image "
+          '(Content-Type : ${type.isEmpty ? 'absent' : type}) : $extrait',
+          codeStatut: reponse.statusCode,
+          octetsRecus: reponse.bodyBytes.length,
+          duree: duree,
+          extraitReponse: extrait,
+        );
+      }
+    }
     return ReponseOctets(
       octets: reponse.bodyBytes,
       // `IOClient` met déjà les noms en minuscules, mais pas tous les clients
@@ -336,12 +373,17 @@ class ClientHttpPoli {
         if (code >= 200 && code < 300) {
           return (reponse, chrono.elapsed);
         }
+        // Extrait nettoyé des données personnelles (une page d'erreur peut
+        // afficher l'adresse IP ou un jeton) : il est cité dans le message
+        // affiché et gardé à part pour le rapport d'erreur exportable.
+        final extrait = _extrait(reponse);
         derniereErreur = ErreurSource(
           url,
-          'Réponse HTTP $code : ${_extrait(reponse)}',
+          'Réponse HTTP $code : $extrait',
           codeStatut: code,
           octetsRecus: reponse.bodyBytes.length,
           duree: chrono.elapsed,
+          extraitReponse: extrait,
         );
         if (code == codeHttpTropDeRequetes) {
           // Le serveur dit combien de temps patienter : on lui obéit, sauf si
@@ -501,14 +543,10 @@ class ClientHttpPoli {
     return encodage.decode(reponse.bodyBytes);
   }
 
+  /// Début du corps de [reponse], nettoyé par `extraireDebutReponse`.
   String _extrait(http.Response reponse) {
-    final texte = utf8
-        .decode(reponse.bodyBytes, allowMalformed: true)
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-    if (texte.length <= longueurMaxExtraitReponse) {
-      return texte;
-    }
-    return '${texte.substring(0, longueurMaxExtraitReponse)}…';
+    return extraireDebutReponse(
+      utf8.decode(reponse.bodyBytes, allowMalformed: true),
+    );
   }
 }

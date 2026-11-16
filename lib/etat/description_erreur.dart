@@ -52,7 +52,16 @@ enum NatureErreur {
 /// fourni par la couche qui l'a levée.
 class DescriptionErreur {
   /// Crée une description.
-  const DescriptionErreur(this.nature, {this.detail = ''});
+  ///
+  /// [cause] est l'erreur d'origine, gardée pour le rapport d'erreur
+  /// exportable (étape 6) ; [estRapportable] indique si ce rapport a un
+  /// intérêt (erreur d'un site, de la base ou imprévue).
+  const DescriptionErreur(
+    this.nature, {
+    this.detail = '',
+    this.cause,
+    this.estRapportable = false,
+  });
 
   /// Classe une erreur attrapée par un état.
   ///
@@ -61,21 +70,37 @@ class DescriptionErreur {
   /// pouvoir la corriger, puis affichée sans planter.
   factory DescriptionErreur.depuis(Object erreur, [StackTrace? pile]) {
     if (erreur is ErreurSource) {
-      return DescriptionErreur(NatureErreur.site, detail: erreur.message);
+      return DescriptionErreur(
+        NatureErreur.site,
+        detail: erreur.message,
+        cause: erreur,
+        estRapportable: true,
+      );
     }
     if (erreur is ErreurBaseDeDonnees) {
       return DescriptionErreur(
         NatureErreur.baseDeDonnees,
         detail: erreur.message,
+        cause: erreur,
+        estRapportable: true,
       );
     }
     if (erreur is ErreurService) {
-      return DescriptionErreur(NatureErreur.refus, detail: erreur.message);
+      // Un simple refus (« ce site n'est pas encore configuré ») n'a rien à
+      // diagnostiquer ; un refus causé par un site illisible, si.
+      return DescriptionErreur(
+        NatureErreur.refus,
+        detail: erreur.message,
+        cause: erreur,
+        estRapportable: erreur.cause is ErreurSource,
+      );
     }
     debugPrint("Erreur inattendue dans l'interface : $erreur\n$pile");
     return DescriptionErreur(
       NatureErreur.inattendue,
       detail: erreur.toString(),
+      cause: erreur,
+      estRapportable: true,
     );
   }
 
@@ -84,6 +109,14 @@ class DescriptionErreur {
 
   /// Précision en français venant de la couche d'origine (peut être vide).
   final String detail;
+
+  /// Erreur d'origine (pour le rapport d'erreur), ou `null` pour une erreur
+  /// construite par l'interface (adresse vide…).
+  final Object? cause;
+
+  /// `true` si un rapport d'erreur peut aider à diagnostiquer le problème
+  /// (bouton « Exporter le rapport d'erreur »).
+  final bool estRapportable;
 
   @override
   String toString() => 'DescriptionErreur(${nature.name}, $detail)';

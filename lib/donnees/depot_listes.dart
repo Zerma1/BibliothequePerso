@@ -1,4 +1,5 @@
-/// Dépôt des listes de lecture (Favoris, Suivis et listes du client).
+/// Dépôt des listes de lecture (Favoris, Suivis, Planifié, En attente et
+/// listes du client).
 library;
 
 import 'package:sqflite/sqflite.dart';
@@ -32,7 +33,8 @@ class DepotListes {
   }
 
   /// Charge une liste par son nom (sans tenir compte de la casse ASCII), ou
-  /// `null`. Pratique pour retrouver « Favoris » ou « Suivis ».
+  /// `null`. Pratique pour retrouver une liste système (« Favoris »,
+  /// « Suivis », « Planifié », « En attente »).
   Future<ListeLecture?> chargerListeParNom(String nom) async {
     final lignes = await _baseDeDonnees.query(
       'listes',
@@ -65,9 +67,9 @@ class DepotListes {
         // deux créations rapprochées n'obtiennent pas la même position.
         final lignes = await txn.rawQuery(
           'SELECT COALESCE(MAX(ordre), ?) + 1 FROM listes',
-          <Object?>[ordreListeSuivis],
+          <Object?>[ordreListeEnAttente],
         );
-        final ordre = Sqflite.firstIntValue(lignes) ?? ordreListeSuivis + 1;
+        final ordre = Sqflite.firstIntValue(lignes) ?? ordreListeEnAttente + 1;
         final liste = ListeLecture(nom: nomPropre, ordre: ordre);
         final id = await txn.insert('listes', liste.versMap());
         return liste.copierAvec(id: id);

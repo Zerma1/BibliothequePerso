@@ -1,12 +1,18 @@
 /// Erreur levée par la couche `sources/` (lecture des sites).
 library;
 
+import '../modeles/source.dart';
+
 /// Échec de lecture d'un site : réseau, code HTTP, délai dépassé, réponse
 /// illisible ou structure inattendue.
 ///
 /// Elle porte toujours l'[url] concernée et, si elle existe, la [cause]
 /// d'origine. Le service l'attrape et l'enregistre : elle ne doit jamais faire
 /// planter l'interface (PLAYBOOK.md section 6).
+///
+/// Pour le rapport d'erreur exportable (`RapportErreurSource`), elle garde
+/// aussi le [typeDetecte] du site et un [extraitReponse] (début de la réponse,
+/// déjà nettoyé des données personnelles).
 class ErreurSource implements Exception {
   /// Crée une erreur pour [url] avec un [message] lisible en français.
   const ErreurSource(
@@ -16,6 +22,8 @@ class ErreurSource implements Exception {
     this.codeStatut,
     this.octetsRecus,
     this.duree,
+    this.typeDetecte,
+    this.extraitReponse,
   });
 
   /// URL dont la lecture a échoué (ou URL saisie invalide).
@@ -41,6 +49,33 @@ class ErreurSource implements Exception {
   /// Durée de la dernière tentative (requête complète), quand l'échec vient
   /// du réseau. Sert aussi au signalement MangaDex@Home.
   final Duration? duree;
+
+  /// Type technique du site (MangaDex, Madara…) quand il est connu au moment
+  /// de l'échec : renseigné par l'adaptateur ou par le service.
+  final TypeSource? typeDetecte;
+
+  /// Début du corps de la réponse reçue (espaces regroupés, tronqué à
+  /// `longueurMaxExtraitReponse` caractères), **déjà nettoyé** des données
+  /// personnelles et jetons (voir `extraireDebutReponse`). `null` si aucune
+  /// réponse n'a été reçue.
+  final String? extraitReponse;
+
+  /// Renvoie une copie complétée par [typeDetecte] et [extraitReponse].
+  ///
+  /// Une valeur déjà présente n'est jamais remplacée : l'information la plus
+  /// proche de l'échec (posée en premier) est gardée.
+  ErreurSource avecContexte({TypeSource? typeDetecte, String? extraitReponse}) {
+    return ErreurSource(
+      url,
+      message,
+      cause: cause,
+      codeStatut: codeStatut,
+      octetsRecus: octetsRecus,
+      duree: duree,
+      typeDetecte: this.typeDetecte ?? typeDetecte,
+      extraitReponse: this.extraitReponse ?? extraitReponse,
+    );
+  }
 
   @override
   String toString() {

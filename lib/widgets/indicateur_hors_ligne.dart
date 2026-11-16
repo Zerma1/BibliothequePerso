@@ -21,6 +21,8 @@ IconData iconeHorsLigne(StatutHorsLigne statut) {
       return Icons.error_outline;
     case StatutHorsLigne.nonTelecharge:
       return Icons.cloud_outlined;
+    case StatutHorsLigne.externe:
+      return iconeLienExterne;
   }
 }
 
@@ -38,8 +40,14 @@ Color couleurHorsLigne(StatutHorsLigne statut, ColorScheme couleurs) {
       return couleurs.error;
     case StatutHorsLigne.nonTelecharge:
       return couleurs.outline;
+    case StatutHorsLigne.externe:
+      // Couleur des liens : le client comprend qu'un appui ouvre un site.
+      return couleurs.secondary;
   }
 }
+
+/// Icône d'un chapitre hébergé sur un site externe (lien vers ce site).
+const IconData iconeLienExterne = Icons.open_in_new;
 
 /// Icône d'une archive dont la suppression automatique est prévue.
 const IconData iconeSuppressionPrevue = Icons.auto_delete_outlined;

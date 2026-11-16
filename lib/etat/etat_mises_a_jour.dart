@@ -236,21 +236,24 @@ class EtatMisesAJour extends EtatNotifiant {
   /// rattrape une échéance passée pendant la veille.
   Future<void> _programmer() async {
     final numero = ++_numeroProgrammation;
-    PlanificationMisesAJour planification;
+    final instant = _maintenant();
+    DateTime prochaine;
     try {
-      planification = await _chargerPlanification();
+      // Échéance la plus proche, vérification complète ou surveillance des
+      // titres « En attente » (toutes les N heures pleines, étape 6) : le
+      // service choisit ensuite laquelle est due.
+      prochaine = await _service.chargerProchaineEcheance(instant);
     } catch (exception, pile) {
       // Réglage illisible : on garde la valeur par défaut plutôt que de ne
       // plus jamais vérifier.
       debugPrint('Planification illisible : $exception\n$pile');
-      planification = PlanificationMisesAJour(
+      prochaine = PlanificationMisesAJour(
         PlanificationMisesAJour.parDefautParJour,
-      );
+      ).prochaineEcheance(instant);
     }
     if (estLibere || numero != _numeroProgrammation) return;
     _minuterie?.cancel();
     final maintenant = _maintenant();
-    final prochaine = planification.prochaineEcheance(maintenant);
     _prochaineEcheance = prochaine;
     _minuterie = Timer(prochaine.difference(maintenant), () {
       _minuterie = null;
@@ -331,7 +334,11 @@ class EtatMisesAJour extends EtatNotifiant {
     }
     if (rapport != null) {
       _dernierRapport = rapport;
-      _dateDerniereVerification = rapport.fin;
+      // La surveillance horaire des titres « En attente » ne vérifie qu'une
+      // partie des titres : elle ne compte pas comme « dernière recherche ».
+      if (!rapport.estEnAttenteSeulement) {
+        _dateDerniereVerification = rapport.fin;
+      }
     }
     _erreur = erreur;
     notifier();

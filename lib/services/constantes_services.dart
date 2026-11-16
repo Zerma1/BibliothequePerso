@@ -74,3 +74,62 @@ const Duration margeNouvelEssaiVerrou = Duration(seconds: 1);
 /// Attente minimale avant un nouvel essai de la file : évite de relire la
 /// base en boucle si le verrou de l'autre isolat expire tout de suite.
 const Duration attenteMinimaleNouvelEssai = Duration(seconds: 5);
+
+/// Titres « En attente » : vérifiés toutes les N heures pleines, par défaut
+/// à chaque heure (décision de l'étape 6 : surveillance accrue des titres
+/// qui n'ont encore aucun chapitre dans les langues du client).
+const int heuresEnAttenteParDefaut = 1;
+
+/// Nom du sous-dossier des rapports d'erreur exportés, dans le dossier
+/// racine de l'application (`Documents/bibliotheque_perso/rapports/`).
+const String nomDossierRapports = 'rapports';
+
+/// Nombre maximal de rapports d'erreur gardés sur l'appareil : les plus
+/// anciens sont effacés au-delà, pour que le dossier ne grossisse pas sans
+/// fin.
+const int nombreMaximalRapports = 50;
+
+/// Préfixe du nom d'un rapport d'erreur (`rapport_20261116_143000.txt`).
+const String prefixeFichierRapport = 'rapport_';
+
+/// Extension des rapports d'erreur exportés.
+const String extensionFichierRapport = 'txt';
+
+/// Nom du sous-dossier des exports de la bibliothèque (tâche R7), dans le
+/// dossier racine des téléchargements (`Documents/bibliotheque_perso/exports/`).
+const String nomDossierExports = 'exports';
+
+/// Préfixe du nom d'un export (`bibliotheque_perso-export-2026-11-16_1430.json`).
+const String prefixeFichierExport = 'bibliotheque_perso-export-';
+
+/// Valeur du champ `format` du JSON exporté : permet à l'import (R8) de
+/// reconnaître un fichier de l'application avant de le lire.
+const String identifiantFormatExport = 'bibliotheque_perso-export';
+
+/// Version du format JSON exporté. À augmenter seulement si un champ change
+/// de sens ou disparaît (un champ ajouté reste compatible) : l'import (R8)
+/// s'en sert pour lire les anciens fichiers.
+const int versionFormatExport = 1;
+
+/// Suffixe de la vignette 512 px d'une couverture MangaDex (documentation
+/// MangaDex, « covers ») : environ 160 Ko au lieu de 1,5 Mo.
+const String suffixeVignetteMangaDex = '.512.jpg';
+
+/// Suffixe de la petite vignette 256 px d'une couverture MangaDex : une
+/// adresse qui le porte est déjà une vignette (pas de suffixe ajouté).
+const String suffixePetiteVignetteMangaDex = '.256.jpg';
+
+/// Taille totale maximale (en octets) des couvertures gardées en mémoire
+/// pendant la session : 16 Mo, soit une dizaine d'originales MangaDex
+/// (~1,5 Mo) ou une centaine de vignettes (~160 Ko). Au-delà, les moins
+/// récemment demandées sont oubliées (elles restent sur l'appareil quand
+/// elles y ont été enregistrées).
+const int tailleMaximaleCacheCouvertures = 16 * 1024 * 1024;
+
+/// Nombre maximal de couvertures gardées en mémoire pendant la session,
+/// quelle que soit leur taille : borne aussi les demandes en cours.
+const int nombreMaximalCouverturesEnCache = 100;
+
+/// Nombre maximal d'exports dans la même minute (`…_1430.json`,
+/// `…_1430_2.json`…) : borne la recherche d'un nom libre.
+const int nombreMaximalExportsMemeMinute = 50;

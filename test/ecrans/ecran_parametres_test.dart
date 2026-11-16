@@ -140,8 +140,9 @@ void main() {
     final enregistrer = find.widgetWithText(FilledButton, Textes.enregistrer);
     expect(tester.widget<FilledButton>(enregistrer).onPressed, isNull);
 
-    // + sur la première limite (favoris : 10 → 11).
-    await tester.tap(find.byTooltip(Textes.augmenter).at(1));
+    // + sur la première limite (favoris : 10 → 11) ; les deux premiers « + »
+    // sont ceux des recherches par jour et de la surveillance « En attente ».
+    await tester.tap(find.byTooltip(Textes.augmenter).at(2));
     await tester.pump();
     expect(
       find.text(

@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../etat/description_erreur.dart';
+import '../etat/etat_export.dart';
 import '../etat/etat_mises_a_jour.dart';
 import '../etat/etat_parametres.dart';
 import '../etat/etat_sources.dart';
@@ -15,8 +16,8 @@ import '../widgets/messages.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
 
-/// Réglages de l'application, en trois sections : « Téléchargements »,
-/// « Sites » et « À propos ».
+/// Réglages de l'application : langues, mises à jour, téléchargements,
+/// sites, sauvegarde et export, puis « À propos ».
 class EcranParametres extends StatelessWidget {
   /// Crée l'écran.
   const EcranParametres({super.key});
@@ -44,6 +45,7 @@ class EcranParametres extends StatelessWidget {
               SizedBox(height: espacementGrand),
               _SectionSites(),
               SizedBox(height: espacementGrand),
+              _SectionExport(),
               _SectionAPropos(),
             ],
           ),
@@ -219,8 +221,74 @@ class _SectionMisesAJour extends StatelessWidget {
             Textes.prochaineRecherche(prochaine),
             style: theme.textTheme.bodySmall,
           ),
+        const SizedBox(height: espacementMoyen),
+        // Surveillance accrue des titres « En attente » (étape 6) : même
+        // présentation que le nombre de recherches, juste en dessous.
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Text(
+                Textes.heuresEnAttente,
+                style: theme.textTheme.titleSmall,
+              ),
+            ),
+            IconButton(
+              tooltip: Textes.diminuer,
+              icon: const Icon(Icons.remove_circle_outline),
+              onPressed:
+                  etat.estEnEnregistrementEnAttente || etat.heuresEnAttente <= 1
+                  ? null
+                  : () => _modifierEnAttente(
+                      context,
+                      etat,
+                      etat.heuresEnAttente - 1,
+                    ),
+            ),
+            Text(
+              Textes.valeurHeures(etat.heuresEnAttente),
+              style: theme.textTheme.titleMedium,
+            ),
+            IconButton(
+              tooltip: Textes.augmenter,
+              icon: const Icon(Icons.add_circle_outline),
+              onPressed:
+                  etat.estEnEnregistrementEnAttente ||
+                      etat.heuresEnAttente >= etat.maximumHeuresEnAttente
+                  ? null
+                  : () => _modifierEnAttente(
+                      context,
+                      etat,
+                      etat.heuresEnAttente + 1,
+                    ),
+            ),
+          ],
+        ),
+        Text(
+          Textes.explicationHeuresEnAttente,
+          style: theme.textTheme.bodySmall,
+        ),
       ],
     );
+  }
+
+  Future<void> _modifierEnAttente(
+    BuildContext context,
+    EtatParametres etat,
+    int heures,
+  ) async {
+    final misesAJour = context.read<EtatMisesAJour>();
+    final resultat = await etat.modifierHeuresEnAttente(heures);
+    if (resultat.estReussi) {
+      // Minuteur (ordinateur) ou tâche de fond (Android) recalés.
+      await misesAJour.replanifier();
+    }
+    if (context.mounted) {
+      afficherResultat(
+        context,
+        resultat,
+        succes: Textes.surveillanceEnregistree,
+      );
+    }
   }
 }
 
@@ -515,11 +583,6 @@ class _EtatDialogueSite extends State<_DialogueSite> {
   );
   late bool _estActive = widget.source.estActive;
 
-  /// Codes de deux lettres séparés par des virgules (espaces tolérés).
-  static final RegExp _formatLangues = RegExp(
-    '^[a-z]{$longueurCodeLangue}(,[a-z]{$longueurCodeLangue})*\$',
-  );
-
   @override
   void dispose() {
     _nom.dispose();
@@ -527,11 +590,10 @@ class _EtatDialogueSite extends State<_DialogueSite> {
     super.dispose();
   }
 
-  String? _validerLangues(String? valeur) {
-    final langues = (valeur ?? '').replaceAll(' ', '').toLowerCase();
-    if (langues.isEmpty || _formatLangues.hasMatch(langues)) return null;
-    return Textes.erreurLangues;
-  }
+  /// Codes séparés par des virgules, variantes régionales acceptées
+  /// (« fr,pt-br ») : même règle que le service.
+  String? _validerLangues(String? valeur) =>
+      EtatSources.languesValides(valeur ?? '') ? null : Textes.erreurLangues;
 
   void _valider() {
     if (!(_formulaire.currentState?.validate() ?? false)) return;
@@ -616,6 +678,105 @@ class _EtatDialogueSite extends State<_DialogueSite> {
           child: const Text(Textes.enregistrer),
         ),
       ],
+    );
+  }
+}
+
+// --------------------------------------------------------- Sauvegarde, export
+
+/// Export des titres et des sites (JSON complet et Markdown lisible).
+/// Absente si l'application n'a pas de service d'export (tests).
+class _SectionExport extends StatelessWidget {
+  const _SectionExport();
+
+  Future<void> _exporter(BuildContext context, EtatExport etat) async {
+    final resultat = await etat.exporter();
+    if (!context.mounted) return;
+    final export = resultat.donnee;
+    if (export == null) {
+      afficherResultat(context, resultat);
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (contexteDialogue) => AlertDialog(
+        title: const Text(Textes.exportEnregistre),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: largeurMaxFormulaire),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Text(
+                  Textes.resumeExport(export.nombreTitres, export.nombreSites),
+                ),
+                const SizedBox(height: espacementPetit),
+                // Chemins sélectionnables : le client peut les copier pour
+                // retrouver ou envoyer les fichiers.
+                const Text(Textes.fichierJson),
+                SelectableText(export.cheminJson),
+                const SizedBox(height: espacementPetit),
+                const Text(Textes.fichierMarkdown),
+                SelectableText(export.cheminMarkdown),
+              ],
+            ),
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => ouvrirLienExterne(
+              contexteDialogue,
+              Uri.directory(etat.dossierExports).toString(),
+            ),
+            child: const Text(Textes.ouvrirDossier),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(contexteDialogue).pop(),
+            child: const Text(Textes.fermer),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final EtatExport etat;
+    try {
+      etat = context.watch<EtatExport>();
+    } on ProviderNotFoundException {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      // L'espace avant la section suivante n'existe que si celle-ci est
+      // affichée.
+      padding: const EdgeInsets.only(bottom: espacementGrand),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const _TitreSection(Textes.sectionSauvegardeExport),
+          const Text(Textes.explicationExport),
+          const SizedBox(height: espacementPetit),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: FilledButton.tonalIcon(
+              onPressed: etat.estEnCours
+                  ? null
+                  : () => _exporter(context, etat),
+              icon: etat.estEnCours
+                  ? SizedBox.square(
+                      dimension: IconTheme.of(context).size,
+                      child: const CircularProgressIndicator(
+                        strokeWidth: epaisseurIndicateurBouton,
+                      ),
+                    )
+                  : const Icon(Icons.save_alt_outlined),
+              label: const Text(Textes.exporterTitresEtSites),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

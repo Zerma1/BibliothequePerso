@@ -125,3 +125,62 @@ erreur qui semble déjà vue.
 - **Prévention** : réessayer de réactiver lint après une mise à jour de Flutter / de l'Android
   Gradle Plugin ; ne pas retirer le réglage sans vérifier un build de publication.
 - **Statut** : contourné.
+
+### E10 — Couvertures jamais affichées (icône d'image cassée)
+- **Date(s)** : 2026-11-16 (version 0.1.0-test.1 ; défaut identique sur `dev`)
+- **Symptôme** : fiche d'un titre et grille de la bibliothèque : seulement l'icône
+  `broken_image`, alors que `curl -A "BibliothequePerso/0.1 (usage personnel)" <couverture>`
+  renvoie 200 et 1,1 Mo.
+- **Cause racine** (prouvée) : `ServiceBibliotheque.recupererCouverture` n'envoie le User-Agent
+  honnête que si `SourceMangaDex.estHoteMangaDex(uri.host)` est vrai ; or cette fonction ne
+  reconnaît que `mangadex.org` et `www.mangadex.org`, pas `uploads.mangadex.org`. Les
+  couvertures partent donc avec le User-Agent « Chrome » usurpé, que MangaDex redirige
+  (302) vers `https://mangadex.org/edge/challenge?...` ; `package:http` suit la redirection et
+  reçoit une page HTML de 2 022 octets en **200**, que `ClientHttpPoli` accepte comme
+  « octets d'image ». `Image.memory` échoue au décodage → `errorBuilder` → icône cassée.
+  Preuves : curl avec le User-Agent Chrome → 302 puis 200 `text/html` 2 022 octets ; essai
+  réel `ClientHttpPoli.recupererOctets(..., userAgent: null)` → 2 022 octets commençant par
+  `<!doctype html>` ; `estHoteMangaDex('uploads.mangadex.org') == false` ; test de widget
+  (CarteTitre → EtatCouvertures → vrai ServiceBibliotheque → MockClient servant un vrai
+  JPEG) : requête partie avec `User-Agent: Mozilla/5.0…` ; avec de vrais octets JPEG l'image
+  se décode (1800x2560) : widget, cache et FutureBuilder ne sont pas en cause. L'essai
+  précédent « les octets reviennent » n'avait pas vérifié qu'il s'agissait d'une image.
+- **Solution à appliquer** (`developpeur-services`) : dans `recupererCouverture`, utiliser la
+  même règle que `ServiceTelechargement._estAdresseMangaDex` (hôte MangaDex, `*.mangadex.org`,
+  `*.mangadex.network`) — idéalement une fonction publique unique, par exemple
+  `SourceMangaDex.estAdresseMangaDex` (alors `developpeur-sources`), utilisée par les deux
+  services. Test à ajouter : la requête de couverture vers `uploads.mangadex.org` porte
+  `userAgentApplication`. En complément conseillé : refuser une couverture dont le
+  `Content-Type` n'est pas `image/*` (lever une `ErreurService`), pour qu'une page de défi
+  anti-robot ne passe plus pour une image.
+- **Prévention** : tout appel vers un serveur MangaDex (sous-domaines compris) envoie
+  `userAgentApplication` ; un essai réel d'image vérifie le type (octets `FF D8` / `89 50`,
+  ou `Content-Type`), pas seulement que « des octets reviennent ».
+- **Statut** : résolu le 2026-11-16 (User-Agent de l'application pour *.mangadex.org / *.mangadex.network, option exigerImage, anciennes couvertures HTML remplacées) — livré dans 0.1.0-test.2.
+
+### E11 — Aucun téléchargement automatique après l'ajout d'un titre
+- **Date(s)** : 2026-11-16 (version 0.1.0-test.1 ; défaut identique sur `dev`)
+- **Symptôme** : un titre ajouté en Favoris / Suivis (dialogue d'ajout) n'a aucun chapitre en
+  file ; rien ne se télécharge avant un redémarrage de l'application.
+- **Cause racine** (prouvée) : `EtatBibliotheque.ajouterTitre` appelle
+  `ServiceBibliotheque.ajouterTitreDepuisUrl` puis `charger()`, mais jamais
+  `ServiceTelechargement.appliquerRegles(idTitre)` (ni le dialogue, ni l'écran). Les règles ne
+  sont appliquées qu'au démarrage (`ServiceTelechargement.demarrer`), après une recherche de
+  mises à jour **qui trouve de nouveaux chapitres** (`EtatMisesAJour`, condition
+  `nombreNouveauxChapitres > 0`), après un changement de réglage, ou depuis la fiche
+  (changement de liste, lecture). Preuve : test avec les vrais services (base en mémoire,
+  MangaDex simulé) : `etat.ajouterTitre(url, {Favoris})` → 100 chapitres, **file vide** ;
+  un appel à `appliquerReglesATous()` met ensuite 31 chapitres en file. Même manque dans
+  `EtatTitre.actualiser` (bouton Actualiser de la fiche : nouveaux chapitres non mis en file).
+  `lancerTraitement`, le verrou et `demarrer()` dans `main.dart` fonctionnent
+  (`appliquerRegles` lance bien la file).
+  - Conséquence : comme `EtatMisesAJour` n'applique les règles que s'il y a de nouveaux
+    chapitres, un titre ajouté n'est rattrapé qu'au lancement suivant de l'application.
+- **Solution à appliquer** (`developpeur-interface`) : dans `EtatBibliotheque.ajouterTitre`,
+  après une réussite, appeler `_serviceTelechargement?.appliquerRegles(titre.id!)` (erreur
+  journalisée, sans faire échouer l'ajout) ; de même dans `EtatTitre.actualiser` quand
+  `nombreNouveauxChapitres > 0` (`_appliquerRegles()`). Tests : avec
+  `FauxServiceTelechargement`, `reglesAppliquees` contient l'id du titre ajouté / actualisé.
+- **Prévention** : toute action qui place un titre en Favoris / Suivis ou ajoute des chapitres
+  à un titre de ces listes applique les règles ; à tester côté état (`reglesAppliquees`).
+- **Statut** : résolu le 2026-11-16 (règles appliquées après l'ajout d'un titre et après une actualisation) — livré dans 0.1.0-test.2.

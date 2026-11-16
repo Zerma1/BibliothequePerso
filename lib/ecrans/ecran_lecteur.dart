@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 
 import '../etat/etat_lecteur.dart';
 import '../etat/outils_chapitres.dart';
+import '../modeles/chapitre.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/indicateur_hors_ligne.dart';
 import '../widgets/messages.dart';
@@ -84,6 +85,8 @@ class EcranLecteur extends StatelessWidget {
         return const VueChargement();
       case NatureContenu.nonTelecharge:
         return _VueNonTelecharge(etat: etat);
+      case NatureContenu.externe:
+        return _VueExterne(etat: etat);
       case NatureContenu.texte:
         // Clé par chapitre : un nouveau chapitre repart en haut de page.
         return _VueTexte(key: ValueKey<int?>(chapitre?.id), etat: etat);
@@ -184,6 +187,47 @@ class _VueNonTelecharge extends StatelessWidget {
               label: const Text(Textes.ouvrirSurLeSite),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Chapitre publié sur un site externe : rien à lire ici, seulement le lien
+/// vers le site de l'éditeur (PLAYBOOK.md section 10).
+class _VueExterne extends StatelessWidget {
+  const _VueExterne({required this.etat});
+
+  final EtatLecteur etat;
+
+  @override
+  Widget build(BuildContext context) {
+    final chapitre = etat.chapitre;
+    final site = chapitre == null ? null : etat.nomSiteExterneDe(chapitre);
+    if (chapitre == null || site == null) return const VueChargement();
+    return VueVide(
+      message: Textes.lecteurChapitreExterne(site),
+      icone: iconeLienExterne,
+      action: _BoutonLireSurSite(chapitre: chapitre, site: site),
+    );
+  }
+}
+
+/// Bouton « Lire sur `site` » d'un chapitre externe : ouvre la page dans
+/// l'application de l'éditeur si elle est installée, sinon le navigateur.
+class _BoutonLireSurSite extends StatelessWidget {
+  const _BoutonLireSurSite({required this.chapitre, required this.site});
+
+  final Chapitre chapitre;
+  final String site;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: () => ouvrirLienExterne(context, chapitre.urlExterne!),
+      icon: const Icon(iconeLienExterne),
+      label: Text(
+        '${Textes.lireSur(site)} : '
+        '${Textes.nomChapitre(chapitre.nom, chapitre.numero)}',
       ),
     );
   }
@@ -456,6 +500,11 @@ class _PiedChapitre extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final suivant = etat.chapitreSuivant;
+    final externes = etat.chapitresExternesSuivants;
+    final premierExterne = externes.firstOrNull;
+    final site = premierExterne == null
+        ? null
+        : etat.nomSiteExterneDe(premierExterne);
     return Padding(
       padding: const EdgeInsets.all(espacementGrand),
       child: Column(
@@ -463,7 +512,20 @@ class _PiedChapitre extends StatelessWidget {
         children: <Widget>[
           Text(Textes.finDuChapitre, style: theme.textTheme.titleMedium),
           const SizedBox(height: espacementMoyen),
-          if (suivant == null)
+          // Les chapitres publiés chez l'éditeur sont sautés par « Chapitre
+          // suivant » : leur lien est proposé ici, juste avant.
+          if (premierExterne != null && site != null) ...<Widget>[
+            Text(
+              Textes.chapitresExternesSuivants(externes.length, site),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: espacementPetit),
+            _BoutonLireSurSite(chapitre: premierExterne, site: site),
+            const SizedBox(height: espacementMoyen),
+          ],
+          if (suivant == null && premierExterne != null)
+            const SizedBox.shrink()
+          else if (suivant == null)
             const Text(Textes.dernierChapitre, textAlign: TextAlign.center)
           else
             FilledButton.icon(

@@ -4,8 +4,10 @@ library;
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
+import '../etat/description_erreur.dart';
 import '../etat/etat_sources.dart';
 import '../modeles/source.dart';
+import '../widgets/bouton_rapport_erreur.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/textes.dart';
 
@@ -31,6 +33,9 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
   String _nomPropose = '';
   String? _messageErreur;
 
+  /// Erreur du dernier essai, gardée pour le rapport d'erreur exportable.
+  DescriptionErreur? _erreur;
+
   @override
   void dispose() {
     _url.dispose();
@@ -49,14 +54,10 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
   }
 
   String? _validerLangue(String? valeur) {
-    final langue = valeur?.trim() ?? '';
-    if (langue.isEmpty) {
-      return null;
-    }
-    final estCode =
-        langue.length == longueurCodeLangue &&
-        RegExp(r'^[a-zA-Z]+$').hasMatch(langue);
-    return estCode ? null : Textes.erreurLangue;
+    // Variantes régionales acceptées (« pt-br ») : même règle que le service.
+    return EtatSources.languesValides(valeur ?? '')
+        ? null
+        : Textes.erreurLangue;
   }
 
   Future<void> _ajouter() async {
@@ -64,7 +65,10 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
     if (formulaire == null || !formulaire.validate()) {
       return;
     }
-    setState(() => _messageErreur = null);
+    setState(() {
+      _messageErreur = null;
+      _erreur = null;
+    });
     final resultat = await context.read<EtatSources>().ajouterSite(
       _url.text,
       nom: _nom.text,
@@ -77,11 +81,12 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
     final erreur = resultat.erreur;
     final ajout = resultat.donnee;
     if (erreur != null || ajout == null) {
-      setState(
-        () => _messageErreur = erreur == null
+      setState(() {
+        _erreur = erreur;
+        _messageErreur = erreur == null
             ? Textes.erreurInattendue
-            : Textes.messageErreur(erreur),
-      );
+            : Textes.messageErreur(erreur);
+      });
       return;
     }
     Navigator.of(context).pop(
@@ -140,7 +145,6 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
                   TextFormField(
                     controller: _langue,
                     enabled: !enCours,
-                    maxLength: longueurCodeLangue,
                     decoration: const InputDecoration(
                       labelText: Textes.champLangue,
                       helperText: Textes.aideLangue,
@@ -187,6 +191,15 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
                         color: Theme.of(context).colorScheme.error,
                       ),
                     ),
+                    // Le rapport aide à faire diagnostiquer un site que la
+                    // détection ne sait pas lire (étape 6).
+                    if (_erreur != null && !enCours) ...<Widget>[
+                      const SizedBox(height: espacementPetit),
+                      BoutonRapportErreur(
+                        erreur: _erreur!,
+                        action: Textes.actionRapportAjoutSite,
+                      ),
+                    ],
                     const SizedBox(height: espacementMoyen),
                   ],
                   FilledButton.icon(

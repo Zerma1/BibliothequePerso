@@ -16,6 +16,7 @@ import '../etat/outils_chapitres.dart';
 import '../modeles/chapitre.dart';
 import '../modeles/titre.dart';
 import '../widgets/constantes_interface.dart';
+import '../widgets/dialogue_couverture.dart';
 import '../widgets/editeur_langues.dart';
 import '../widgets/image_couverture.dart';
 import '../widgets/indicateur_hors_ligne.dart';
@@ -267,6 +268,13 @@ class _EnTete extends StatelessWidget {
   final bool estLarge;
   final double largeurDisponible;
 
+  Future<void> _changerCouverture(BuildContext context) async {
+    final message = await afficherDialogueCouverture(context, etat);
+    if (message != null && context.mounted) {
+      afficherMessage(context, message);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -277,17 +285,33 @@ class _EnTete extends StatelessWidget {
           (estLarge ? fractionCouvertureFiche : fractionCouvertureFicheEtroite),
       largeurMaxCouvertureFiche,
     );
+    // Le bouton de changement suit la couverture : sous elle, à la même
+    // largeur, dans les deux dispositions.
     final couverture = SizedBox(
       width: largeurCouverture,
-      child: AspectRatio(
-        aspectRatio: rapportCouverture,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(espacementPetit),
-          child: ImageCouverture(
-            urlCouverture: titre.urlCouverture,
-            referer: etat.source?.urlBase,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          AspectRatio(
+            aspectRatio: rapportCouverture,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(espacementPetit),
+              // Fiche : vignette d'abord (immédiate, hors-ligne), puis
+              // l'image en pleine taille dès qu'elle arrive.
+              child: ImageCouverture(titre: titre, pleineTaille: true),
+            ),
           ),
-        ),
+          TextButton.icon(
+            onPressed: etat.estEnChangementCouverture
+                ? null
+                : () => _changerCouverture(context),
+            icon: const Icon(Icons.photo_library_outlined),
+            label: const Text(
+              Textes.changerCouverture,
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
       ),
     );
     final informations = _Informations(etat: etat, titre: titre);
@@ -345,14 +369,21 @@ class _EnTete extends StatelessWidget {
                   FilterChip(
                     label: Text(liste.nom),
                     selected: etat.idsListesDuTitre.contains(liste.id),
-                    onSelected: (coche) async {
-                      final resultat = coche
-                          ? await etat.ajouterALaListe(liste.id!)
-                          : await etat.retirerDeLaListe(liste.id!);
-                      if (context.mounted) {
-                        afficherResultat(context, resultat);
-                      }
-                    },
+                    // « En attente » est tenue par l'application : sa puce
+                    // montre l'état du titre sans pouvoir être changée.
+                    tooltip: etat.estListeAutomatique(liste)
+                        ? Textes.listeAutomatique
+                        : null,
+                    onSelected: etat.estListeAutomatique(liste)
+                        ? null
+                        : (coche) async {
+                            final resultat = coche
+                                ? await etat.ajouterALaListe(liste.id!)
+                                : await etat.retirerDeLaListe(liste.id!);
+                            if (context.mounted) {
+                              afficherResultat(context, resultat);
+                            }
+                          },
                   ),
             ],
           ),
@@ -821,6 +852,7 @@ class _LigneChapitre extends StatelessWidget {
     BuildContext context,
     EtatHorsLigne horsLigne,
   ) async {
+    final nomSite = etat.nomSiteExterneDe(chapitre);
     final action = await showModalBottomSheet<_ActionChapitre>(
       context: context,
       showDragHandle: true,
@@ -848,12 +880,23 @@ class _LigneChapitre extends StatelessWidget {
                 onTap: () =>
                     Navigator.of(contexteMenu).pop(_ActionChapitre.telecharger),
               ),
-            ListTile(
-              leading: const Icon(Icons.open_in_new),
-              title: const Text(Textes.ouvrirSurLeSite),
-              onTap: () =>
-                  Navigator.of(contexteMenu).pop(_ActionChapitre.ouvrirSite),
-            ),
+            // Chapitre externe : seul le site de l'éditeur permet de le lire,
+            // la page MangaDex n'y ferait que renvoyer.
+            if (nomSite != null)
+              ListTile(
+                leading: const Icon(iconeLienExterne),
+                title: Text(Textes.lireSur(nomSite)),
+                onTap: () =>
+                    Navigator.of(contexteMenu)
+                        .pop(_ActionChapitre.lireSurSiteExterne),
+              )
+            else
+              ListTile(
+                leading: const Icon(Icons.open_in_new),
+                title: const Text(Textes.ouvrirSurLeSite),
+                onTap: () =>
+                    Navigator.of(contexteMenu).pop(_ActionChapitre.ouvrirSite),
+              ),
             ListTile(
               leading: Icon(estLu ? Icons.remove_done : Icons.done),
               title: Text(estLu ? Textes.marquerNonLu : Textes.marquerLu),
@@ -877,10 +920,20 @@ class _LigneChapitre extends StatelessWidget {
         }
       case _ActionChapitre.ouvrirSite:
         await ouvrirLienExterne(context, chapitre.urlChapitre);
+      case _ActionChapitre.lireSurSiteExterne:
+        await _lireSurSiteExterne(context);
       case _ActionChapitre.basculerLu:
         final resultat = await surBasculerLu();
         if (context.mounted) afficherResultat(context, resultat);
     }
+  }
+
+  /// Ouvre un chapitre externe sur le site de l'éditeur (son application si
+  /// elle est installée, sinon le navigateur).
+  Future<void> _lireSurSiteExterne(BuildContext context) async {
+    final url = chapitre.urlExterne;
+    if (url == null) return;
+    await ouvrirLienExterne(context, url);
   }
 
   /// Bouton de la colonne hors-ligne : l'action dépend de l'état.
@@ -889,6 +942,8 @@ class _LigneChapitre extends StatelessWidget {
     EtatHorsLigne horsLigne,
   ) async {
     switch (horsLigne.statut) {
+      case StatutHorsLigne.externe:
+        await _lireSurSiteExterne(context);
       case StatutHorsLigne.telecharge:
         final nom = Textes.nomChapitre(chapitre.nom, chapitre.numero);
         final confirme = await confirmerSuppressionTelechargement(context, nom);
@@ -939,6 +994,7 @@ class _LigneChapitre extends StatelessWidget {
       color: couleurTexte,
     );
     final reste = horsLigne.tempsAvantSuppression(etat.maintenant);
+    final nomSite = etat.nomSiteExterneDe(chapitre);
     return InkWell(
       onTap: () => _surAppui(context),
       child: Ink(
@@ -972,6 +1028,31 @@ class _LigneChapitre extends StatelessWidget {
                     fontWeight: estLu || estSecondaire ? null : FontWeight.w600,
                   ),
                 ),
+                // Mention sous le nom, visible même sans la colonne
+                // hors-ligne : le client sait d'emblée où se lit ce chapitre.
+                if (nomSite != null)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Icon(
+                        iconeLienExterne,
+                        size: theme.textTheme.bodySmall?.fontSize,
+                        color: couleurHorsLigne(
+                          StatutHorsLigne.externe,
+                          couleurs,
+                        ),
+                      ),
+                      const SizedBox(width: espacementPetit / 2),
+                      Flexible(
+                        child: Text(
+                          Textes.publieSur(nomSite),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: styleDetail,
+                        ),
+                      ),
+                    ],
+                  ),
                 if (autresVersions > 0)
                   InkWell(
                     onTap: surDeplier,
@@ -1046,6 +1127,38 @@ class _LigneChapitre extends StatelessWidget {
                     ],
                   ),
                 ],
+                // Repère « gardé » : le client sait pourquoi ce chapitre
+                // échappe aux règles, et peut revenir dessus.
+                if (chapitre.estGarde &&
+                    horsLigne.statut == StatutHorsLigne.telecharge)
+                  _ActionsArchive(
+                    enfants: <Widget>[
+                      Tooltip(
+                        message: Textes.infoGarde,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Icon(
+                              Icons.push_pin,
+                              size: theme.textTheme.bodySmall?.fontSize,
+                              color: couleurs.primary,
+                            ),
+                            const SizedBox(width: espacementPetit / 2),
+                            Text(
+                              Textes.garde,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: couleurs.primary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => _nePlusGarder(context),
+                        child: const Text(Textes.nePlusGarder),
+                      ),
+                    ],
+                  ),
               ],
             ),
             langue: Text(
@@ -1085,6 +1198,14 @@ class _LigneChapitre extends StatelessWidget {
     final resultat = await etat.garder(chapitre);
     if (context.mounted) {
       afficherResultat(context, resultat, succes: Textes.chapitreGarde);
+    }
+  }
+
+  /// « Ne plus garder » : le chapitre suit de nouveau les règles.
+  Future<void> _nePlusGarder(BuildContext context) async {
+    final resultat = await etat.nePlusGarder(chapitre);
+    if (context.mounted) {
+      afficherResultat(context, resultat, succes: Textes.gardeRetiree);
     }
   }
 
@@ -1137,13 +1258,17 @@ class _ActionsArchive extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: espacementPetit),
         ),
       ),
-      child: Wrap(spacing: espacementPetit / 2, children: enfants),
+      child: Wrap(
+        spacing: espacementPetit / 2,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: enfants,
+      ),
     );
   }
 }
 
 /// Actions du menu d'un chapitre non téléchargé.
-enum _ActionChapitre { telecharger, ouvrirSite, basculerLu }
+enum _ActionChapitre { telecharger, ouvrirSite, lireSurSiteExterne, basculerLu }
 
 /// Ligne « Libellé : valeur ».
 class _LigneInfo extends StatelessWidget {

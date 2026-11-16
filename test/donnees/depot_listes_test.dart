@@ -21,11 +21,14 @@ void main() {
     await base.close();
   });
 
-  test('une base neuve contient seulement Favoris puis Suivis', () async {
+  test('une base neuve contient seulement les listes système, dans '
+      'l\'ordre', () async {
     final listes = await depot.chargerListes();
     expect(listes.map((liste) => liste.nom), <String>[
       nomListeFavoris,
       nomListeSuivis,
+      nomListePlanifie,
+      nomListeEnAttente,
     ]);
     expect(listes.every((liste) => liste.estSysteme), isTrue);
   });
@@ -78,7 +81,7 @@ void main() {
         throwsA(isA<ErreurBaseDeDonnees>()),
       );
     }
-    expect(await depot.chargerListes(), hasLength(2));
+    expect(await depot.chargerListes(), hasLength(4));
   });
 
   test('renommer ou supprimer une liste inexistante lève une erreur', () async {

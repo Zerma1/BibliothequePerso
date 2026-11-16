@@ -152,6 +152,64 @@ void main() {
       expect(etat.chapitreSuivant!.id, 1);
     });
 
+    group('R4 : chapitres sur un site externe', () {
+      const urlExterne = 'https://www.exemple-editeur.test/viewer/15';
+
+      setUp(() {
+        bibliotheque.chapitresParTitre[1]!.insertAll(1, const <Chapitre>[
+          Chapitre(
+            id: 9,
+            idTitre: 1,
+            urlChapitre: 'u15a',
+            nom: 'Un et demi A',
+            numero: 1.5,
+            langue: 'fr',
+            urlExterne: urlExterne,
+          ),
+          Chapitre(
+            id: 10,
+            idTitre: 1,
+            urlChapitre: 'u17',
+            nom: 'Un sept',
+            numero: 1.7,
+            langue: 'fr',
+            urlExterne: urlExterne,
+          ),
+        ]);
+      });
+
+      test('« suivant » et « précédent » sautent les chapitres externes, '
+          'proposés à la fin du chapitre', () async {
+        final etat = creer(1);
+        await etat.charger();
+
+        expect(etat.chapitreSuivant!.id, 2);
+        expect(
+          etat.chapitresExternesSuivants.map((chapitre) => chapitre.id),
+          <int>[9, 10],
+        );
+        expect(
+          etat.nomSiteExterneDe(etat.chapitresExternesSuivants.first),
+          'exemple-editeur.test',
+        );
+
+        await etat.allerAuSuivant();
+        expect(etat.chapitre!.id, 2);
+        expect(etat.chapitresExternesSuivants, isEmpty);
+        expect(etat.chapitrePrecedent!.id, 1);
+      });
+
+      test('un chapitre externe ne s\'ouvre jamais dans le lecteur', () async {
+        final etat = creer(9);
+        await etat.charger();
+
+        expect(etat.nature, NatureContenu.externe);
+        expect(etat.etatHorsLigne.statut, StatutHorsLigne.externe);
+        // Rien n'est protégé : il n'y a pas d'archive.
+        expect(telechargement.protections, isEmpty);
+      });
+    });
+
     test(
       'les langues propres au titre décident de la version retenue',
       () async {

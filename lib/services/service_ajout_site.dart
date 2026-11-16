@@ -50,6 +50,8 @@ class ServiceAjoutSite {
       return existante;
     }
 
+    // Une ErreurSource du détecteur remonte telle quelle : le type n'est pas
+    // encore connu à ce stade (le rapport d'erreur indiquera « inconnu »).
     final type = typeForce ?? await _detecteur.detecter(urlBase);
     final nomFinal = (nom == null || nom.trim().isEmpty)
         ? proposerNom(uri)

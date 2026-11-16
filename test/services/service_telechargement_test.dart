@@ -15,11 +15,13 @@ import 'package:bibliotheque_perso/modeles/constantes.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/telechargement.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
+import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/services/politique_telechargement.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
 import 'package:bibliotheque_perso/services/service_telechargement.dart';
 import 'package:bibliotheque_perso/services/verrou_telechargement.dart';
 import 'package:bibliotheque_perso/sources/client_http_poli.dart';
+import 'package:bibliotheque_perso/sources/constantes_sources.dart';
 import 'package:bibliotheque_perso/sources/fabrique_sources.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -56,9 +58,12 @@ void main() {
   // Avance de l'horloge du service, pour faire passer le délai de 24 h des
   // suppressions prévues sans attendre.
   late Duration decalage;
+  // Les serveurs d'images répondent par une page HTML au lieu de l'image.
+  late bool pagesEnHtml;
 
   setUp(() async {
     decalage = Duration.zero;
+    pagesEnHtml = false;
     base = await ouvrirBaseDeTest();
     dossier = await Directory.systemTemp.createTemp('telechargements_test');
     requetes = <http.Request>[];
@@ -67,6 +72,15 @@ void main() {
     baseUrlImages = null;
     nombreImagesDemandees = 0;
     final atHome = lireExemple('exemples_json/at_home_serveur.json');
+    final flux =
+        lireJsonExemple('manga_flux_page1.json')['data']! as List<Object?>;
+    final reponseChapitre = jsonEncode(<String, Object?>{
+      'result': 'ok',
+      'response': 'entity',
+      'data': flux.firstWhere(
+        (d) => (d! as Map<String, Object?>)['id'] == _uuidChapitre,
+      ),
+    });
     nombreImages =
         (((jsonDecode(atHome) as Map<String, Object?>)['chapter']!
                     as Map<String, Object?>)['data']!
@@ -77,6 +91,11 @@ void main() {
       final url = requete.url;
       if (url.host == 'api.mangadex.network') {
         return http.Response('', 200);
+      }
+      if (url.host == 'api.mangadex.org' && url.path.startsWith('/chapter/')) {
+        // GET /chapter/{id} : l'adaptateur vérifie d'abord que le chapitre
+        // n'est pas externe (R4). Entrée réelle du flux enregistré.
+        return reponseJson(reponseChapitre);
       }
       if (url.path.startsWith('/at-home/server/')) {
         final serveur = baseUrlImages;
@@ -98,7 +117,19 @@ void main() {
           nombre403Restants--;
           return http.Response('expiré', 403);
         }
-        return http.Response.bytes(<int>[1, 2, 3, 4], 200);
+        if (pagesEnHtml) {
+          // Page anti-robot servie en 200 (journal des erreurs, E10).
+          return http.Response(
+            '<!doctype html>',
+            200,
+            headers: <String, String>{'content-type': 'text/html'},
+          );
+        }
+        return http.Response.bytes(
+          <int>[1, 2, 3, 4],
+          200,
+          headers: <String, String>{'content-type': 'image/jpeg'},
+        );
       }
       return http.Response('introuvable', 404);
     }, HorlogeFactice());
@@ -580,6 +611,128 @@ void main() {
     );
   });
 
+  test("les pages d'uploads.mangadex.org portent le User-Agent de "
+      "l'application", () async {
+    baseUrlImages = 'https://uploads.mangadex.org';
+    final premier = await chapitre(1);
+    await service.telechargerChapitre(premier.id!);
+    await service.lancerTraitement();
+
+    final images = requetes.where((r) => r.url.host == 'uploads.mangadex.org');
+    expect(images, isNotEmpty);
+    for (final requete in images) {
+      expect(requete.headers['user-agent'], userAgentApplication);
+    }
+  });
+
+  test("une page HTML au lieu d'une image met le chapitre en échec sans "
+      'archive (E10)', () async {
+    pagesEnHtml = true;
+    final premier = await chapitre(1);
+    await service.telechargerChapitre(premier.id!);
+    await service.lancerTraitement();
+
+    final ligne = await depotTelechargements.chargerParChapitre(premier.id!);
+    expect(ligne!.statut, StatutTelechargement.echec);
+    expect(ligne.messageErreur, contains("n'est pas une image"));
+    expect((await chapitre(1)).estTelecharge, isFalse);
+    expect(archives(), isEmpty);
+  });
+
+  group('chapitres hébergés sur un site externe (R4)', () {
+    /// Rend externes les chapitres [numeros] (comme le ferait une
+    /// actualisation du titre).
+    Future<void> rendreExternes(Iterable<int> numeros) async {
+      await depotChapitres.enregistrerChapitres(<Chapitre>[
+        for (final n in numeros)
+          (await chapitre(n)).copierAvec(
+            urlExterne: 'https://mangaplus.shueisha.co.jp/viewer/$n',
+          ),
+      ]);
+    }
+
+    test("ne sont jamais mis en file par les règles", () async {
+      await rendreExternes(<int>[1, 2, 3]);
+      await bloquerFile();
+      await parametres.enregistrerReglagesTelechargement(
+        const ReglagesTelechargement(suivisInitial: 5),
+      );
+      await depotListes.ajouterTitre(await idListe(nomListeSuivis), titre.id!);
+      await service.appliquerRegles(titre.id!);
+
+      final file = await depotTelechargements.chargerFile();
+      final numeros = <int>[
+        for (final ligne in file)
+          (await depotChapitres.chargerChapitre(ligne.idChapitre))!.numero
+              .toInt(),
+      ]..sort();
+      // Les numéros externes ne comptent pas dans la fenêtre initiale.
+      expect(numeros, <int>[4, 5, 6, 7, 8]);
+    });
+
+    test('un téléchargement manuel est refusé', () async {
+      await rendreExternes(<int>[1]);
+      await expectLater(
+        service.telechargerChapitre((await chapitre(1)).id!),
+        throwsA(isA<ErreurService>()),
+      );
+      expect(await depotTelechargements.chargerFile(), isEmpty);
+    });
+
+    test(
+      'un chapitre devenu externe est retiré de la file sans requête',
+      () async {
+        await bloquerFile();
+        final premier = await chapitre(1);
+        await service.telechargerChapitre(premier.id!);
+        await rendreExternes(<int>[1]);
+        await parametres.supprimerVerrouTelechargement();
+        requetes.clear();
+        await service.lancerTraitement();
+
+        expect(
+          await depotTelechargements.chargerParChapitre(premier.id!),
+          isNull,
+        );
+        expect(requetes, isEmpty);
+      },
+    );
+
+    test(
+      'un chapitre téléchargé qui devient externe garde son archive',
+      () async {
+        await parametres.enregistrerReglagesTelechargement(
+          const ReglagesTelechargement(
+            suivisInitial: 2,
+            suivisAvant: 1,
+            suivisApres: 1,
+          ),
+        );
+        await depotListes.ajouterTitre(
+          await idListe(nomListeSuivis),
+          titre.id!,
+        );
+        await service.appliquerRegles(titre.id!);
+        await service.lancerTraitement();
+        expect((await chapitre(1)).estTelecharge, isTrue);
+
+        await rendreExternes(<int>[1]);
+        // Lecture avancée : le chapitre 1 sortirait de la fenêtre.
+        for (var n = 1; n <= 10; n++) {
+          await depotChapitres.marquerLu((await chapitre(n)).id!);
+        }
+        await service.appliquerRegles(titre.id!);
+        await service.lancerTraitement();
+
+        final un = await chapitre(1);
+        expect(un.estTelecharge, isTrue);
+        expect(un.dateSuppressionPrevue, isNull);
+        // Le chapitre 2, hébergé, sort normalement de la fenêtre.
+        expect((await chapitre(2)).dateSuppressionPrevue, isNotNull);
+      },
+    );
+  });
+
   test("annuler un téléchargement en cours l'arrête à la page suivante sans laisser d'archive", () async {
     final premier = await chapitre(1);
     avantImage = () => service.supprimerTelechargement(premier.id!);
@@ -769,6 +922,104 @@ void main() {
       final garde = (await depotChapitres.chargerChapitre(id))!;
       expect(garde.estTelecharge, isTrue);
       expect(garde.dateSuppressionPrevue, isNull);
+    });
+
+    test('« Garder » est enregistré dans le chapitre et non plus dans les '
+        'paramètres', () async {
+      final id = await preparerChapitre5HorsRegles();
+      await service.annulerSuppression(id);
+      expect((await depotChapitres.chargerChapitre(id))!.estGarde, isTrue);
+      expect(await parametres.chargerChapitresGardes(), isEmpty);
+    });
+
+    test("les chapitres gardés par l'ancienne version sont repris au "
+        'démarrage puis la clé est supprimée', () async {
+      await bloquerFile();
+      final id = (await chapitre(5)).id!;
+      await depotChapitres.marquerTelecharge(id);
+      await depotChapitres.planifierSuppression(
+        id,
+        DateTime.now().toUtc().add(const Duration(hours: 3)),
+      );
+      await parametres.enregistrerChapitresGardes(<int>[id, 999999]);
+
+      await service.demarrer();
+
+      final relu = (await depotChapitres.chargerChapitre(id))!;
+      expect(relu.estGarde, isTrue);
+      expect(relu.dateSuppressionPrevue, isNull);
+      expect(await parametres.chargerChapitresGardes(), isEmpty);
+    });
+
+    test("un chapitre gardé par l'ancienne version n'est pas effacé par une "
+        'suppression échue lancée avant les règles', () async {
+      await bloquerFile();
+      await parametres.enregistrerReglagesTelechargement(
+        const ReglagesTelechargement(suivisInitial: 2),
+      );
+      await depotListes.ajouterTitre(await idListe(nomListeSuivis), titre.id!);
+      final id = (await chapitre(5)).id!;
+      await depotChapitres.marquerTelecharge(id);
+      await depotChapitres.planifierSuppression(
+        id,
+        DateTime.now().toUtc().subtract(const Duration(hours: 1)),
+      );
+      await parametres.enregistrerChapitresGardes(<int>[id]);
+
+      expect(await service.supprimerArchivesEchues(), 0);
+
+      final relu = (await depotChapitres.chargerChapitre(id))!;
+      expect(relu.estTelecharge, isTrue);
+      expect(relu.estGarde, isTrue);
+      expect(await parametres.chargerChapitresGardes(), isEmpty);
+    });
+
+    test("retirer « Garder » prévoit de nouveau la suppression d'un chapitre "
+        "qui n'est plus voulu", () async {
+      final id = await preparerChapitre5HorsRegles();
+      await service.annulerSuppression(id);
+      await service.retirerGarde(id);
+      final relu = (await depotChapitres.chargerChapitre(id))!;
+      expect(relu.estGarde, isFalse);
+      expect(relu.dateSuppressionPrevue, isNotNull);
+    });
+
+    test(
+      "liste les suppressions prévues de tous les titres ou d'un seul",
+      () async {
+        final id = await preparerChapitre5HorsRegles();
+        expect(
+          (await service.chargerSuppressionsPrevues()).map((c) => c.id),
+          <int>[id],
+        );
+        expect(
+          await service.chargerSuppressionsPrevues(idTitre: titre.id! + 1),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'supprimer un chapitre gardé retire aussi le choix « Garder »',
+      () async {
+        final id = await preparerChapitre5HorsRegles();
+        await service.annulerSuppression(id);
+        await service.supprimerMaintenant(id);
+        expect((await depotChapitres.chargerChapitre(id))!.estGarde, isFalse);
+      },
+    );
+
+    test('supprimer un titre efface aussi sa couverture enregistrée', () async {
+      await bloquerFile();
+      final chemin = await stockage.enregistrerCouverture(titre, <int>[
+        1,
+        2,
+        3,
+      ], 'jpg');
+      expect(File(chemin).existsSync(), isTrue);
+      await service.supprimerTitre(titre.id!);
+      expect(File(chemin).existsSync(), isFalse);
+      expect(await depotTitres.chargerTitre(titre.id!), isNull);
     });
 
     test(

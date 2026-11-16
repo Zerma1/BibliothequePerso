@@ -6,10 +6,12 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../etat/etat_mises_a_jour.dart';
+import '../etat/etat_parutions.dart';
 import '../etat/etat_telechargements.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/textes.dart';
 import 'ecran_bibliotheque.dart';
+import 'ecran_mises_a_jour.dart';
 import 'ecran_parametres.dart';
 import 'ecran_sources.dart';
 import 'ecran_telechargements.dart';
@@ -31,14 +33,25 @@ class EcranAccueil extends StatefulWidget {
 class _EtatEcranAccueil extends State<EcranAccueil> {
   int _indexOnglet = 0;
 
+  /// Index de l'onglet Mises à jour (badge des titres avec un chapitre non
+  /// lu).
+  static const int _indexMisesAJour = 1;
+
   /// Index de l'onglet Téléchargements (badge du nombre en cours).
-  static const int _indexTelechargements = 2;
+  static const int _indexTelechargements = 3;
 
   static const List<_Onglet> _onglets = <_Onglet>[
     _Onglet(
       Textes.ongletBibliotheque,
       Icons.collections_bookmark_outlined,
       Icons.collections_bookmark,
+    ),
+    // Juste après la bibliothèque : c'est l'écran que le client consulte
+    // le plus souvent après elle (retour du 2026-11-15).
+    _Onglet(
+      Textes.ongletMisesAJour,
+      Icons.new_releases_outlined,
+      Icons.new_releases,
     ),
     _Onglet(Textes.ongletSources, Icons.public_outlined, Icons.public),
     _Onglet(
@@ -78,24 +91,41 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
     super.dispose();
   }
 
-  void _choisirOnglet(int index) => setState(() => _indexOnglet = index);
-
-  /// Icône d'un onglet ; celle des téléchargements porte un badge avec le
-  /// nombre de chapitres en attente ou en cours.
-  Widget _icone(int index, IconData icone, int nombreActifs) {
-    if (index != _indexTelechargements || nombreActifs == 0) {
-      return Icon(icone);
+  void _choisirOnglet(int index) {
+    if (index == _indexMisesAJour && index != _indexOnglet) {
+      // Des chapitres ont pu être lus depuis la bibliothèque : la liste et
+      // ses badges « Nouveau » sont relus (base seulement, sans réseau).
+      context.read<EtatParutions>().charger();
     }
-    return Semantics(
-      label: Textes.telechargementsActifs(nombreActifs),
-      child: Badge.count(count: nombreActifs, child: Icon(icone)),
-    );
+    setState(() => _indexOnglet = index);
+  }
+
+  /// Icône d'un onglet ; celle des mises à jour porte le nombre de titres
+  /// avec un chapitre non lu, celle des téléchargements le nombre de
+  /// chapitres en attente ou en cours.
+  Widget _icone(int index, IconData icone, int nombreActifs, int nouveautes) {
+    if (index == _indexTelechargements && nombreActifs > 0) {
+      return Semantics(
+        label: Textes.telechargementsActifs(nombreActifs),
+        child: Badge.count(count: nombreActifs, child: Icon(icone)),
+      );
+    }
+    if (index == _indexMisesAJour && nouveautes > 0) {
+      return Semantics(
+        label: Textes.titresAvecNouveaute(nouveautes),
+        child: Badge.count(count: nouveautes, child: Icon(icone)),
+      );
+    }
+    return Icon(icone);
   }
 
   @override
   Widget build(BuildContext context) {
     final nombreActifs = context.select<EtatTelechargements, int>(
       (etat) => etat.nombreActifs,
+    );
+    final nouveautes = context.select<EtatParutions, int>(
+      (etat) => etat.nombreNouveautes,
     );
     final theme = Theme.of(context);
     final version = Text(
@@ -126,11 +156,17 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
                   destinations: <NavigationRailDestination>[
                     for (var i = 0; i < _onglets.length; i++)
                       NavigationRailDestination(
-                        icon: _icone(i, _onglets[i].icone, nombreActifs),
+                        icon: _icone(
+                          i,
+                          _onglets[i].icone,
+                          nombreActifs,
+                          nouveautes,
+                        ),
                         selectedIcon: _icone(
                           i,
                           _onglets[i].iconeChoisie,
                           nombreActifs,
+                          nouveautes,
                         ),
                         label: Text(_onglets[i].libelle),
                       ),
@@ -144,6 +180,7 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
                   index: _indexOnglet,
                   children: const <Widget>[
                     EcranBibliotheque(),
+                    EcranMisesAJour(),
                     EcranSources(),
                     EcranTelechargements(),
                     EcranParametres(),
@@ -172,11 +209,17 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
                       destinations: <Widget>[
                         for (var i = 0; i < _onglets.length; i++)
                           NavigationDestination(
-                            icon: _icone(i, _onglets[i].icone, nombreActifs),
+                            icon: _icone(
+                              i,
+                              _onglets[i].icone,
+                              nombreActifs,
+                              nouveautes,
+                            ),
                             selectedIcon: _icone(
                               i,
                               _onglets[i].iconeChoisie,
                               nombreActifs,
+                              nouveautes,
                             ),
                             label: _onglets[i].libelle,
                           ),

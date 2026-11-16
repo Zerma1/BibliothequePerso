@@ -13,12 +13,42 @@ import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
 import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
+import '../services/classement_listes.dart';
 import '../services/service_bibliotheque.dart';
 import '../services/service_telechargement.dart';
 import 'constantes_etat.dart';
 import 'description_erreur.dart';
 import 'etat_lecteur.dart';
 import 'outils_chapitres.dart';
+
+/// Couverture proposée par le site, pour le choix du client.
+///
+/// Recopie de `CouvertureSite` (couche sources) : les états ne dépendent
+/// que des services (PLAYBOOK.md section 4).
+class CouvertureProposee {
+  /// Crée la couverture proposée.
+  const CouvertureProposee({
+    required this.url,
+    this.urlMiniature,
+    this.volume,
+    this.langue,
+  });
+
+  /// Adresse de l'image en taille réelle (celle qui sera retenue).
+  final String url;
+
+  /// Adresse d'une version réduite, plus légère pour la liste de choix.
+  final String? urlMiniature;
+
+  /// Volume illustré (« 1 », « 10.5 »…), ou `null`.
+  final String? volume;
+
+  /// Langue de l'édition, ou `null`.
+  final String? langue;
+
+  /// Image à afficher dans la liste de choix (miniature si possible).
+  String get urlAffichee => urlMiniature ?? url;
+}
 
 /// Fiche d'un titre et actions sur ses chapitres et ses listes.
 class EtatTitre extends EtatNotifiant {
@@ -157,6 +187,12 @@ class EtatTitre extends EtatNotifiant {
   int get nombreNumerosNonLus =>
       _groupes.where((groupe) => !groupe.estLu).length;
 
+  /// Nom du site où se lit [chapitre] s'il est externe (« Lire sur … »),
+  /// ou `null` pour un chapitre hébergé par le site source.
+  String? nomSiteExterneDe(Chapitre chapitre) => chapitre.estExterne
+      ? ServiceBibliotheque.nomSiteExterne(chapitre.urlExterne!)
+      : null;
+
   /// État hors-ligne d'un chapitre (téléchargé, en file, en cours…).
   EtatHorsLigne etatHorsLigne(Chapitre chapitre) {
     final id = chapitre.id;
@@ -217,6 +253,12 @@ class EtatTitre extends EtatNotifiant {
       final donnees = await _lireBase();
       if (numero == _numeroLecture) {
         _appliquer(donnees);
+      }
+      // E11 : les nouveaux chapitres d'un titre favori ou suivi entrent dans
+      // la file tout de suite, sans attendre la prochaine recherche de mises
+      // à jour (erreur journalisée par `_appliquerRegles`).
+      if (resultat.nombreNouveauxChapitres > 0) {
+        await _appliquerRegles();
       }
       return ResultatAction<int>.reussite(resultat.nombreNouveauxChapitres);
     } on _TitreIntrouvable {
@@ -320,6 +362,7 @@ class EtatTitre extends EtatNotifiant {
       await _service.ajouterTitreALaListe(idListe, idTitre);
       _idsListesDuTitre = <int>{..._idsListesDuTitre, idListe};
       notifier();
+      await _relireListesDuTitre();
       await _appliquerReglesSiSysteme(idListe);
       return const ResultatAction<bool>.reussite(true);
     } catch (erreur, pile) {
@@ -337,6 +380,7 @@ class EtatTitre extends EtatNotifiant {
           if (id != idListe) id,
       };
       notifier();
+      await _relireListesDuTitre();
       await _appliquerReglesSiSysteme(idListe);
       return const ResultatAction<bool>.reussite(true);
     } catch (erreur, pile) {
@@ -344,13 +388,113 @@ class EtatTitre extends EtatNotifiant {
     }
   }
 
+  /// `true` si [liste] est tenue automatiquement par l'application (« En
+  /// attente ») : sa puce est affichée sans pouvoir être cochée.
+  bool estListeAutomatique(ListeLecture liste) =>
+      ClassementListes.listesAutomatiques.contains(liste.nom);
+
+  /// Relit les listes du titre : le service a pu le placer dans « En
+  /// attente » ou l'en retirer après un changement de liste.
+  Future<void> _relireListesDuTitre() async {
+    try {
+      final listes = await _service.chargerListesDuTitre(idTitre);
+      _idsListesDuTitre = <int>{
+        for (final liste in listes)
+          if (liste.id != null) liste.id!,
+      };
+      notifier();
+    } catch (erreur, pile) {
+      // L'action du client est faite ; seule la puce « En attente » peut
+      // rester en retard jusqu'au prochain chargement.
+      debugPrint('Listes du titre illisibles : $erreur\n$pile');
+    }
+  }
+
+  // ------------------------------------------------------------ Couvertures
+
+  /// `true` si le client a choisi une couverture (du site ou de l'appareil)
+  /// à la place de celle fournie par le site.
+  bool get aCouvertureChoisie => _titre?.couvertureChoisie != null;
+
+  /// Couvertures proposées par le site (MangaDex : une par volume) ; liste
+  /// vide si le site n'en propose qu'une. Lecture réseau.
+  Future<ResultatAction<List<CouvertureProposee>>>
+  recupererCouverturesDuSite() async {
+    final titre = _titre;
+    if (titre == null) {
+      return const ResultatAction<List<CouvertureProposee>>.echec(
+        DescriptionErreur(NatureErreur.introuvable),
+      );
+    }
+    try {
+      final couvertures = await _service.recupererCouverturesDuSite(titre);
+      return ResultatAction<List<CouvertureProposee>>.reussite(
+        <CouvertureProposee>[
+          for (final couverture in couvertures)
+            CouvertureProposee(
+              url: couverture.url,
+              urlMiniature: couverture.urlMiniature,
+              volume: couverture.volume,
+              langue: couverture.langue,
+            ),
+        ],
+      );
+    } catch (erreur, pile) {
+      return ResultatAction<List<CouvertureProposee>>.echec(
+        DescriptionErreur.depuis(erreur, pile),
+      );
+    }
+  }
+
+  /// Retient la couverture du site à [url] (téléchargée et enregistrée sur
+  /// l'appareil).
+  Future<ResultatAction<bool>> choisirCouverture(String url) =>
+      _changerCouverture(() => _service.choisirCouverture(idTitre, url));
+
+  /// Retient l'image de l'appareil à [chemin] comme couverture (une copie
+  /// est gardée avec le titre).
+  Future<ResultatAction<bool>> choisirCouvertureLocale(String chemin) =>
+      _changerCouverture(
+        () => _service.choisirCouvertureLocale(idTitre, chemin),
+      );
+
+  /// Revient à la couverture fournie par le site.
+  Future<ResultatAction<bool>> retablirCouvertureDuSite() =>
+      _changerCouverture(() => _service.retablirCouvertureDuSite(idTitre));
+
+  bool _estEnChangementCouverture = false;
+
+  /// `true` pendant le téléchargement ou l'enregistrement d'une couverture.
+  bool get estEnChangementCouverture => _estEnChangementCouverture;
+
+  Future<ResultatAction<bool>> _changerCouverture(
+    Future<Titre> Function() action,
+  ) async {
+    _estEnChangementCouverture = true;
+    notifier();
+    try {
+      final titre = await action();
+      // Le nombre de non-lus n'est pas relu par le service : on garde le
+      // compte local.
+      _titre = titre.copierAvec(nombreChapitresNonLus: nombreNonLus);
+      return const ResultatAction<bool>.reussite(true);
+    } catch (erreur, pile) {
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnChangementCouverture = false;
+      notifier();
+    }
+  }
+
   // ------------------------------------------------------- Téléchargements
 
   /// Ajoute [chapitre] à la file de téléchargement (ou relance un échec).
+  ///
+  /// Refusé pour un chapitre externe (jamais téléchargé).
   Future<ResultatAction<bool>> telecharger(Chapitre chapitre) async {
     final service = _serviceTelechargement;
     final id = chapitre.id;
-    if (service == null || id == null) {
+    if (service == null || id == null || chapitre.estExterne) {
       return const ResultatAction<bool>.echec(
         DescriptionErreur(NatureErreur.introuvable),
       );
@@ -395,6 +539,11 @@ class EtatTitre extends EtatNotifiant {
     chapitre,
     (service, id) => service.annulerSuppression(id),
   );
+
+  /// « Ne plus garder » : [chapitre] suit de nouveau les règles (sa
+  /// suppression peut être prévue dans 24 heures s'il n'est plus voulu).
+  Future<ResultatAction<bool>> nePlusGarder(Chapitre chapitre) =>
+      _agirSurArchive(chapitre, (service, id) => service.retirerGarde(id));
 
   /// Bouton « Supprimer maintenant » d'une suppression prévue (ou choix
   /// d'un doublon à retirer) : l'archive est effacée tout de suite.
@@ -470,16 +619,23 @@ class EtatTitre extends EtatNotifiant {
     if (!resultat.estReussi) {
       return const ResultatAction<int?>.reussite(null);
     }
-    await _appliquerRegles();
+    // `actualiser` applique déjà les règles quand il trouve des chapitres :
+    // inutile de relancer le calcul une seconde fois.
+    if ((resultat.donnee ?? 0) == 0) {
+      await _appliquerRegles();
+    }
     return ResultatAction<int?>.reussite(resultat.donnee);
   }
 
   /// Crée l'état du lecteur ouvert sur [chapitre], ou `null` si les
   /// téléchargements ne sont pas disponibles.
+  ///
+  /// Toujours `null` pour un chapitre externe : il ne se lit que sur le site
+  /// de l'éditeur (PLAYBOOK.md section 10).
   EtatLecteur? creerEtatLecteur(Chapitre chapitre) {
     final service = _serviceTelechargement;
     final id = chapitre.id;
-    if (service == null || id == null) return null;
+    if (service == null || id == null || chapitre.estExterne) return null;
     return EtatLecteur(
       serviceBibliotheque: _service,
       serviceTelechargement: service,

@@ -285,7 +285,10 @@ void main() {
     final heure = DateTime.utc(2026, 11, 15, 1);
     final parametres = FauxServiceParametres();
     final planificationsRecues = <int>[];
-    service.echeancePassee = false;
+    service
+      ..echeancePassee = false
+      // Le service calcule la prochaine échéance à partir des réglages.
+      ..parametres = parametres;
     final etat = EtatMisesAJour(
       service,
       planifier: true,
