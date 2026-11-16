@@ -89,3 +89,7 @@ de **client**. L'orchestrateur répartit le travail entre des agents spécialis�
 
 Ce projet est destiné à un usage personnel. L'application respecte la charge des sites
 (délai entre les requêtes) et ne contourne aucune protection d'accès.
+
+## Licence
+
+Copyright (c) 2026 Zerma1. Tous droits réservés : voir [LICENSE](LICENSE).

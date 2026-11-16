@@ -43,9 +43,15 @@ Les accents restent autorisés dans les **commentaires** et les **textes affich�
 | `enregistrer…` | Insérer ou mettre à jour en base |
 | `supprimer…` | Effacer |
 | `verifier…` | Contrôle qui renvoie un résultat, sans effet de bord |
+| `valider…` | Contrôle qui lève une erreur si la donnée est invalide (`validerUrl`) |
 | `telecharger…` | Récupérer un fichier et l'écrire sur disque |
 | `est…` / `a…` | Booléen (`estLu`, `aDesNouveautes`) |
 | `depuis…` / `vers…` | Conversion (`depuisMap`, `versMap`) |
+| `creer…` | Créer un nouvel élément choisi par l'utilisateur (`creerListe`) |
+| `renommer…` | Changer le nom d'un élément existant |
+| `ajouter…` / `retirer…` | Ajouter ou enlever un lien entre deux éléments, sans supprimer ni l'un ni l'autre (`ajouterTitre` à une liste) |
+| `marquer…` | Changer un état booléen (`marquerLu`, `marquerTelecharge`) |
+| `compter…` | Renvoyer un nombre sans effet de bord (`compterNonLus`) |
 
 ## 5. Vocabulaire du domaine (à respecter partout)
 

@@ -14,9 +14,36 @@ build/
 .flutter-plugins
 .flutter-plugins-dependencies
 *.iml.bak
+.pub-cache/
+.pub/
+/coverage/
+**/doc/api/
+migrate_working_dir/
+# Symboles et cartes de débogage produits par --split-debug-info / --obfuscate
+app.*.symbols
+app.*.map.json
+# Sorties de compilation Android
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Fichiers divers ignorés par le modèle Flutter (.idea/ et *.iml restent suivis exprès)
+*.class
+*.log
+*.pyc
+*.swp
+*.iws
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
 
 # Système
 Thumbs.db
 desktop.ini
 .DS_Store
+# IntelliJ : le client ignore .idea sur main (son commit du 16/11) ;
+# il reste suivi sur dev à sa demande.
 /.idea/

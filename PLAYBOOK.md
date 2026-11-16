@@ -50,7 +50,8 @@ etc. que le client lit sur **plusieurs sites différents** :
 Un agent qui doit modifier un fichier **hors de son scope** s'arrête et le signale à
 l'orchestrateur. Il ne fait pas la modification lui-même.
 
-**`lib/services/` et `test/services/` sont sous la responsabilité directe de l'orchestrateur.**
+**`lib/services/` et `test/services/` sont écrits par l'agent `developpeur-services`** (créé à la
+demande du client), sous la supervision de l'orchestrateur.
 Cette couche assemble les sources et les données ; elle doit donc rester cohérente avec les
 deux scopes. Les autres agents la lisent sans la modifier.
 
@@ -61,6 +62,7 @@ deux scopes. Les autres agents la lisent sans la modifier.
 | Besoin | Choix | Paquet pub.dev |
 |--------|-------|----------------|
 | Interface multiplateforme | Flutter (Dart) | SDK |
+| Widgets Material (`MaterialApp`, `Scaffold`…) | imposé par le modèle Flutter 3.50 | `material_ui` |
 | Requêtes HTTP | client HTTP officiel | `http` |
 | Analyse HTML | parseur DOM avec sélecteurs CSS | `html` |
 | Base de données | SQLite | `sqflite` (Android), `sqflite_common_ffi` (Windows, Linux) |
@@ -115,11 +117,12 @@ ecrans / widgets  →  etat  →  services  →  donnees, sources  →  modeles
 
 | Classe | Champs principaux |
 |--------|-------------------|
-| `Source` | `id`, `nom`, `urlBase`, `typeSource` (`madara`, `mangaThemesia`, `generique`), `langueParDefaut` (code ISO 639-1), `configurationSelecteurs` (JSON, uniquement pour le type générique), `estActive` |
-| `Titre` | `id`, `idSource`, `urlTitre`, `nom`, `typeTitre` (`manga`, `manhwa`, `manhua`, `roman`, `livre`, `autre`), `urlCouverture`, `resume`, `auteur`, `statut`, `dateDerniereVerification`, `nombreChapitresNonLus` |
+| `Source` | `id`, `nom`, `urlBase`, `typeSource` (`mangaDex`, `madara`, `mangaThemesia`, `generique`), `langueParDefaut` (code ISO 639-1), `configurationSelecteurs` (JSON, uniquement pour le type générique), `estActive` |
+| `Titre` | `id`, `idSource`, `urlTitre`, `nom`, `typeTitre` (`manga`, `manhwa`, `manhua`, `roman`, `livre`, `autre`), `urlCouverture`, `resume`, `auteur`, `statut`, `titresAlternatifs` (liste de `TitreAlternatif`), `dateDerniereVerification`, `nombreChapitresNonLus` |
+| `TitreAlternatif` | `id`, `idTitre`, `nom`, `langue` (code ISO 639-1, peut être vide) |
 | `Chapitre` | `id`, `idTitre`, `urlChapitre`, `nom`, `numero` (double), `langue` (code ISO 639-1), `datePublication`, `estLu`, `estTelecharge` |
 | `ListeLecture` | `id`, `nom`, `estSysteme` (true pour Favoris et Suivis), `ordre` |
-| `Categorie` | `id`, `nom` (normalisé : minuscules, sans espaces autour) |
+| `Categorie` | `id`, `nom` (normalisé : minuscules, sans espaces autour). Deux sites qui donnent le même genre partagent la même catégorie. |
 
 ### Tables SQLite
 
@@ -130,6 +133,8 @@ titres(id, id_source → sources, url_titre UNIQUE, nom, type_titre, url_couvert
        auteur, statut, date_derniere_verification)
 chapitres(id, id_titre → titres ON DELETE CASCADE, url_chapitre UNIQUE, nom, numero, langue,
           date_publication, est_lu, est_telecharge, date_detection)
+titres_alternatifs(id, id_titre → titres ON DELETE CASCADE, nom, langue,
+                   UNIQUE(id_titre, nom))
 listes(id, nom UNIQUE, est_systeme, ordre)
 titres_listes(id_titre, id_liste)            -- relation plusieurs-à-plusieurs
 categories(id, nom UNIQUE)
@@ -141,6 +146,9 @@ titres_categories(id_titre, id_categorie)    -- relation plusieurs-à-plusieurs
 - Toute évolution du schéma passe par une **migration versionnée** dans
   `lib/donnees/migrations.dart`. On ne modifie jamais une migration déjà livrée.
 - Les listes « Favoris » et « Suivis » sont créées par la migration 1, avec `est_systeme = 1`.
+- La recherche dans la bibliothèque porte sur `titres.nom` **et** sur `titres_alternatifs.nom`
+  (insensible à la casse) : chercher « Death's Daughter » retrouve un titre enregistré sous son
+  nom japonais.
 
 ### Fichiers hors-ligne : une archive `.zip` par chapitre (idée du client)
 
@@ -171,6 +179,19 @@ Exemple : `manga/One Punch Man/ch1.en.zip`, `manhwa/Solo Leveling/ch10.5.fr.zip`
   interrompue n'est donc jamais prise pour un chapitre téléchargé.
 - Le lecteur lit les images **directement dans l'archive**, sans l'extraire sur le disque.
 
+**Décisions du client (2026-11-15)** :
+- **Doublons** : si `ch<numero>.<langue>.zip` est déjà pris par un autre chapitre (deux groupes de
+  traduction, plusieurs oneshots), on ajoute un numéro : `ch1.fr.2.zip`, `ch1.fr.3.zip`… Le nom
+  réellement écrit est enregistré (`chapitres.nom_archive`) et sert ensuite à la lecture et à la
+  suppression. Les doublons sont affichés **en orange** et le client choisit lequel supprimer ;
+  les règles automatiques ne suppriment jamais un doublon. Les oneshots sont des chapitres
+  distincts.
+- **Suppression différée** : une suppression décidée par les règles de conservation n'est faite
+  qu'après **24 heures** (`chapitres.date_suppression_prevue`). Pendant ce délai le chapitre est
+  affiché **en rouge avec un compte à rebours**, et le client peut le garder ou le supprimer tout
+  de suite. Une suppression demandée par le client reste immédiate. Le chapitre ouvert dans le
+  lecteur n'est jamais supprimé.
+
 `StockageTelechargements` est la seule classe qui construit ces chemins, crée les archives et les
 lit.
 
@@ -190,13 +211,46 @@ abstract class SourceSite {
 ```
 
 ### Ajout d'un site par URL
-`DetecteurTypeSite` télécharge la page d'accueil, puis :
-1. Si l'on trouve des marqueurs Madara (classes `wp-manga`, chemin `/manga/`, script
-   `madara`), le type est `madara`.
+`DetecteurTypeSite` regarde d'abord le domaine, puis télécharge la page d'accueil :
+0. Si le domaine est `mangadex.org`, le type est `mangaDex` (voir ci-dessous), sans analyser le
+   HTML.
+1. Si l'on trouve des marqueurs Madara forts (classes `wp-manga`, script `madara`), le type
+   est `madara`.
 2. Si l'on trouve des marqueurs MangaThemesia (`ts_reader`, classe `bixbox`), le type est
    `mangaThemesia`.
+2 bis. Sinon, des liens en `/manga/` ne sont qu'un indice faible de Madara (beaucoup de sites
+   MangaThemesia les utilisent aussi). Le formulaire d'ajout permet de corriger le type détecté.
 3. Sinon, le type est `generique` : le client renseigne les sélecteurs CSS dans un formulaire
    (titre, couverture, liste des chapitres, images d'un chapitre, catégories).
+
+### Cas particulier : MangaDex (`SourceMangaDex`)
+Les pages de MangaDex sont construites en JavaScript : le HTML téléchargé ne contient pas les
+données. `SourceMangaDex` utilise donc l'**API publique officielle** `https://api.mangadex.org`
+(réponses JSON lues avec `dart:convert`), toujours via `ClientHttpPoli`.
+
+- L'identifiant d'un titre est l'UUID présent dans l'URL
+  `https://mangadex.org/title/<uuid>/<nom-lisible>` ; celui d'un chapitre, l'UUID de
+  `https://mangadex.org/chapter/<uuid>`.
+- Le titre principal, les titres alternatifs, les tags (catégories), la couverture et les
+  chapitres par langue viennent de l'API.
+- Les points d'accès exacts, les paramètres et les limites de requêtes sont **vérifiés dans la
+  documentation officielle** (`https://api.mangadex.org/docs/`) avant d'être codés, puis cités en
+  commentaire. Aucun point d'accès n'est écrit de mémoire.
+- Les tests utilisent des **réponses JSON enregistrées** dans `test/sources/exemples_json/`.
+- Règles d'usage de MangaDex (documentation officielle, relevées le 2026-11-15) :
+  - User-Agent honnête obligatoire ; environ 5 requêtes/s par IP (notre délai de 1 s est plus
+    strict) ; `/at-home/server` limité à 40 requêtes/min (1,5 s entre deux appels) ;
+  - en cas de 429, respecter `Retry-After` : insister mène à un bannissement temporaire ;
+  - pagination plafonnée à `offset + limit ≤ 10 000` ;
+  - l'adresse du serveur d'images (`baseUrl`) n'est valable que 15 minutes : on télécharge juste
+    après l'avoir obtenue, et on la redemande en cas d'erreur 403 ;
+  - chaque image chargée depuis un serveur MangaDex@Home doit être signalée à
+    `POST https://api.mangadex.network/report` (étape 5) ;
+  - l'interface crédite MangaDex et les groupes de traduction, et l'application ne contient
+    aucune publicité.
+- Titre de référence pour les tests : *Shinigami ni Sodaterareta Shoujo wa Shikkoku no Tsurugi
+  wo Mune ni Idaku* (`12e28a8a-cbfe-4e12-bab8-b6fb0b9a59b4`), avec 6 titres alternatifs et les
+  tags Gore, Action, Comedy, Survival, Magic, Military, Fantasy, Supernatural, Adaptation.
 
 Pour ajouter un nouveau type de thème, on crée une nouvelle classe qui implémente `SourceSite`
 et on l'enregistre dans `FabriqueSources`. **On ne modifie pas les adaptateurs existants pour
@@ -205,7 +259,9 @@ gérer un cas particulier.**
 ### Règles réseau (obligatoires)
 - Toutes les requêtes passent par **`ClientHttpPoli`**, la seule classe autorisée à appeler
   `package:http`. Elle s'occupe de :
-  - l'en-tête `User-Agent` d'un navigateur courant ;
+  - l'en-tête `User-Agent` d'un navigateur courant par défaut ; **sauf si le site exige un
+    User-Agent honnête** (cas de l'API MangaDex, qui interdit d'usurper un navigateur) : on
+    envoie alors `BibliothequePerso/<version> (usage personnel)` ;
   - l'en-tête `Referer` pour les images, que beaucoup de sites exigent ;
   - un délai minimal de **1 seconde entre deux requêtes vers un même domaine** ;
   - un délai d'expiration de 20 secondes et 2 nouvelles tentatives au maximum.
@@ -256,7 +312,9 @@ Chaque adaptateur est testé avec des **pages HTML enregistrées** dans
 - Pas de `print` : on utilise `debugPrint` ou le journal applicatif `Journal`.
 - Pas de `dynamic` implicite. On utilise `as` avec vérification sur les données venant du HTML
   ou de SQLite.
-- Pas de valeur magique : les constantes vont dans `lib/modeles/constantes.dart`.
+- Pas de valeur magique : les constantes partagées vont dans `lib/modeles/constantes.dart` ;
+  celles propres à une couche vont dans le fichier de constantes de cette couche (par exemple
+  `lib/sources/constantes_sources.dart`).
 
 ---
 
@@ -273,11 +331,50 @@ délais de `ClientHttpPoli` et ne contourne aucune protection d'accès (connexio
 |-------|---------|--------|
 | 0 | Créer le projet Flutter (`flutter create`), ajouter les dépendances, cibles Windows, Linux et Android | integrateur-plateformes |
 | 1 | Modèles, base SQLite, migrations, dépôts | developpeur-donnees, testeur-qualite |
-| 2 | `ClientHttpPoli`, `DetecteurTypeSite`, adaptateur Madara | developpeur-sources, testeur-qualite |
+| 2 | `ClientHttpPoli`, `DetecteurTypeSite`, adaptateur MangaDex (site réel du client) | developpeur-sources, testeur-qualite |
 | 3 | Écrans Bibliothèque, Sources, Ajout de site, Titre | developpeur-interface |
 | 4 | Mises à jour (service et planification) | orchestrateur (services), integrateur-plateformes |
-| 5 | Téléchargement hors-ligne et lecteur | orchestrateur (services), developpeur-donnees, developpeur-interface |
-| 6 | Adaptateurs MangaThemesia et générique CSS | developpeur-sources |
-| 7 | Compilation et livraison (.exe, Linux, .apk) | integrateur-plateformes |
+| 5 | Téléchargement hors-ligne, règles de conservation (favoris / suivis), lecteur, Paramètres, numéro de version | orchestrateur (services), developpeur-donnees, developpeur-interface |
+| 6 | **Retours du client (test du 2026-11-15)** : listes système « Planifié » (pas de notification de mise à jour) et « En attente » (aucun chapitre dans les langues du client, surveillance plus fréquente) ; onglet « Mises à jour » trié par dernière parution dans les langues du client ; filtre par catégories pensé pour de nombreuses catégories / tags ; filtre par niveau de contenu (sûr, suggestif, érotique, pornographique) ; export d'un rapport d'erreur lors d'un échec d'ajout de site ; **couvertures enregistrées sur l'appareil** (lisibles hors-ligne) et **choix de la couverture par le client** (parmi les couvertures proposées par le site, par exemple une par volume sur MangaDex, ou une image choisie sur l'appareil) | orchestrateur, developpeur-donnees, developpeur-sources, developpeur-interface |
+| 7 | Autres sites : adaptateurs Madara, MangaThemesia, générique CSS ; diagnostic de scan-manga.com et webtoons.com (signalés illisibles par le client) ; sites proposés par défaut | developpeur-sources |
+| 8 | **Plusieurs sources pour un même titre** (ex. un titre présent sur MangaDex et scan-manga) pour un meilleur suivi des mises à jour : évolution du modèle (titre ↔ sources) | orchestrateur, developpeur-donnees, developpeur-sources, developpeur-interface |
+| 9 | Compilation et livraison **simultanées** sur Android, Windows et Linux (intégration continue GitHub Actions, la version Linux ne pouvant pas se compiler sous Windows) | integrateur-plateformes |
 
 Chaque étape se termine par une relecture (`relecteur-code`) et une validation du client.
+
+### Idées pour des versions futures (à prévoir, pas à implémenter maintenant)
+
+Demandées par le client le 2026-11-15. Le code actuel ne doit pas les fermer :
+
+| Idée | Ce qu'il faut préserver dès maintenant |
+|------|----------------------------------------|
+| **Stockage des chapitres sur un NAS ou un serveur personnel** | `StockageTelechargements` reste le **seul** point d'accès aux archives : aucune autre classe ne lit ni n'écrit de fichier de chapitre. On pourra alors en faire une interface avec plusieurs implémentations (disque local, partage réseau, serveur WebDAV…). |
+| **Publicité dans l'application** | ⚠️ Incompatible avec les conditions d'utilisation de MangaDex, qui interdisent toute publicité dans une application utilisant son API (section 6). À trancher par le client avant toute implémentation : publicité absente quand MangaDex est utilisé, ou abandon de l'idée. Garder l'interface découpée en écrans et widgets réutilisables pour pouvoir y réserver un emplacement. |
+| **Regroupement des catégories de même sens** (« Survival » / « Survie », « Comedy » / « Comédie ») | Les catégories restent normalisées dans une seule table et liées aux titres par `titres_categories`. On pourra ajouter une table d'équivalences (catégorie → catégorie de référence) et un dictionnaire de traductions, sans toucher aux adaptateurs de sites. |
+
+
+---
+
+## 12. Branches et versions
+
+### Branches Git
+| Branche | Rôle |
+|---------|------|
+| `dev` | **Tout le développement se fait ici.** On y code, on y teste en local (`flutter analyze`, `flutter test`, lancement de l'application). |
+| `main` | **Réservée au déploiement des versions.** On n'y code jamais directement. |
+
+- Aucun agent ne commite sur `main`.
+- Une version passe de `dev` à `main` seulement quand le client l'a validée et que
+  `flutter analyze` et `flutter test` ne signalent aucun problème.
+- La fusion vers `main` est suivie d'une étiquette Git `vX.Y.Z` (exemple : `v1.4.2`).
+
+### Numéro de version : `X.Y.Z`
+| Partie | Quand l'augmenter | Exemple |
+|--------|-------------------|---------|
+| **X** (majeure) | Changement incompatible avec les versions précédentes : le fonctionnement global change et les habitudes ou les données doivent être adaptées. Y et Z repartent à 0. | `1.4.2` → `2.0.0` |
+| **Y** (mineure) | Nouvelle fonctionnalité qui ne casse rien de l'existant. Z repart à 0. | `1.4.2` → `1.5.0` |
+| **Z** (corrective) | Correction d'un bug ou d'une faille, sans nouveauté ni rupture. | `1.4.2` → `1.4.3` |
+
+- La version est écrite dans `pubspec.yaml` sous la forme `version: X.Y.Z+N`, où `N` est le
+  numéro de build. Flutter l'exige, et Android a besoin qu'il augmente à chaque version publiée.
+- Tant que l'application n'a pas eu de première version stable, on reste en `0.Y.Z`.

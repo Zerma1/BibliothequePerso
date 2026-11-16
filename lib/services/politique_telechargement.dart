@@ -1,0 +1,407 @@
+/// Choix des chapitres à garder téléchargés, selon les règles du client.
+///
+/// Calcul pur (aucune base, aucun réseau) : le service de téléchargement
+/// l'applique ensuite (mise en file, suppression des archives en trop).
+library;
+
+import '../modeles/chapitre.dart';
+import 'constantes_services.dart';
+
+/// Limites réglables dans l'écran Paramètres.
+///
+/// Les valeurs sont gardées telles quelles ; la politique applique les
+/// bornes au calcul (négatif ramené à 0, [suivisAvant] et [suivisApres] au
+/// moins [minimumSuivisAvantApres]) et `ServiceParametres` les applique à
+/// l'enregistrement.
+class ReglagesTelechargement {
+  /// Crée les réglages (valeurs par défaut choisies par le client).
+  const ReglagesTelechargement({
+    this.favorisLusConserves = favorisLusConservesParDefaut,
+    this.suivisInitial = suivisInitialParDefaut,
+    this.suivisAvant = suivisAvantParDefaut,
+    this.suivisApres = suivisApresParDefaut,
+  });
+
+  /// Favoris : nombre de chapitres déjà lus gardés sur l'appareil (les plus
+  /// récents). Tous les chapitres non lus sont téléchargés.
+  final int favorisLusConserves;
+
+  /// Suivis : nombre de chapitres téléchargés au départ (chapitres 1 à N tant
+  /// que la lecture n'a pas dépassé cette fenêtre).
+  final int suivisInitial;
+
+  /// Suivis : nombre de chapitres gardés jusqu'au dernier lu (inclus).
+  /// Ceux d'avant sont supprimés. Au moins [minimumSuivisAvantApres].
+  final int suivisAvant;
+
+  /// Suivis : nombre de chapitres téléchargés après le dernier lu. Au moins
+  /// [minimumSuivisAvantApres].
+  final int suivisApres;
+
+  /// Copie avec certaines valeurs changées.
+  ReglagesTelechargement copierAvec({
+    int? favorisLusConserves,
+    int? suivisInitial,
+    int? suivisAvant,
+    int? suivisApres,
+  }) {
+    return ReglagesTelechargement(
+      favorisLusConserves: favorisLusConserves ?? this.favorisLusConserves,
+      suivisInitial: suivisInitial ?? this.suivisInitial,
+      suivisAvant: suivisAvant ?? this.suivisAvant,
+      suivisApres: suivisApres ?? this.suivisApres,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is ReglagesTelechargement &&
+      other.favorisLusConserves == favorisLusConserves &&
+      other.suivisInitial == suivisInitial &&
+      other.suivisAvant == suivisAvant &&
+      other.suivisApres == suivisApres;
+
+  @override
+  int get hashCode =>
+      Object.hash(favorisLusConserves, suivisInitial, suivisAvant, suivisApres);
+
+  @override
+  String toString() =>
+      'ReglagesTelechargement(favorisLus: $favorisLusConserves, '
+      'suivisInitial: $suivisInitial, suivisAvant: $suivisAvant, '
+      'suivisApres: $suivisApres)';
+}
+
+/// Ce qu'il faut faire pour un titre : chapitres à télécharger et
+/// chapitres téléchargés à supprimer.
+class PlanTelechargement {
+  /// Crée le plan.
+  const PlanTelechargement({
+    required this.idsVoulus,
+    required this.idsATelecharger,
+    required this.idsASupprimer,
+  });
+
+  /// Plan vide : rien à faire.
+  static const PlanTelechargement vide = PlanTelechargement(
+    idsVoulus: <int>{},
+    idsATelecharger: <int>[],
+    idsASupprimer: <int>[],
+  );
+
+  /// Chapitres qui doivent être sur l'appareil.
+  final Set<int> idsVoulus;
+
+  /// Chapitres voulus mais pas encore téléchargés, dans l'ordre de lecture.
+  final List<int> idsATelecharger;
+
+  /// Chapitres téléchargés qui ne sont plus voulus.
+  final List<int> idsASupprimer;
+}
+
+/// Applique les règles du client :
+///
+/// - **Favoris** : tous les chapitres non lus, plus les
+///   [ReglagesTelechargement.favorisLusConserves] derniers lus.
+/// - **Suivis seulement** : une fenêtre glissante. Au départ, les chapitres 1
+///   à [ReglagesTelechargement.suivisInitial] ; dès que la lecture avance,
+///   on garde les [ReglagesTelechargement.suivisAvant] derniers chapitres
+///   jusqu'au dernier lu, et on télécharge les
+///   [ReglagesTelechargement.suivisApres] suivants.
+/// - Ni favori ni suivi : aucun téléchargement automatique, rien n'est
+///   supprimé (les téléchargements manuels sont conservés).
+///
+/// Les positions se comptent en **chapitres** et non en numéros : un
+/// chapitre 10.5 compte pour un. Pour chaque numéro, une seule version est
+/// gardée : la langue préférée du client (ordre de [languesPreferees]), puis
+/// la plus ancienne publication. Ainsi un chapitre traduit à la fois en
+/// français et en anglais n'est téléchargé qu'une fois, en français.
+/// Exception pour un favori : un numéro **déjà lu** dont une version (dans
+/// les langues du client) est téléchargée garde cette version, sans
+/// retéléchargement dans la langue préférée.
+///
+/// Langues : quand [languesPreferees] n'est pas vide, une version dans une
+/// autre langue n'est **jamais** téléchargée par les règles (règle du
+/// client : pas de russe ni de japonais s'il a choisi « fr,en »). Un numéro
+/// sans version dans ces langues est ignoré (il ne compte pas dans les
+/// positions), et une archive déjà présente dans une autre langue est à
+/// supprimer. Une version sans langue connue (site d'une seule langue) est
+/// acceptée.
+class PolitiqueTelechargement {
+  /// Crée la politique avec les [reglages] et les [languesPreferees] (codes
+  /// ISO 639-1, par ordre de préférence).
+  const PolitiqueTelechargement({
+    this.reglages = const ReglagesTelechargement(),
+    this.languesPreferees = const <String>[],
+  });
+
+  /// Limites appliquées.
+  final ReglagesTelechargement reglages;
+
+  /// Langues du client, par ordre de préférence.
+  final List<String> languesPreferees;
+
+  /// Garde une version par numéro, triée par numéro croissant.
+  ///
+  /// Un numéro est considéré comme lu si **une** de ses versions est lue (le
+  /// client a pu lire la version anglaise d'un chapitre aussi traduit en
+  /// français).
+  ///
+  /// Les chapitres de numéro 0 (oneshots, chapitres sans numéro) ne sont pas
+  /// regroupés : chacun est un chapitre distinct (décision du client), placé
+  /// en tête dans l'ordre des identifiants.
+  List<VersionRetenue> choisirVersions(List<Chapitre> chapitres) {
+    final parNumero = <double, List<Chapitre>>{};
+    final sansNumero = <Chapitre>[];
+    for (final chapitre in chapitres) {
+      if (chapitre.id == null) continue;
+      if (chapitre.numero == 0) {
+        sansNumero.add(chapitre);
+      } else {
+        parNumero
+            .putIfAbsent(chapitre.numero, () => <Chapitre>[])
+            .add(chapitre);
+      }
+    }
+    sansNumero.sort((a, b) => a.id!.compareTo(b.id!));
+    final numeros = parNumero.keys.toList()..sort();
+    return <VersionRetenue>[
+      for (final chapitre in sansNumero)
+        VersionRetenue(chapitre: chapitre, versions: <Chapitre>[chapitre]),
+      for (final numero in numeros)
+        VersionRetenue(
+          chapitre: _meilleureVersion(parNumero[numero]!),
+          versions: parNumero[numero]!,
+        ),
+    ];
+  }
+
+  /// Langue normalisée d'un chapitre (minuscules, sans espaces), pour
+  /// comparer deux versions.
+  static String _langue(Chapitre chapitre) =>
+      chapitre.langue.trim().toLowerCase();
+
+  /// Doublons parmi les chapitres **téléchargés** : groupes d'au moins deux
+  /// chapitres de même numéro et même langue (deux groupes de traduction,
+  /// par exemple). Les oneshots (numéro 0) ne sont jamais des doublons
+  /// entre eux. Les règles n'en suppriment aucun : c'est le client qui
+  /// choisit.
+  static List<List<Chapitre>> trouverDoublons(List<Chapitre> chapitres) {
+    final groupes = <(double, String), List<Chapitre>>{};
+    for (final chapitre in chapitres) {
+      if (chapitre.id == null || !chapitre.estTelecharge) continue;
+      if (chapitre.numero == 0) continue;
+      groupes
+          .putIfAbsent((chapitre.numero, _langue(chapitre)), () => <Chapitre>[])
+          .add(chapitre);
+    }
+    final doublons =
+        groupes.values.where((groupe) => groupe.length > 1).toList()
+          ..sort((a, b) => a.first.numero.compareTo(b.first.numero));
+    for (final groupe in doublons) {
+      groupe.sort((a, b) => a.id!.compareTo(b.id!));
+    }
+    return doublons;
+  }
+
+  /// Rang de la langue de [chapitre] dans [languesPreferees] (0 = la
+  /// préférée), ou `null` si elle n'en fait pas partie.
+  ///
+  /// Une variante régionale compte comme sa langue (« pt-br » pour « pt »),
+  /// comme pour le filtre des chapitres de MangaDex. Une langue vide
+  /// (inconnue) ou une liste de préférences vide est acceptée au dernier
+  /// rang.
+  int? rangLangue(Chapitre chapitre) {
+    final langue = chapitre.langue.trim().toLowerCase();
+    if (languesPreferees.isEmpty || langue.isEmpty) {
+      return languesPreferees.length;
+    }
+    var rang = languesPreferees.indexOf(langue);
+    if (rang < 0) {
+      final tiret = langue.indexOf('-');
+      if (tiret > 0) {
+        rang = languesPreferees.indexOf(langue.substring(0, tiret));
+      }
+    }
+    return rang < 0 ? null : rang;
+  }
+
+  /// `true` si les règles peuvent télécharger [chapitre] (langue choisie par
+  /// le client, ou aucune langue choisie).
+  bool estDansLesLangues(Chapitre chapitre) => rangLangue(chapitre) != null;
+
+  Chapitre _meilleureVersion(List<Chapitre> versions) {
+    // Les langues absentes des préférences passent en dernier : cet ordre
+    // sert à l'affichage (toutes les versions restent visibles) ; les règles
+    // de téléchargement les écartent avant (voir [calculer]).
+    int rangLangue(Chapitre chapitre) =>
+        this.rangLangue(chapitre) ?? languesPreferees.length + 1;
+
+    final triees = List<Chapitre>.of(versions)
+      ..sort((a, b) {
+        final parLangue = rangLangue(a).compareTo(rangLangue(b));
+        if (parLangue != 0) return parLangue;
+        // Une version déjà téléchargée est préférée : inutile de la
+        // remplacer par une autre traduction équivalente.
+        if (a.estTelecharge != b.estTelecharge) return a.estTelecharge ? -1 : 1;
+        final dateA = a.datePublication;
+        final dateB = b.datePublication;
+        if (dateA != null && dateB != null && dateA != dateB) {
+          return dateA.compareTo(dateB);
+        }
+        return a.id!.compareTo(b.id!);
+      });
+    return triees.first;
+  }
+
+  /// Calcule le plan d'un titre.
+  PlanTelechargement calculer(
+    List<Chapitre> chapitres, {
+    required bool estFavori,
+    required bool estSuivi,
+  }) {
+    if (!estFavori && !estSuivi) {
+      return PlanTelechargement.vide;
+    }
+    // Toutes les versions servent à savoir ce qui est lu (le client a pu
+    // lire en ligne un chapitre en russe) ; seules celles dans ses langues
+    // peuvent être retenues.
+    final toutes = choisirVersions(chapitres);
+    final versions = <VersionRetenue>[
+      for (final numero in toutes)
+        if (numero.versions.any(estDansLesLangues))
+          VersionRetenue(
+            chapitre: _meilleureVersion(
+              _candidates(numero, estFavori: estFavori),
+            ),
+            versions: numero.versions,
+          ),
+    ];
+    // Dernier lu en numéro de chapitre, ramené aux positions retenues : lire
+    // un numéro ignoré (autre langue) fait quand même avancer la fenêtre.
+    double? numeroDernierLu;
+    for (final numero in toutes) {
+      if (numero.estLu) numeroDernierLu = numero.chapitre.numero;
+    }
+    final indexDernierLu = numeroDernierLu == null
+        ? -1
+        : versions.lastIndexWhere((v) => v.chapitre.numero <= numeroDernierLu!);
+
+    final voulus = <int>{};
+    if (estFavori) {
+      // Tous les non lus + les N derniers lus.
+      var lusGardes = 0;
+      for (var i = versions.length - 1; i >= 0; i--) {
+        final version = versions[i];
+        if (!version.estLu) {
+          voulus.add(version.chapitre.id!);
+        } else if (lusGardes < _positif(reglages.favorisLusConserves)) {
+          voulus.add(version.chapitre.id!);
+          lusGardes++;
+        }
+      }
+    } else {
+      final avant = _auMoins(reglages.suivisAvant, minimumSuivisAvantApres);
+      final apres = _auMoins(reglages.suivisApres, minimumSuivisAvantApres);
+      final initial = _positif(reglages.suivisInitial);
+      // Fenêtre [debut, fin] en positions de chapitres (0 = premier).
+      // Sans lecture : les `initial` premiers. Ensuite, la fenêtre glisse
+      // dès que « dernier lu + après » dépasse la fenêtre initiale.
+      final debut = indexDernierLu < 0
+          ? 0
+          : (indexDernierLu - avant + 1).clamp(0, versions.length);
+      final finGlissante = indexDernierLu + apres;
+      // Position absolue : la fenêtre initiale couvre toujours les chapitres
+      // 1 à `initial`, elle ne se décale pas avec le début de la fenêtre.
+      final finInitiale = initial - 1;
+      final fin = indexDernierLu < 0 || finInitiale > finGlissante
+          ? finInitiale
+          : finGlissante;
+      for (var i = debut; i <= fin && i < versions.length; i++) {
+        voulus.add(versions[i].chapitre.id!);
+      }
+    }
+
+    final aTelecharger = <int>[
+      for (final version in versions)
+        if (voulus.contains(version.chapitre.id) &&
+            !version.chapitre.estTelecharge)
+          version.chapitre.id!,
+    ];
+    // Numéros dont la version retenue est voulue mais pas encore sur
+    // l'appareil : une autre version déjà téléchargée de ce numéro (par
+    // exemple l'anglais, en attendant le français) est gardée jusqu'à ce que
+    // la version retenue soit téléchargée, pour ne jamais laisser de trou.
+    // Une version dans une langue non choisie n'est jamais gardée, même en
+    // remplacement : le client ne veut pas la voir sur l'appareil.
+    // Doublons : une autre version téléchargée de même langue qu'une version
+    // retenue voulue (deux groupes de traduction) n'est jamais supprimée
+    // automatiquement ; le client choisit laquelle garder.
+    final gardes = <int>{};
+    for (final version in versions) {
+      if (!voulus.contains(version.chapitre.id)) continue;
+      for (final autre in version.versions) {
+        if (autre.id == version.chapitre.id ||
+            !autre.estTelecharge ||
+            !estDansLesLangues(autre)) {
+          continue;
+        }
+        if (!version.chapitre.estTelecharge ||
+            _langue(autre) == _langue(version.chapitre)) {
+          gardes.add(autre.id!);
+        }
+      }
+    }
+    final aSupprimer = <int>[
+      for (final chapitre in chapitres)
+        if (chapitre.id != null &&
+            chapitre.estTelecharge &&
+            !voulus.contains(chapitre.id) &&
+            !gardes.contains(chapitre.id))
+          chapitre.id!,
+    ];
+    return PlanTelechargement(
+      idsVoulus: voulus,
+      idsATelecharger: aTelecharger,
+      idsASupprimer: aSupprimer,
+    );
+  }
+
+  /// Versions d'un numéro parmi lesquelles choisir la version retenue :
+  /// celles dans les langues du client.
+  ///
+  /// Favori déjà lu : si une de ces versions est déjà téléchargée, seules
+  /// les versions téléchargées sont candidates. Le client a fini ce
+  /// chapitre : retélécharger le français pour remplacer l'anglais qu'il a
+  /// déjà sur l'appareil (et lu) solliciterait le site pour rien.
+  List<Chapitre> _candidates(VersionRetenue numero, {required bool estFavori}) {
+    final dansLesLangues = numero.versions.where(estDansLesLangues).toList();
+    if (estFavori && numero.estLu) {
+      final telechargees = dansLesLangues
+          .where((version) => version.estTelecharge)
+          .toList();
+      if (telechargees.isNotEmpty) return telechargees;
+    }
+    return dansLesLangues;
+  }
+
+  static int _positif(int valeur) => valeur < 0 ? 0 : valeur;
+
+  static int _auMoins(int valeur, int minimum) =>
+      valeur < minimum ? minimum : valeur;
+}
+
+/// Version gardée pour un numéro de chapitre.
+class VersionRetenue {
+  /// Crée la version retenue.
+  const VersionRetenue({required this.chapitre, required this.versions});
+
+  /// Version choisie (langue préférée).
+  final Chapitre chapitre;
+
+  /// Toutes les versions de ce numéro (langues, groupes).
+  final List<Chapitre> versions;
+
+  /// `true` si une des versions de ce numéro a été lue.
+  bool get estLu => versions.any((version) => version.estLu);
+}
