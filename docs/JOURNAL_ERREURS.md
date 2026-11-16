@@ -156,7 +156,7 @@ erreur qui semble déjà vue.
 - **Prévention** : tout appel vers un serveur MangaDex (sous-domaines compris) envoie
   `userAgentApplication` ; un essai réel d'image vérifie le type (octets `FF D8` / `89 50`,
   ou `Content-Type`), pas seulement que « des octets reviennent ».
-- **Statut** : ouvert.
+- **Statut** : résolu le 2026-11-16 (User-Agent de l'application pour *.mangadex.org / *.mangadex.network, option exigerImage, anciennes couvertures HTML remplacées) — livré dans 0.1.0-test.2.
 
 ### E11 — Aucun téléchargement automatique après l'ajout d'un titre
 - **Date(s)** : 2026-11-16 (version 0.1.0-test.1 ; défaut identique sur `dev`)
@@ -183,4 +183,4 @@ erreur qui semble déjà vue.
   `FauxServiceTelechargement`, `reglesAppliquees` contient l'id du titre ajouté / actualisé.
 - **Prévention** : toute action qui place un titre en Favoris / Suivis ou ajoute des chapitres
   à un titre de ces listes applique les règles ; à tester côté état (`reglesAppliquees`).
-- **Statut** : ouvert.
+- **Statut** : résolu le 2026-11-16 (règles appliquées après l'ajout d'un titre et après une actualisation) — livré dans 0.1.0-test.2.

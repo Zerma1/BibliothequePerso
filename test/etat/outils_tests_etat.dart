@@ -314,6 +314,10 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
   /// figurent aussi dans [couverturesDemandees]).
   final List<String> vignettesDemandees = <String>[];
 
+  // Méthode réservée aux tests du service réel : le faux service n'a pas de cache.
+  @override
+  bool estCouvertureEnCache(String urlCouverture) => false;
+
   @override
   Future<Uint8List> recupererVignette(String urlCouverture, {String? referer}) {
     vignettesDemandees.add(urlCouverture);
