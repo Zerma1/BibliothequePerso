@@ -29,11 +29,11 @@ au fur et à mesure ; ne pas commiter ; `flutter analyze` à 0 sur son périmèt
 - [x] S9. Langues de l'utilisateur : `ServiceParametres.chargerLangues/enregistrerLangues` (défaut fr, en ; la première = favorite) ; `languesPourTitre(Titre)` = titre > source > réglage général ; `ServiceBibliotheque.modifierLanguesTitre(idTitre, List<String>?)` qui relance les règles ; flux de chapitres couvrant toutes les langues utiles (si `lib/sources` doit changer, le décrire dans le rapport).
 
 ### developpeur-interface (`lib/etat/`, `lib/ecrans/`, `lib/widgets/`, tests)
-- [ ] I1. Faux services des tests (`test/etat/outils_tests_etat.dart`) à jour avec toutes les nouvelles méthodes des services.
-- [ ] I2. Relecture : C7 mémoire du lecteur (pages ± 5, `cacheWidth`) ; C8 contrôle toutes les 15 min + retour au premier plan pour les échéances ; C11 import de `sources/` isolé dans `description_erreur.dart` ; S2 relectures de la file regroupées ; confirmation avant suppression dans Téléchargements.
-- [ ] I3. Lecteur : `protegerChapitre` / `libererChapitre` ; suppression d'un titre par `ServiceTelechargement.supprimerTitre`.
-- [ ] I4. Décision client : chapitre à supprimer **en rouge avec compte à rebours 24 h**, boutons « Garder » / « Supprimer maintenant » ; **doublons en orange**, le client choisit ; légende ; oneshots distincts.
-- [ ] I5. Paramètres « Mes langues » (ajout depuis une liste de langues en français, retrait, ordre, « Choisir comme favorite » = première) ; réglage par site présenté comme avancé ; fiche du titre : langues de ce titre (réglage général / personnalisées / retour au général).
+- [x] I1. Faux services des tests (`test/etat/outils_tests_etat.dart`) à jour avec toutes les nouvelles méthodes des services.
+- [x] I2. Relecture : C7 mémoire du lecteur (pages ± 5, `cacheWidth`) ; C8 contrôle toutes les 15 min + retour au premier plan pour les échéances ; C11 import de `sources/` isolé dans `description_erreur.dart` ; S2 relectures de la file regroupées ; confirmation avant suppression dans Téléchargements.
+- [x] I3. Lecteur : `protegerChapitre` / `libererChapitre` ; suppression d'un titre par `ServiceTelechargement.supprimerTitre`.
+- [x] I4. Décision client : chapitre à supprimer **en rouge avec compte à rebours 24 h**, boutons « Garder » / « Supprimer maintenant » ; **doublons en orange**, le client choisit ; légende ; oneshots distincts.
+- [x] I5. Paramètres « Mes langues » (ajout depuis une liste de langues en français, retrait, ordre, « Choisir comme favorite » = première) ; réglage par site présenté comme avancé ; fiche du titre : langues de ce titre (réglage général / personnalisées / retour au général).
 
 ## Ensuite (orchestrateur)
 - [ ] Relecture complète, essai réel contre MangaDex, essai de l'application à l'écran, proposition de la version 0.1.0 au client.
@@ -41,3 +41,5 @@ au fur et à mesure ; ne pas commiter ; `flutter analyze` à 0 sur son périmèt
 
 ## Plus tard (proposé par developpeur-services)
 - [ ] P1. Migration 5 : colonne `chapitres.est_garde` pour le bouton « Garder » (aujourd'hui mémorisé dans `parametres`, avec une petite course possible entre isolats) — developpeur-donnees puis developpeur-services.
+- [ ] P2. `ServiceTelechargement.chargerSuppressionsPrevues()` (tous titres) pour lister les chapitres en rouge dans l'onglet Téléchargements, et un repère visuel « gardé » — developpeur-services puis developpeur-interface.
+- [ ] P3. Réglage avancé des langues d'un site : accepter les variantes régionales (`pt-br`).
