@@ -94,3 +94,23 @@ const String prefixeFichierRapport = 'rapport_';
 
 /// Extension des rapports d'erreur exportés.
 const String extensionFichierRapport = 'txt';
+
+/// Nom du sous-dossier des exports de la bibliothèque (tâche R7), dans le
+/// dossier racine des téléchargements (`Documents/bibliotheque_perso/exports/`).
+const String nomDossierExports = 'exports';
+
+/// Préfixe du nom d'un export (`bibliotheque_perso-export-2026-11-16_1430.json`).
+const String prefixeFichierExport = 'bibliotheque_perso-export-';
+
+/// Valeur du champ `format` du JSON exporté : permet à l'import (R8) de
+/// reconnaître un fichier de l'application avant de le lire.
+const String identifiantFormatExport = 'bibliotheque_perso-export';
+
+/// Version du format JSON exporté. À augmenter seulement si un champ change
+/// de sens ou disparaît (un champ ajouté reste compatible) : l'import (R8)
+/// s'en sert pour lire les anciens fichiers.
+const int versionFormatExport = 1;
+
+/// Nombre maximal d'exports dans la même minute (`…_1430.json`,
+/// `…_1430_2.json`…) : borne la recherche d'un nom libre.
+const int nombreMaximalExportsMemeMinute = 50;
