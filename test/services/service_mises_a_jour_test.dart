@@ -156,6 +156,20 @@ void main() {
     expect(bibliotheque.ordreAppels, <String>['suivi actif']);
   });
 
+  test('vérifie un titre seulement favori et annonce ses nouveautés', () async {
+    final source = await creerSource('a.test');
+    final favori = await creerTitre(source, 'favori', suivi: false);
+    final idFavoris = (await depotListes.chargerListeParNom(nomListeFavoris))!
+        .id!;
+    await depotListes.ajouterTitre(idFavoris, favori.id!);
+    bibliotheque.nouveauxParTitre['favori'] = 3;
+
+    final rapport = await service.verifierTitresSuivis();
+
+    expect(bibliotheque.ordreAppels, <String>['favori']);
+    expect(rapport.titresAvecNouveautes.single.titre.nom, 'favori');
+  });
+
   test(
     'additionne les nouveautés et garde les erreurs sans s\'arrêter',
     () async {

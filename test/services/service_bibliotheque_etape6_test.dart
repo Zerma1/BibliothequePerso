@@ -15,6 +15,7 @@ import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
+import 'package:bibliotheque_perso/services/constantes_services.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/services/service_ajout_site.dart';
 import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
@@ -54,8 +55,12 @@ void main() {
   // Le serveur n'a pas de vignette 512 px (404).
   late bool vignetteAbsente;
 
+  // Taille des images servies (`null` : trois octets).
+  int? tailleImage;
+
   setUp(() async {
     vignetteAbsente = false;
+    tailleImage = null;
     base = await ouvrirBaseDeTest();
     dossier = await Directory.systemTemp.createTemp('bibliotheque_etape6');
     requetes = <Uri>[];
@@ -84,7 +89,9 @@ void main() {
           );
         }
         return http.Response.bytes(
-          <int>[9, 8, 7],
+          tailleImage == null
+              ? <int>[9, 8, 7]
+              : List<int>.filled(tailleImage!, 1),
           200,
           headers: <String, String>{'content-type': 'image/jpeg'},
         );
@@ -109,7 +116,10 @@ void main() {
       depotListes: depotListes,
       depotCategories: DepotCategories(base),
       fabriqueSources: FabriqueSources(client),
-      serviceAjoutSite: ServiceAjoutSite(depotSources, DetecteurTypeSite(client)),
+      serviceAjoutSite: ServiceAjoutSite(
+        depotSources,
+        DetecteurTypeSite(client),
+      ),
       client: client,
       serviceParametres: parametres,
       stockage: stockage,
@@ -124,8 +134,10 @@ void main() {
   Future<int> idListe(String nom) async =>
       (await depotListes.chargerListeParNom(nom))!.id!;
 
-  Future<Set<String>> listesDe(int idTitre) async => (await depotListes
-      .chargerListesDuTitre(idTitre)).map((liste) => liste.nom).toSet();
+  Future<Set<String>> listesDe(int idTitre) async =>
+      (await depotListes.chargerListesDuTitre(idTitre))
+          .map((liste) => liste.nom)
+          .toSet();
 
   group('liste « En attente »', () {
     test("un titre suivi sans chapitre dans les langues du client y entre, "
@@ -154,18 +166,20 @@ void main() {
       expect(await listesDe(ajout.titre.id!), isEmpty);
     });
 
-    test('un titre planifié y entre, et en sort quand il quitte « Planifié »',
-        () async {
-      await parametres.enregistrerLangues(<String>['ko']);
-      final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
-      final idPlanifie = await idListe(nomListePlanifie);
+    test(
+      'un titre planifié y entre, et en sort quand il quitte « Planifié »',
+      () async {
+        await parametres.enregistrerLangues(<String>['ko']);
+        final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
+        final idPlanifie = await idListe(nomListePlanifie);
 
-      await service.ajouterTitreALaListe(idPlanifie, ajout.titre.id!);
-      expect(await listesDe(ajout.titre.id!), contains(nomListeEnAttente));
+        await service.ajouterTitreALaListe(idPlanifie, ajout.titre.id!);
+        expect(await listesDe(ajout.titre.id!), contains(nomListeEnAttente));
 
-      await service.retirerTitreDeLaListe(idPlanifie, ajout.titre.id!);
-      expect(await listesDe(ajout.titre.id!), isEmpty);
-    });
+        await service.retirerTitreDeLaListe(idPlanifie, ajout.titre.id!);
+        expect(await listesDe(ajout.titre.id!), isEmpty);
+      },
+    );
 
     test('le client ne peut pas modifier « En attente » à la main', () async {
       final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
@@ -200,7 +214,11 @@ void main() {
       String liste = nomListeSuivis,
     }) async {
       final titre = await depotTitres.enregistrerTitre(
-        Titre(idSource: idSource, urlTitre: 'https://mangadex.org/title/$nom', nom: nom),
+        Titre(
+          idSource: idSource,
+          urlTitre: 'https://mangadex.org/title/$nom',
+          nom: nom,
+        ),
       );
       await depotChapitres.enregistrerChapitres(<Chapitre>[
         for (final (numero, langue, date) in chapitres)
@@ -304,17 +322,20 @@ void main() {
       );
     });
 
-    test('le niveau de contenu de la fiche est enregistré et filtrable', () async {
-      final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
-      expect(ajout.titre.niveauContenu, niveauContenuTousPublics);
-      expect(
-        await service.chargerTitres(
-          niveauxContenu: <String>[niveauContenuPornographique],
-          inclureNiveauInconnu: false,
-        ),
-        isEmpty,
-      );
-    });
+    test(
+      'le niveau de contenu de la fiche est enregistré et filtrable',
+      () async {
+        final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
+        expect(ajout.titre.niveauContenu, niveauContenuTousPublics);
+        expect(
+          await service.chargerTitres(
+            niveauxContenu: <String>[niveauContenuPornographique],
+            inclureNiveauInconnu: false,
+          ),
+          isEmpty,
+        );
+      },
+    );
 
     test('liste les couvertures du site puis retient celle choisie', () async {
       final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
@@ -332,21 +353,24 @@ void main() {
       expect(retabli.couvertureChoisie, isNull);
     });
 
-    test("une image de l'appareil peut être choisie comme couverture", () async {
-      final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
-      final image = File('${dossier.path}${Platform.pathSeparator}perso.png')
-        ..writeAsBytesSync(<int>[1, 2, 3, 4, 5]);
+    test(
+      "une image de l'appareil peut être choisie comme couverture",
+      () async {
+        final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
+        final image = File('${dossier.path}${Platform.pathSeparator}perso.png')
+          ..writeAsBytesSync(<int>[1, 2, 3, 4, 5]);
 
-      final titre = await service.choisirCouvertureLocale(
-        ajout.titre.id!,
-        image.path,
-      );
-      expect(titre.couvertureChoisie, image.path);
-      expect(ServiceBibliotheque.estCouvertureLocale(image.path), isTrue);
-      final chemin = await service.cheminCouvertureLocale(titre);
-      expect(chemin, endsWith('.png'));
-      expect(await service.chargerCouverture(titre), <int>[1, 2, 3, 4, 5]);
-    });
+        final titre = await service.choisirCouvertureLocale(
+          ajout.titre.id!,
+          image.path,
+        );
+        expect(titre.couvertureChoisie, image.path);
+        expect(ServiceBibliotheque.estCouvertureLocale(image.path), isTrue);
+        final chemin = await service.cheminCouvertureLocale(titre);
+        expect(chemin, endsWith('.png'));
+        expect(await service.chargerCouverture(titre), <int>[1, 2, 3, 4, 5]);
+      },
+    );
 
     test("une image vide de l'appareil est refusée", () async {
       final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
@@ -406,6 +430,42 @@ void main() {
       expect(enTetesCouverture, hasLength(2));
     });
 
+    test('le cache des couvertures oublie les moins récemment demandées '
+        'au-delà de sa taille maximale', () async {
+      // Trois images dépassent la taille maximale, deux non.
+      tailleImage = tailleMaximaleCacheCouvertures ~/ 3 + 1;
+      const prefixe = 'https://uploads.mangadex.org/covers/x';
+      await service.recupererCouverture('$prefixe/1.jpg');
+      await service.recupererCouverture('$prefixe/2.jpg');
+      // Redemandée : servie par le cache et devenue la plus récente.
+      await service.recupererCouverture('$prefixe/1.jpg');
+      expect(enTetesCouverture, hasLength(2));
+      await service.recupererCouverture('$prefixe/3.jpg');
+
+      expect(service.estCouvertureEnCache('$prefixe/1.jpg'), isTrue);
+      expect(service.estCouvertureEnCache('$prefixe/2.jpg'), isFalse);
+      expect(service.estCouvertureEnCache('$prefixe/3.jpg'), isTrue);
+      // L'oubliée repart vers le site si on la redemande.
+      await service.recupererCouverture('$prefixe/2.jpg');
+      expect(enTetesCouverture, hasLength(4));
+    });
+
+    test('le cache des couvertures garde au plus '
+        '$nombreMaximalCouverturesEnCache images', () async {
+      const prefixe = 'https://uploads.mangadex.org/covers/x';
+      for (var i = 0; i <= nombreMaximalCouverturesEnCache; i++) {
+        await service.recupererCouverture('$prefixe/$i.jpg');
+      }
+      expect(service.estCouvertureEnCache('$prefixe/0.jpg'), isFalse);
+      expect(service.estCouvertureEnCache('$prefixe/1.jpg'), isTrue);
+      expect(
+        service.estCouvertureEnCache(
+          '$prefixe/$nombreMaximalCouverturesEnCache.jpg',
+        ),
+        isTrue,
+      );
+    });
+
     test("une couverture HTML refusée à l'ajout n'est pas enregistrée sur "
         "l'appareil", () async {
       couvertureEnHtml = true;
@@ -445,29 +505,37 @@ void main() {
         ServiceBibliotheque.adresseVignette('https://exemple.org/covers/a.jpg'),
         'https://exemple.org/covers/a.jpg',
       );
-      expect(ServiceBibliotheque.adresseVignette('C:/images/a.jpg'),
-          'C:/images/a.jpg');
-    });
-
-    test("la grille enregistre la vignette, la fiche demande l'originale",
-        () async {
-      final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
-      final couvertures = requetes
-          .where((uri) => uri.host == 'uploads.mangadex.org')
-          .toList();
-      expect(couvertures, hasLength(1));
-      expect(couvertures.single.path, endsWith('.512.jpg'));
-      expect(await service.cheminCouvertureLocale(ajout.titre), endsWith('.jpg'));
-
-      requetes.clear();
       expect(
-        await service.chargerCouvertureOriginale(ajout.titre),
-        <int>[9, 8, 7],
+        ServiceBibliotheque.adresseVignette('C:/images/a.jpg'),
+        'C:/images/a.jpg',
       );
-      final originale = requetes.single;
-      expect(originale.host, 'uploads.mangadex.org');
-      expect(originale.path, isNot(endsWith('.512.jpg')));
     });
+
+    test(
+      "la grille enregistre la vignette, la fiche demande l'originale",
+      () async {
+        final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
+        final couvertures = requetes
+            .where((uri) => uri.host == 'uploads.mangadex.org')
+            .toList();
+        expect(couvertures, hasLength(1));
+        expect(couvertures.single.path, endsWith('.512.jpg'));
+        expect(
+          await service.cheminCouvertureLocale(ajout.titre),
+          endsWith('.jpg'),
+        );
+
+        requetes.clear();
+        expect(await service.chargerCouvertureOriginale(ajout.titre), <int>[
+          9,
+          8,
+          7,
+        ]);
+        final originale = requetes.single;
+        expect(originale.host, 'uploads.mangadex.org');
+        expect(originale.path, isNot(endsWith('.512.jpg')));
+      },
+    );
 
     test("sans vignette sur le site (404), l'image d'origine est "
         'enregistrée', () async {
@@ -485,15 +553,17 @@ void main() {
       final ajout = await service.ajouterTitreDepuisUrl(urlTitreReference);
       siteEnPanne = true;
       requetes.clear();
-      expect(
-        await service.chargerCouvertureOriginale(ajout.titre),
-        <int>[9, 8, 7],
-      );
+      expect(await service.chargerCouvertureOriginale(ajout.titre), <int>[
+        9,
+        8,
+        7,
+      ]);
       final nombre = requetes.length;
-      expect(
-        await service.chargerCouvertureOriginale(ajout.titre),
-        <int>[9, 8, 7],
-      );
+      expect(await service.chargerCouvertureOriginale(ajout.titre), <int>[
+        9,
+        8,
+        7,
+      ]);
       expect(requetes.length, nombre);
     });
 
@@ -527,19 +597,22 @@ void main() {
   });
 
   group('erreurs de site', () {
-    test("une erreur du site porte le type de la source pour le rapport", () async {
-      siteEnPanne = true;
-      await expectLater(
-        service.ajouterTitreDepuisUrl(urlTitreReference),
-        throwsA(
-          isA<ErreurSource>().having(
-            (erreur) => erreur.typeDetecte,
-            'typeDetecte',
-            TypeSource.mangaDex,
+    test(
+      "une erreur du site porte le type de la source pour le rapport",
+      () async {
+        siteEnPanne = true;
+        await expectLater(
+          service.ajouterTitreDepuisUrl(urlTitreReference),
+          throwsA(
+            isA<ErreurSource>().having(
+              (erreur) => erreur.typeDetecte,
+              'typeDetecte',
+              TypeSource.mangaDex,
+            ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
 
     test('la recherche demande les niveaux de contenu du réglage', () async {
       await parametres.enregistrerNiveauxContenu(<String>[
@@ -547,10 +620,12 @@ void main() {
       ]);
       final source = await ServiceAjoutSite(
         depotSources,
-        DetecteurTypeSite(creerClientTest(
-          (_) async => http.Response('', 404),
-          HorlogeFactice(),
-        )),
+        DetecteurTypeSite(
+          creerClientTest(
+            (_) async => http.Response('', 404),
+            HorlogeFactice(),
+          ),
+        ),
       ).ajouterSite('https://mangadex.org');
       await service.rechercherSurSource(source, 'shinigami');
       final demande = requetes.lastWhere((uri) => uri.path == '/manga');

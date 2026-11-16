@@ -191,7 +191,10 @@ class ServiceParametres {
   /// l'intervalle normal).
   Future<void> enregistrerHeuresEnAttente(int heures) async {
     final maximum = maximumHeuresEnAttente(await chargerVerificationsParJour());
-    await _depot.enregistrerEntier(cleHeuresEnAttente, heures.clamp(1, maximum));
+    await _depot.enregistrerEntier(
+      cleHeuresEnAttente,
+      heures.clamp(1, maximum),
+    );
   }
 
   /// Planification des vérifications des titres « En attente » (toutes les
@@ -311,7 +314,8 @@ class ServiceParametres {
 
   /// Supprime l'ancien stockage des chapitres gardés, une fois repris en
   /// base.
-  Future<void> supprimerChapitresGardes() => _depot.supprimer(cleChapitresGardes);
+  Future<void> supprimerChapitresGardes() =>
+      _depot.supprimer(cleChapitresGardes);
 
   /// Enregistre les chapitres gardés dans l'ancien stockage (au plus
   /// [nombreMaximalChapitresGardes], les derniers ajoutés étant conservés).

@@ -153,6 +153,14 @@ class ServiceExport {
 
   /// Dossier des exports pour un dossier racine des téléchargements
   /// (`StockageTelechargements.dossierRacine`) : `<racine>/exports`.
+  // LIMITE : sur Android, le dossier racine vient de
+  // `getApplicationDocumentsDirectory()`, c'est-à-dire le dossier **privé**
+  // de l'application (`/data/data/<paquet>/app_flutter`) : le fichier exporté
+  // y est bien écrit, mais le client ne peut ni l'ouvrir ni le copier depuis
+  // un gestionnaire de fichiers. Le rendre accessible demande un partage de
+  // fichier (paquet du type `share_plus`) ou un dossier public choisi par le
+  // client (`file_picker`) : paquet à proposer au client avant ajout.
+  // Windows et Linux ne sont pas concernés (dossier « Documents » visible).
   static String cheminDossierExports(String dossierRacine) =>
       chemins.join(dossierRacine, nomDossierExports);
 

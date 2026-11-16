@@ -561,6 +561,11 @@ class ServiceTelechargement {
   }
 
   Future<int> _supprimerArchivesEchues() async {
+    // Avant tout effacement : un chapitre gardé avec l'ancienne version (clé
+    // `parametres`) n'a pas encore `est_garde` et serait sinon supprimé si
+    // cette méthode passe avant `appliquerReglesATous` (tâche de fond,
+    // appel de l'interface au retour au premier plan).
+    await _reprendreAnciensGardes();
     final echues = await _depotChapitres.chargerSuppressionsEchues(
       _maintenant(),
     );
@@ -644,7 +649,8 @@ class ServiceTelechargement {
   /// suppression est de nouveau prévue dans 24 heures.
   Future<void> retirerGarde(int idChapitre) async {
     await _depotChapitres.marquerGarde(idChapitre, estGarde: false);
-    final idTitre = (await _depotChapitres.chargerChapitre(idChapitre))?.idTitre;
+    final idTitre = (await _depotChapitres.chargerChapitre(idChapitre))
+        ?.idTitre;
     if (idTitre != null) {
       await appliquerRegles(idTitre);
     } else {

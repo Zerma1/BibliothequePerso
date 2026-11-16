@@ -72,8 +72,8 @@ void main() {
     baseUrlImages = null;
     nombreImagesDemandees = 0;
     final atHome = lireExemple('exemples_json/at_home_serveur.json');
-    final flux = lireJsonExemple('manga_flux_page1.json')['data']!
-        as List<Object?>;
+    final flux =
+        lireJsonExemple('manga_flux_page1.json')['data']! as List<Object?>;
     final reponseChapitre = jsonEncode(<String, Object?>{
       'result': 'ok',
       'response': 'entity',
@@ -679,48 +679,58 @@ void main() {
       expect(await depotTelechargements.chargerFile(), isEmpty);
     });
 
-    test('un chapitre devenu externe est retiré de la file sans requête',
-        () async {
-      await bloquerFile();
-      final premier = await chapitre(1);
-      await service.telechargerChapitre(premier.id!);
-      await rendreExternes(<int>[1]);
-      await parametres.supprimerVerrouTelechargement();
-      requetes.clear();
-      await service.lancerTraitement();
+    test(
+      'un chapitre devenu externe est retiré de la file sans requête',
+      () async {
+        await bloquerFile();
+        final premier = await chapitre(1);
+        await service.telechargerChapitre(premier.id!);
+        await rendreExternes(<int>[1]);
+        await parametres.supprimerVerrouTelechargement();
+        requetes.clear();
+        await service.lancerTraitement();
 
-      expect(await depotTelechargements.chargerParChapitre(premier.id!), isNull);
-      expect(requetes, isEmpty);
-    });
+        expect(
+          await depotTelechargements.chargerParChapitre(premier.id!),
+          isNull,
+        );
+        expect(requetes, isEmpty);
+      },
+    );
 
-    test('un chapitre téléchargé qui devient externe garde son archive',
-        () async {
-      await parametres.enregistrerReglagesTelechargement(
-        const ReglagesTelechargement(
-          suivisInitial: 2,
-          suivisAvant: 1,
-          suivisApres: 1,
-        ),
-      );
-      await depotListes.ajouterTitre(await idListe(nomListeSuivis), titre.id!);
-      await service.appliquerRegles(titre.id!);
-      await service.lancerTraitement();
-      expect((await chapitre(1)).estTelecharge, isTrue);
+    test(
+      'un chapitre téléchargé qui devient externe garde son archive',
+      () async {
+        await parametres.enregistrerReglagesTelechargement(
+          const ReglagesTelechargement(
+            suivisInitial: 2,
+            suivisAvant: 1,
+            suivisApres: 1,
+          ),
+        );
+        await depotListes.ajouterTitre(
+          await idListe(nomListeSuivis),
+          titre.id!,
+        );
+        await service.appliquerRegles(titre.id!);
+        await service.lancerTraitement();
+        expect((await chapitre(1)).estTelecharge, isTrue);
 
-      await rendreExternes(<int>[1]);
-      // Lecture avancée : le chapitre 1 sortirait de la fenêtre.
-      for (var n = 1; n <= 10; n++) {
-        await depotChapitres.marquerLu((await chapitre(n)).id!);
-      }
-      await service.appliquerRegles(titre.id!);
-      await service.lancerTraitement();
+        await rendreExternes(<int>[1]);
+        // Lecture avancée : le chapitre 1 sortirait de la fenêtre.
+        for (var n = 1; n <= 10; n++) {
+          await depotChapitres.marquerLu((await chapitre(n)).id!);
+        }
+        await service.appliquerRegles(titre.id!);
+        await service.lancerTraitement();
 
-      final un = await chapitre(1);
-      expect(un.estTelecharge, isTrue);
-      expect(un.dateSuppressionPrevue, isNull);
-      // Le chapitre 2, hébergé, sort normalement de la fenêtre.
-      expect((await chapitre(2)).dateSuppressionPrevue, isNotNull);
-    });
+        final un = await chapitre(1);
+        expect(un.estTelecharge, isTrue);
+        expect(un.dateSuppressionPrevue, isNull);
+        // Le chapitre 2, hébergé, sort normalement de la fenêtre.
+        expect((await chapitre(2)).dateSuppressionPrevue, isNotNull);
+      },
+    );
   });
 
   test("annuler un téléchargement en cours l'arrête à la page suivante sans laisser d'archive", () async {
@@ -941,6 +951,29 @@ void main() {
       expect(await parametres.chargerChapitresGardes(), isEmpty);
     });
 
+    test("un chapitre gardé par l'ancienne version n'est pas effacé par une "
+        'suppression échue lancée avant les règles', () async {
+      await bloquerFile();
+      await parametres.enregistrerReglagesTelechargement(
+        const ReglagesTelechargement(suivisInitial: 2),
+      );
+      await depotListes.ajouterTitre(await idListe(nomListeSuivis), titre.id!);
+      final id = (await chapitre(5)).id!;
+      await depotChapitres.marquerTelecharge(id);
+      await depotChapitres.planifierSuppression(
+        id,
+        DateTime.now().toUtc().subtract(const Duration(hours: 1)),
+      );
+      await parametres.enregistrerChapitresGardes(<int>[id]);
+
+      expect(await service.supprimerArchivesEchues(), 0);
+
+      final relu = (await depotChapitres.chargerChapitre(id))!;
+      expect(relu.estTelecharge, isTrue);
+      expect(relu.estGarde, isTrue);
+      expect(await parametres.chargerChapitresGardes(), isEmpty);
+    });
+
     test("retirer « Garder » prévoit de nouveau la suppression d'un chapitre "
         "qui n'est plus voulu", () async {
       final id = await preparerChapitre5HorsRegles();
@@ -951,32 +984,38 @@ void main() {
       expect(relu.dateSuppressionPrevue, isNotNull);
     });
 
-    test("liste les suppressions prévues de tous les titres ou d'un seul", () async {
-      final id = await preparerChapitre5HorsRegles();
-      expect(
-        (await service.chargerSuppressionsPrevues()).map((c) => c.id),
-        <int>[id],
-      );
-      expect(
-        await service.chargerSuppressionsPrevues(idTitre: titre.id! + 1),
-        isEmpty,
-      );
-    });
+    test(
+      "liste les suppressions prévues de tous les titres ou d'un seul",
+      () async {
+        final id = await preparerChapitre5HorsRegles();
+        expect(
+          (await service.chargerSuppressionsPrevues()).map((c) => c.id),
+          <int>[id],
+        );
+        expect(
+          await service.chargerSuppressionsPrevues(idTitre: titre.id! + 1),
+          isEmpty,
+        );
+      },
+    );
 
-    test('supprimer un chapitre gardé retire aussi le choix « Garder »', () async {
-      final id = await preparerChapitre5HorsRegles();
-      await service.annulerSuppression(id);
-      await service.supprimerMaintenant(id);
-      expect((await depotChapitres.chargerChapitre(id))!.estGarde, isFalse);
-    });
+    test(
+      'supprimer un chapitre gardé retire aussi le choix « Garder »',
+      () async {
+        final id = await preparerChapitre5HorsRegles();
+        await service.annulerSuppression(id);
+        await service.supprimerMaintenant(id);
+        expect((await depotChapitres.chargerChapitre(id))!.estGarde, isFalse);
+      },
+    );
 
     test('supprimer un titre efface aussi sa couverture enregistrée', () async {
       await bloquerFile();
-      final chemin = await stockage.enregistrerCouverture(
-        titre,
-        <int>[1, 2, 3],
-        'jpg',
-      );
+      final chemin = await stockage.enregistrerCouverture(titre, <int>[
+        1,
+        2,
+        3,
+      ], 'jpg');
       expect(File(chemin).existsSync(), isTrue);
       await service.supprimerTitre(titre.id!);
       expect(File(chemin).existsSync(), isFalse);

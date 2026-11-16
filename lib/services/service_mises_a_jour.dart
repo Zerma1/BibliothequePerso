@@ -138,7 +138,10 @@ class ServiceMisesAJour {
   /// Listes dont les titres sont vérifiés par la vérification complète.
   /// « Planifié » est vérifié (en silence) ; « En attente » regroupe des
   /// favoris, suivis et planifiés sans chapitre dans les langues du client.
+  // « Favoris » est indispensable : un titre peut n'être que favori (sans
+  // être aussi suivi) et doit quand même recevoir ses nouveaux chapitres.
   static const List<String> listesVerifiees = <String>[
+    nomListeFavoris,
     nomListeSuivis,
     nomListePlanifie,
     nomListeEnAttente,
@@ -299,12 +302,12 @@ class ServiceMisesAJour {
     final parametres = _serviceParametres;
     if (parametres == null) {
       // Sans réglages : planification par défaut (00:00 et 12:00 UTC).
-      return PlanificationMisesAJour(
-        PlanificationMisesAJour.parDefautParJour,
-      ).prochaineEcheance(maintenant);
+      return PlanificationMisesAJour(PlanificationMisesAJour.parDefautParJour)
+          .prochaineEcheance(maintenant);
     }
-    final normale = (await parametres.chargerPlanification())
-        .prochaineEcheance(maintenant);
+    final normale = (await parametres.chargerPlanification()).prochaineEcheance(
+      maintenant,
+    );
     if (!await _aDesTitresEnAttente()) return normale;
     final enAttente = (await parametres.chargerPlanificationEnAttente())
         .prochaineEcheance(maintenant);
@@ -330,7 +333,8 @@ class ServiceMisesAJour {
     }
 
     final parId = <int, Titre>{};
-    for (final nom in complete ? listesVerifiees : <String>[nomListeEnAttente]) {
+    for (final nom
+        in complete ? listesVerifiees : <String>[nomListeEnAttente]) {
       for (final titre in await titresDe(nom)) {
         if (titre.id != null) parId[titre.id!] = titre;
       }

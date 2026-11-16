@@ -111,6 +111,25 @@ const String identifiantFormatExport = 'bibliotheque_perso-export';
 /// s'en sert pour lire les anciens fichiers.
 const int versionFormatExport = 1;
 
+/// Suffixe de la vignette 512 px d'une couverture MangaDex (documentation
+/// MangaDex, « covers ») : environ 160 Ko au lieu de 1,5 Mo.
+const String suffixeVignetteMangaDex = '.512.jpg';
+
+/// Suffixe de la petite vignette 256 px d'une couverture MangaDex : une
+/// adresse qui le porte est déjà une vignette (pas de suffixe ajouté).
+const String suffixePetiteVignetteMangaDex = '.256.jpg';
+
+/// Taille totale maximale (en octets) des couvertures gardées en mémoire
+/// pendant la session : 16 Mo, soit une dizaine d'originales MangaDex
+/// (~1,5 Mo) ou une centaine de vignettes (~160 Ko). Au-delà, les moins
+/// récemment demandées sont oubliées (elles restent sur l'appareil quand
+/// elles y ont été enregistrées).
+const int tailleMaximaleCacheCouvertures = 16 * 1024 * 1024;
+
+/// Nombre maximal de couvertures gardées en mémoire pendant la session,
+/// quelle que soit leur taille : borne aussi les demandes en cours.
+const int nombreMaximalCouverturesEnCache = 100;
+
 /// Nombre maximal d'exports dans la même minute (`…_1430.json`,
 /// `…_1430_2.json`…) : borne la recherche d'un nom libre.
 const int nombreMaximalExportsMemeMinute = 50;

@@ -621,7 +621,9 @@ void main() {
       langue: langue,
       estLu: estLu,
       estTelecharge: estTelecharge,
-      urlExterne: externe ? 'https://mangaplus.shueisha.co.jp/viewer/$id' : null,
+      urlExterne: externe
+          ? 'https://mangaplus.shueisha.co.jp/viewer/$id'
+          : null,
     );
 
     test("un favori n'en télécharge jamais aucun", () {
@@ -670,19 +672,20 @@ void main() {
 
     test('les numéros seulement externes ne comptent pas dans la fenêtre '
         'des suivis', () {
-      final plan = const PolitiqueTelechargement(
-        reglages: ReglagesTelechargement(suivisInitial: 2),
-        languesPreferees: <String>['fr'],
-      ).calculer(
-        <Chapitre>[
-          version(1, 1, externe: true),
-          version(2, 2),
-          version(3, 3),
-          version(4, 4),
-        ],
-        estFavori: false,
-        estSuivi: true,
-      );
+      final plan =
+          const PolitiqueTelechargement(
+            reglages: ReglagesTelechargement(suivisInitial: 2),
+            languesPreferees: <String>['fr'],
+          ).calculer(
+            <Chapitre>[
+              version(1, 1, externe: true),
+              version(2, 2),
+              version(3, 3),
+              version(4, 4),
+            ],
+            estFavori: false,
+            estSuivi: true,
+          );
       expect(plan.idsATelecharger, <int>[2, 3]);
     });
 
@@ -691,7 +694,8 @@ void main() {
         <Chapitre>[
           version(1, 1, externe: true, estLu: true, estTelecharge: true),
           version(2, 1, estTelecharge: false),
-          for (var n = 2; n <= 10; n++) version(n + 1, n.toDouble(), estLu: true),
+          for (var n = 2; n <= 10; n++)
+            version(n + 1, n.toDouble(), estLu: true),
         ],
         estFavori: true,
         estSuivi: false,

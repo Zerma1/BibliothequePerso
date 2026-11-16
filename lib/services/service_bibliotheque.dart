@@ -9,7 +9,7 @@ library;
 import 'dart:io' show File, FileSystemException;
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 
 import '../donnees/constantes_donnees.dart' show tailleMaxCouverture;
 import '../donnees/depot_categories.dart';
@@ -149,12 +149,24 @@ class ServiceBibliotheque {
   /// Nom donné à la source MangaDex quand elle est ajoutée automatiquement.
   static const String nomSourceMangaDex = 'MangaDex';
 
-  /// Couvertures déjà téléchargées pendant cette session, par URL.
+  /// Couvertures déjà téléchargées pendant cette session, par URL, de la
+  /// moins récemment demandée à la plus récente (l'ordre d'insertion d'une
+  /// `Map` Dart sert de liste « LRU »).
   ///
   /// Évite de redemander la même image au site à chaque affichage de la
-  /// grille (règle de charge des sites, PLAYBOOK.md section 10).
+  /// grille (règle de charge des sites, PLAYBOOK.md section 10). Bornée par
+  /// [tailleMaximaleCacheCouvertures] et [nombreMaximalCouverturesEnCache].
+  // Sans borne, chaque originale ouverte (~1,5 Mo) et chaque image de
+  // l'écran de choix resteraient en mémoire jusqu'à la fermeture.
   final Map<String, Future<Uint8List>> _cacheCouvertures =
       <String, Future<Uint8List>>{};
+
+  /// Taille des couvertures arrivées de [_cacheCouvertures] (les demandes
+  /// en cours n'y figurent pas encore).
+  final Map<String, int> _taillesCouvertures = <String, int>{};
+
+  /// Somme des valeurs de [_taillesCouvertures].
+  int _tailleCacheCouvertures = 0;
 
   /// Couvertures dont le téléchargement a échoué pendant cette session : la
   /// grille ne les redemande pas à chaque affichage (charge des sites). Une
@@ -549,9 +561,9 @@ class ServiceBibliotheque {
     final idEnAttente = enAttente?.id;
     final titre = await _depotTitres.chargerTitre(idTitre);
     if (idEnAttente == null || titre == null) return false;
-    final noms = (await _depotListes.chargerListesDuTitre(
-      idTitre,
-    )).map((liste) => liste.nom).toSet();
+    final noms = (await _depotListes.chargerListesDuTitre(idTitre))
+        .map((liste) => liste.nom)
+        .toSet();
     final langues = await languesPourTitre(titre);
     final doit = ClassementListes.doitEtreEnAttente(
       nomsListes: noms,
@@ -601,7 +613,9 @@ class ServiceBibliotheque {
     try {
       return await classerEnAttente(idTitre);
     } catch (erreur, pile) {
-      debugPrint('Classement « En attente » du titre n°$idTitre : $erreur\n$pile');
+      debugPrint(
+        'Classement « En attente » du titre n°$idTitre : $erreur\n$pile',
+      );
       return false;
     }
   }
@@ -717,24 +731,59 @@ class ServiceBibliotheque {
     String urlCouverture, {
     String? referer,
   }) {
-    final dejaDemandee = _cacheCouvertures[urlCouverture];
-    if (dejaDemandee != null) return dejaDemandee;
+    // Retirée puis remise : passe en dernière position (la plus récente).
+    final dejaDemandee = _cacheCouvertures.remove(urlCouverture);
+    if (dejaDemandee != null) {
+      _cacheCouvertures[urlCouverture] = dejaDemandee;
+      return dejaDemandee;
+    }
     final demande = _telechargerCouverture(urlCouverture, referer);
     _cacheCouvertures[urlCouverture] = demande;
+    _limiterCacheCouvertures();
     // Un échec (réseau, adresse invalide ou réponse qui n'est pas une image)
     // ne doit pas rester en cache : on pourra réessayer. Retiré après coup
     // (et non dans la fonction de téléchargement) pour couvrir aussi une
     // erreur levée avant que la demande ne soit mise en cache. Le futur
-    // dérivé ignore l'erreur : c'est l'appelant qui la reçoit.
+    // dérivé ignore l'erreur : c'est l'appelant qui la reçoit. Le test
+    // `identical` écarte une demande déjà oubliée (ou remplacée) entre-temps.
     demande.then<void>(
-      (_) {},
+      (octets) {
+        if (!identical(_cacheCouvertures[urlCouverture], demande)) return;
+        _taillesCouvertures[urlCouverture] = octets.length;
+        _tailleCacheCouvertures += octets.length;
+        _limiterCacheCouvertures();
+      },
       onError: (Object _) {
         if (identical(_cacheCouvertures[urlCouverture], demande)) {
-          _cacheCouvertures.remove(urlCouverture);
+          _oublierCouverture(urlCouverture);
         }
       },
     );
     return demande;
+  }
+
+  /// `true` si la couverture [urlCouverture] est gardée en mémoire pour la
+  /// session (téléchargée ou en cours). Exposé pour les tests.
+  @visibleForTesting
+  bool estCouvertureEnCache(String urlCouverture) =>
+      _cacheCouvertures.containsKey(urlCouverture);
+
+  /// Oublie les couvertures les moins récemment demandées tant que le cache
+  /// dépasse ses bornes (la plus récente peut elle-même être oubliée si elle
+  /// dépasse à elle seule la taille maximale : l'appelant la reçoit quand
+  /// même).
+  void _limiterCacheCouvertures() {
+    while (_cacheCouvertures.isNotEmpty &&
+        (_tailleCacheCouvertures > tailleMaximaleCacheCouvertures ||
+            _cacheCouvertures.length > nombreMaximalCouverturesEnCache)) {
+      _oublierCouverture(_cacheCouvertures.keys.first);
+    }
+  }
+
+  void _oublierCouverture(String urlCouverture) {
+    _cacheCouvertures.remove(urlCouverture);
+    final taille = _taillesCouvertures.remove(urlCouverture);
+    if (taille != null) _tailleCacheCouvertures -= taille;
   }
 
   /// Téléchargement réel d'une couverture (voir [recupererCouverture]).
@@ -776,14 +825,11 @@ class ServiceBibliotheque {
     final chemin = uri.path.toLowerCase();
     // Déjà une vignette (512 ou 256 px) : ne pas empiler les suffixes.
     if (chemin.endsWith(suffixeVignetteMangaDex) ||
-        chemin.endsWith('.256.jpg')) {
+        chemin.endsWith(suffixePetiteVignetteMangaDex)) {
       return texte;
     }
     return uri.replace(path: '${uri.path}$suffixeVignetteMangaDex').toString();
   }
-
-  /// Suffixe de la vignette 512 px d'une couverture MangaDex.
-  static const String suffixeVignetteMangaDex = '.512.jpg';
 
   /// Comme [recupererCouverture], mais pour la vignette de la couverture
   /// ([adresseVignette]) : grille de la bibliothèque, cartes, onglet Mises
@@ -794,10 +840,8 @@ class ServiceBibliotheque {
   Future<Uint8List> recupererVignette(
     String urlCouverture, {
     String? referer,
-  }) async => (await _recupererVignetteAvecAdresse(
-    urlCouverture,
-    referer: referer,
-  )).$1;
+  }) async =>
+      (await _recupererVignetteAvecAdresse(urlCouverture, referer: referer)).$1;
 
   /// Vignette et adresse réellement téléchargée (pour l'extension du
   /// fichier enregistré : la vignette MangaDex est toujours un JPEG).
@@ -1107,7 +1151,9 @@ class ServiceBibliotheque {
     final stockage = _stockage;
     if (stockage == null) return;
     final extension = estCouvertureLocale(origine)
-        ? StockageTelechargements.extensionDepuisUrl(Uri.file(origine).toString())
+        ? StockageTelechargements.extensionDepuisUrl(
+            Uri.file(origine).toString(),
+          )
         : StockageTelechargements.extensionDepuisUrl(origine);
     try {
       await stockage.enregistrerCouverture(

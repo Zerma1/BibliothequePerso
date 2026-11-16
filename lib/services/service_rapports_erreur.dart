@@ -39,6 +39,14 @@ class ServiceRapportsErreur {
 
   /// Crée le service sur le dossier par défaut :
   /// `<dossier documents>/bibliotheque_perso/rapports/`.
+  // LIMITE : sur Android, ce dossier (comme celui de `main.dart`, calculé de
+  // la même façon à partir de `StockageTelechargements.dossierRacine`) est
+  // le dossier **privé** de l'application renvoyé par
+  // `getApplicationDocumentsDirectory()` : le rapport est écrit mais le
+  // client ne peut pas l'ouvrir ni l'envoyer depuis un gestionnaire de
+  // fichiers. Il faudra un partage de fichier (paquet du type `share_plus`)
+  // ou un dossier public choisi par le client : paquet à proposer au client
+  // avant ajout. Windows et Linux ne sont pas concernés.
   static Future<ServiceRapportsErreur> parDefaut({
     String? versionApplication,
   }) async => ServiceRapportsErreur(
@@ -100,7 +108,9 @@ class ServiceRapportsErreur {
     }
     final tampon = StringBuffer()
       ..writeln("Rapport d'erreur — Bibliothèque perso")
-      ..writeln('Date (UTC) : ${(date ?? DateTime.now()).toUtc().toIso8601String()}');
+      ..writeln(
+        'Date (UTC) : ${(date ?? DateTime.now()).toUtc().toIso8601String()}',
+      );
     void ligne(String libelle, Object? valeur) {
       if (valeur != null && '$valeur'.trim().isNotEmpty) {
         tampon.writeln('$libelle : $valeur');
@@ -182,7 +192,10 @@ class ServiceRapportsErreur {
       );
       if (!await fichier.exists()) return fichier;
     }
-    throw FileSystemException('Trop de rapports dans la même seconde', dossier.path);
+    throw FileSystemException(
+      'Trop de rapports dans la même seconde',
+      dossier.path,
+    );
   }
 
   /// Efface les rapports les plus anciens au-delà de

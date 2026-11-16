@@ -52,9 +52,7 @@ abstract final class ClassementListes {
   static bool doitEtreEnAttente({
     required Set<String> nomsListes,
     required bool aChapitreDansLesLangues,
-  }) =>
-      !aChapitreDansLesLangues &&
-      nomsListes.any(listesSurveillees.contains);
+  }) => !aChapitreDansLesLangues && nomsListes.any(listesSurveillees.contains);
 
   /// `true` si les nouveautés d'un titre des listes [nomsListes] sont
   /// annoncées (favori ou suivi). Un titre seulement planifié (même « En
