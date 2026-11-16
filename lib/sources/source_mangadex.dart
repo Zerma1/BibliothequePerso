@@ -38,6 +38,8 @@
 /// - `offset + limit > 10 000` est refusé → [plafondOffsetMangaDex].
 library;
 
+import 'package:flutter/foundation.dart';
+
 import '../modeles/chapitre.dart';
 import '../modeles/constantes.dart';
 import '../modeles/contenu_chapitre.dart';
@@ -512,7 +514,7 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
           Uri.https(domaineApiMangaDex, '/chapter/$id'),
           (json, url) => _lireUrlExterne(
             json.lireObjet('data', url).lireObjet('attributes', url),
-            url,
+            id,
           ),
         );
         _urlsExternesConnues[id] = urlExterne;
@@ -752,22 +754,62 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
     );
   }
 
-  /// Lit `ChapterAttributes.externalUrl` (api.yaml : « nullable: true,
-  /// pattern: ^https?:// ») : renvoie l'URL si elle est renseignée, `null`
-  /// si l'attribut est absent, nul ou vide. Une valeur qui n'est pas une URL
-  /// http(s) lève une [ErreurSource] (structure inattendue).
-  static String? _lireUrlExterne(Map<String, Object?> attributs, String url) {
-    final valeur = attributs.lireTexteOptionnel('externalUrl', url)?.trim();
-    if (valeur == null || valeur.isEmpty) {
+  /// Longueur maximale d'`externalUrl` (api.yaml, `ChapterAttributes` :
+  /// « maxLength: 512 »).
+  static const int longueurMaxUrlExterne = 512;
+
+  /// Lit `ChapterAttributes.externalUrl` (api.yaml : « type: string,
+  /// pattern: ^https?://, maxLength: 512, nullable: true ») du chapitre
+  /// [idChapitre] : renvoie l'URL si elle est valide, `null` si l'attribut
+  /// est absent, nul ou vide.
+  ///
+  /// Valeur présente mais invalide (pas un texte, schéma autre que http(s),
+  /// sans hôte, plus de [longueurMaxUrlExterne] caractères, mal formée) :
+  /// choix retenu, le chapitre reste **externe** avec l'URL MangaDex du
+  /// chapitre comme lien (`urlChapitreDepuisId`). Pourquoi pas une
+  /// [ErreurSource] : une seule entrée abîmée faisait échouer tout le flux et
+  /// bloquait les mises à jour du titre. Pourquoi pas ignorer le chapitre :
+  /// il disparaîtrait sans explication alors que MangaDex le déclare externe ;
+  /// ainsi l'utilisateur peut au moins l'ouvrir sur mangadex.org, et le
+  /// chapitre n'est jamais téléchargé ([recupererContenu] refuse les
+  /// chapitres externes). L'anomalie est journalisée avec `debugPrint`, sans
+  /// la valeur reçue (elle peut contenir des jetons ou données personnelles).
+  static String? _lireUrlExterne(
+    Map<String, Object?> attributs,
+    String idChapitre,
+  ) {
+    final brute = attributs['externalUrl'];
+    if (brute == null) {
       return null;
     }
-    final uri = Uri.tryParse(valeur);
-    if (uri == null ||
-        (uri.scheme != 'http' && uri.scheme != 'https') ||
-        uri.host.isEmpty) {
-      throw ErreurSource(url, 'externalUrl MangaDex invalide : $valeur');
+    final String? raison;
+    final valeur = brute is String ? brute.trim() : null;
+    if (brute is! String) {
+      raison = "type ${brute.runtimeType} au lieu d'un texte";
+    } else if (valeur!.isEmpty) {
+      return null;
+    } else if (valeur.length > longueurMaxUrlExterne) {
+      raison = '${valeur.length} caractères (max $longueurMaxUrlExterne)';
+    } else {
+      final uri = Uri.tryParse(valeur);
+      if (uri == null) {
+        raison = 'URL mal formée';
+      } else if (uri.scheme != 'http' && uri.scheme != 'https') {
+        raison = 'schéma non http(s)';
+      } else if (uri.host.isEmpty) {
+        raison = 'hôte absent';
+      } else {
+        raison = null;
+      }
     }
-    return valeur;
+    if (raison == null) {
+      return valeur;
+    }
+    debugPrint(
+      'SourceMangaDex : externalUrl invalide pour le chapitre $idChapitre '
+      '($raison) ; lien remplacé par la page MangaDex du chapitre.',
+    );
+    return urlChapitreDepuisId(idChapitre);
   }
 
   /// Nom lisible du site d'un chapitre externe, pour le bouton
@@ -800,7 +842,7 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
   Chapitre? _construireChapitre(Map<String, Object?> chapitre, String url) {
     final id = chapitre.lireTexte('id', url);
     final attributs = chapitre.lireObjet('attributes', url);
-    final urlExterne = _lireUrlExterne(attributs, url);
+    final urlExterne = _lireUrlExterne(attributs, id);
     final pages = attributs['pages'];
     if (urlExterne == null && pages is int && pages <= 0) {
       return null;

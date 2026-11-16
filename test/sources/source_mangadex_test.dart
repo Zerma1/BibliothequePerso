@@ -34,6 +34,7 @@ import 'package:bibliotheque_perso/sources/couverture_site.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/sources/source_mangadex.dart';
 import 'package:bibliotheque_perso/sources/source_site.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
@@ -931,6 +932,143 @@ void main() {
       expect(chapitres.map((c) => c.urlChapitre), <String>[
         'https://mangadex.org/chapter/$idInterneEsLa',
       ]);
+    });
+
+    group('externalUrl invalide : flux conservé, lien MangaDex', () {
+      late List<String?> journal;
+      late DebugPrintCallback debugPrintOriginal;
+
+      setUp(() {
+        journal = <String?>[];
+        debugPrintOriginal = debugPrint;
+        debugPrint = (String? message, {int? wrapWidth}) =>
+            journal.add(message);
+      });
+
+      tearDown(() => debugPrint = debugPrintOriginal);
+
+      /// Entrée réelle VIZ du flux de Ruri Dragon, `externalUrl` remplacé.
+      Map<String, Object?> entreeAvecUrl(Object? externalUrl) {
+        final page = lireJsonExemple('manga_flux_ruri_dragon.json');
+        final viz =
+            (page['data']! as List<Object?>).firstWhere(
+                  (d) => (d! as Map<String, Object?>)['id'] == idVizEn,
+                )!
+                as Map<String, Object?>;
+        return <String, Object?>{
+          ...viz,
+          'attributes': <String, Object?>{
+            ...(viz['attributes']! as Map<String, Object?>),
+            'externalUrl': externalUrl,
+          },
+        };
+      }
+
+      final cas = <String, Object?>{
+        'schéma non http(s)': 'javascript:alert(1)',
+        'ftp': 'ftp://exemple.com/ch/1',
+        'sans hôte': 'https:///chemin?jeton=secret',
+        'mal formée': 'http://[::1',
+        'trop longue': 'https://exemple.com/${'a' * 600}?jeton=secret',
+        'pas un texte': 42,
+      };
+      for (final MapEntry(key: nom, value: valeur) in cas.entries) {
+        test('$nom : chapitre externe vers sa page MangaDex', () async {
+          final source = creerSource(
+            (requete) => reponseJson(
+              pageFlux(<Object?>[entreeAvecUrl(valeur)], 500, 0, 1),
+            ),
+          );
+          final chapitres = await source.recupererChapitres(urlRuri);
+          expect(chapitres, hasLength(1));
+          expect(
+            chapitres.single.urlExterne,
+            'https://mangadex.org/chapter/$idVizEn',
+          );
+          expect(
+            chapitres.single.urlChapitre,
+            'https://mangadex.org/chapter/$idVizEn',
+          );
+          // Journalisé avec l'identifiant, jamais avec la valeur reçue.
+          expect(journal, hasLength(1));
+          expect(journal.single, contains(idVizEn));
+          expect(journal.single, isNot(contains('secret')));
+          expect(journal.single, isNot(contains('javascript')));
+        });
+      }
+
+      test('une entrée abîmée ne bloque pas les autres chapitres', () async {
+        final page = lireJsonExemple('manga_flux_ruri_dragon.json');
+        final donnees = <Object?>[
+          for (final d in page['data']! as List<Object?>)
+            (d! as Map<String, Object?>)['id'] == idVizEn
+                ? entreeAvecUrl('pas une url')
+                : d,
+        ];
+        final source = creerSource(
+          (requete) => reponseJson(pageFlux(donnees, 500, 0, 100)),
+        );
+        final chapitres = await source.recupererChapitres(urlRuri);
+        expect(chapitres, hasLength(100));
+        expect(
+          chapitres
+              .firstWhere(
+                (c) => c.urlChapitre == 'https://mangadex.org/chapter/$idVizEn',
+              )
+              .urlExterne,
+          'https://mangadex.org/chapter/$idVizEn',
+        );
+        expect(
+          chapitres
+              .firstWhere(
+                (c) =>
+                    c.urlChapitre ==
+                    'https://mangadex.org/chapter/$idMangaPlusFr',
+              )
+              .urlExterne,
+          'https://mangaplus.shueisha.co.jp/viewer/7001938',
+        );
+      });
+
+      test('recupererContenu : chapitre traité comme externe, sans '
+          '/at-home', () async {
+        final source = creerSource(
+          (requete) => reponseJson(
+            jsonEncode(<String, Object?>{
+              'result': 'ok',
+              'response': 'entity',
+              'data': entreeAvecUrl('ftp://exemple.com/ch/1'),
+            }),
+          ),
+        );
+        await expectLater(
+          source.recupererContenu('https://mangadex.org/chapter/$idVizEn'),
+          throwsA(
+            isA<ErreurSource>().having(
+              (e) => e.message,
+              'message',
+              contains('hébergé sur un site externe'),
+            ),
+          ),
+        );
+        expect(requetes.map((r) => r.url.path), <String>[
+          '/chapter/$idVizEn',
+        ]);
+      });
+
+      test('vide ou null : chapitre interne, rien de journalisé', () async {
+        for (final valeur in <Object?>['', '   ', null]) {
+          final source = creerSource(
+            (requete) => reponseJson(
+              pageFlux(<Object?>[entreeAvecUrl(valeur)], 500, 0, 1),
+            ),
+          );
+          final chapitres = await source.recupererChapitres(urlRuri);
+          // pages = 0 et pas d'externalUrl : illisible, retiré du flux.
+          expect(chapitres, isEmpty, reason: '$valeur');
+        }
+        expect(journal, isEmpty);
+      });
     });
 
     test(
