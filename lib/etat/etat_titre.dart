@@ -189,8 +189,9 @@ class EtatTitre extends EtatNotifiant {
 
   /// Nom du site où se lit [chapitre] s'il est externe (« Lire sur … »),
   /// ou `null` pour un chapitre hébergé par le site source.
-  String? nomSiteExterneDe(Chapitre chapitre) =>
-      chapitre.estExterne ? nomSiteExterne(chapitre.urlExterne!) : null;
+  String? nomSiteExterneDe(Chapitre chapitre) => chapitre.estExterne
+      ? ServiceBibliotheque.nomSiteExterne(chapitre.urlExterne!)
+      : null;
 
   /// État hors-ligne d'un chapitre (téléchargé, en file, en cours…).
   EtatHorsLigne etatHorsLigne(Chapitre chapitre) {

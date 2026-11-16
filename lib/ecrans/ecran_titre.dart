@@ -296,7 +296,9 @@ class _EnTete extends StatelessWidget {
             aspectRatio: rapportCouverture,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(espacementPetit),
-              child: ImageCouverture(titre: titre),
+              // Fiche : vignette d'abord (immédiate, hors-ligne), puis
+              // l'image en pleine taille dès qu'elle arrive.
+              child: ImageCouverture(titre: titre, pleineTaille: true),
             ),
           ),
           TextButton.icon(

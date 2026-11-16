@@ -14,6 +14,7 @@ import 'package:bibliotheque_perso/donnees/depot_sources.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres.dart';
 import 'package:bibliotheque_perso/etat/etat_bibliotheque.dart';
 import 'package:bibliotheque_perso/etat/etat_couvertures.dart';
+import 'package:bibliotheque_perso/etat/etat_export.dart';
 import 'package:bibliotheque_perso/etat/etat_mises_a_jour.dart';
 import 'package:bibliotheque_perso/etat/etat_parametres.dart';
 import 'package:bibliotheque_perso/etat/etat_parutions.dart';
@@ -33,6 +34,7 @@ import 'package:bibliotheque_perso/services/planification_mises_a_jour.dart';
 import 'package:bibliotheque_perso/services/politique_telechargement.dart';
 import 'package:bibliotheque_perso/services/service_ajout_site.dart';
 import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
+import 'package:bibliotheque_perso/services/service_export.dart';
 import 'package:bibliotheque_perso/services/service_mises_a_jour.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
 import 'package:bibliotheque_perso/services/service_rapports_erreur.dart';
@@ -292,6 +294,30 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
   Future<Uint8List?> chargerCouverture(Titre titre) async {
     if (titre.id != null) couverturesChargees.add(titre.id!);
     return octetsCouverture;
+  }
+
+  /// Titres dont la couverture en pleine taille a été demandée par
+  /// [chargerCouvertureOriginale].
+  final List<int> couverturesOriginalesChargees = <int>[];
+
+  /// Octets renvoyés par [chargerCouvertureOriginale] ; `null` : les mêmes
+  /// que [chargerCouverture] (comme le vrai service hors MangaDex).
+  Uint8List? octetsCouvertureOriginale;
+
+  @override
+  Future<Uint8List?> chargerCouvertureOriginale(Titre titre) async {
+    if (titre.id != null) couverturesOriginalesChargees.add(titre.id!);
+    return octetsCouvertureOriginale ?? octetsCouverture;
+  }
+
+  /// URLs dont la vignette a été demandée par [recupererVignette] (elles
+  /// figurent aussi dans [couverturesDemandees]).
+  final List<String> vignettesDemandees = <String>[];
+
+  @override
+  Future<Uint8List> recupererVignette(String urlCouverture, {String? referer}) {
+    vignettesDemandees.add(urlCouverture);
+    return recupererCouverture(urlCouverture, referer: referer);
   }
 
   @override
@@ -1376,6 +1402,46 @@ class FauxServiceRapportsErreur implements ServiceRapportsErreur {
   }
 }
 
+/// Faux `ServiceExport` : n'écrit aucun fichier, renvoie des chemins fictifs.
+class FauxServiceExport implements ServiceExport {
+  /// Nombre d'appels à [exporter].
+  int nombreExports = 0;
+
+  /// Erreur levée par [exporter], si définie.
+  Object? erreur;
+
+  /// Si défini, [exporter] attend qu'il soit complété (export en cours).
+  Completer<void>? retenue;
+
+  /// Nombres annoncés par le résultat.
+  int nombreTitres = 12;
+
+  /// Nombres annoncés par le résultat.
+  int nombreSites = 2;
+
+  @override
+  String get dossierExports => 'C:/exports';
+
+  @override
+  Future<ResultatExport> exporter({DateTime? date}) async {
+    nombreExports++;
+    final attente = retenue;
+    if (attente != null) await attente.future;
+    final panne = erreur;
+    if (panne != null) throw panne;
+    return ResultatExport(
+      cheminJson: 'C:/exports/export.json',
+      cheminMarkdown: 'C:/exports/export.md',
+      nombreTitres: nombreTitres,
+      nombreSites: nombreSites,
+    );
+  }
+
+  @override
+  Future<ContenuExport> chargerContenu({DateTime? date}) async =>
+      ContenuExport(date: date ?? DateTime.utc(2026, 11, 16));
+}
+
 // ------------------------------------------------------------------ Widgets
 
 /// Enveloppe [enfant] dans les fournisseurs de l'application et un
@@ -1388,6 +1454,7 @@ Widget envelopper(
   FauxServiceTelechargement? telechargement,
   FauxServiceParametres? parametres,
   FauxServiceRapportsErreur? rapports,
+  FauxServiceExport? export,
   bool verifierMisesAJourAuDemarrage = false,
   DateTime Function()? maintenant,
 }) {
@@ -1408,6 +1475,10 @@ Widget envelopper(
         create: (_) =>
             EtatRapportsErreur(rapports ?? FauxServiceRapportsErreur()),
       ),
+      // Section « Sauvegarde et export » seulement si un faux service est
+      // fourni (comme l'application sans service).
+      if (export != null)
+        ChangeNotifierProvider<EtatExport>(create: (_) => EtatExport(export)),
       ChangeNotifierProvider<EtatBibliotheque>(
         create: (_) => EtatBibliotheque(
           bibliotheque,

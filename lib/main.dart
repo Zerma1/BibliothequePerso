@@ -28,6 +28,7 @@ import 'donnees/stockage_telechargements.dart';
 import 'ecrans/ecran_accueil.dart';
 import 'ecrans/ecran_erreur_demarrage.dart';
 import 'etat/etat_bibliotheque.dart';
+import 'etat/etat_export.dart';
 import 'etat/etat_couvertures.dart';
 import 'etat/etat_mises_a_jour.dart';
 import 'etat/etat_parametres.dart';
@@ -38,6 +39,7 @@ import 'etat/etat_telechargements.dart';
 import 'services/constantes_services.dart' show nomDossierRapports;
 import 'services/service_ajout_site.dart';
 import 'services/service_bibliotheque.dart';
+import 'services/service_export.dart';
 import 'services/planification_mises_a_jour.dart';
 import 'services/service_mises_a_jour.dart';
 import 'services/service_parametres.dart';
@@ -88,7 +90,11 @@ class ServicesApplication {
     required this.serviceParametres,
     required this.serviceTelechargement,
     required this.serviceRapportsErreur,
+    required this.serviceExport,
   });
+
+  /// Export des titres et des sites (section « Sauvegarde et export »).
+  final ServiceExport serviceExport;
 
   /// Export des rapports d'erreur (ajout d'un site ou d'un titre échoué).
   final ServiceRapportsErreur serviceRapportsErreur;
@@ -198,6 +204,19 @@ ServicesApplication assemblerServices(
     // `Documents/bibliotheque_perso/rapports/`).
     serviceRapportsErreur: ServiceRapportsErreur(
       chemins.join(stockage.dossierRacine, nomDossierRapports),
+      versionApplication: versionApplication,
+    ),
+    // Exports à côté des rapports : `<dossier racine>/exports/`.
+    serviceExport: ServiceExport(
+      depotSources: depotSources,
+      depotTitres: depotTitres,
+      depotChapitres: depotChapitres,
+      depotListes: depotListes,
+      depotCategories: DepotCategories(base),
+      dossierExports: ServiceExport.cheminDossierExports(
+        stockage.dossierRacine,
+      ),
+      serviceParametres: serviceParametres,
       versionApplication: versionApplication,
     ),
   );
@@ -448,6 +467,7 @@ Future<void> demarrer() async {
       serviceTelechargement: services.serviceTelechargement,
       serviceParametres: services.serviceParametres,
       serviceRapportsErreur: services.serviceRapportsErreur,
+      serviceExport: services.serviceExport,
     );
   } catch (erreur, pile) {
     debugPrint('Démarrage impossible : $erreur\n$pile');
@@ -472,6 +492,7 @@ Widget construireApplication({
   required ServiceTelechargement serviceTelechargement,
   required ServiceParametres serviceParametres,
   ServiceRapportsErreur? serviceRapportsErreur,
+  ServiceExport? serviceExport,
 }) {
   // Les états sont fournis au-dessus de MaterialApp : les écrans ouverts par
   // Navigator et les boîtes de dialogue y ont accès.
@@ -485,6 +506,12 @@ Widget construireApplication({
       if (serviceRapportsErreur != null)
         Provider<EtatRapportsErreur>(
           create: (_) => EtatRapportsErreur(serviceRapportsErreur),
+        ),
+      // Sans service (tests), la section « Sauvegarde et export » est
+      // masquée.
+      if (serviceExport != null)
+        ChangeNotifierProvider<EtatExport>(
+          create: (_) => EtatExport(serviceExport),
         ),
       ChangeNotifierProvider<EtatBibliotheque>(
         create: (_) => EtatBibliotheque(

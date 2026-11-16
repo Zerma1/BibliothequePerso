@@ -156,8 +156,9 @@ class EtatLecteur extends EtatNotifiant {
   }
 
   /// Nom du site où se lit [chapitre] s'il est externe, sinon `null`.
-  String? nomSiteExterneDe(Chapitre chapitre) =>
-      chapitre.estExterne ? nomSiteExterne(chapitre.urlExterne!) : null;
+  String? nomSiteExterneDe(Chapitre chapitre) => chapitre.estExterne
+      ? ServiceBibliotheque.nomSiteExterne(chapitre.urlExterne!)
+      : null;
 
   /// Index du groupe du chapitre affiché, ou -1.
   int _indexCourant() {

@@ -132,12 +132,12 @@ void main() {
 
     expect(
       find.text(
-        Textes.chapitresExternesSuivants(1, 'mangaplus.shueisha.co.jp'),
+        Textes.chapitresExternesSuivants(1, 'MANGA Plus'),
       ),
       findsOneWidget,
     );
     expect(
-      find.textContaining(Textes.lireSur('mangaplus.shueisha.co.jp')),
+      find.textContaining(Textes.lireSur('MANGA Plus')),
       findsOneWidget,
     );
     // « Chapitre suivant » saute le chapitre externe.
@@ -163,7 +163,7 @@ void main() {
     await afficher(tester, 4);
 
     expect(
-      find.text(Textes.lecteurChapitreExterne('mangaplus.shueisha.co.jp')),
+      find.text(Textes.lecteurChapitreExterne('MANGA Plus')),
       findsOneWidget,
     );
     expect(find.text(Textes.telecharger), findsNothing);

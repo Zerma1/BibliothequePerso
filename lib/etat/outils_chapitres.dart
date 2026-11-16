@@ -62,21 +62,6 @@ class GroupeChapitres {
   }
 }
 
-/// Nom du site d'un chapitre externe, pour « Lire sur `site` » : nom de
-/// domaine de [urlExterne] sans `www.` (`mangaplus.shueisha.co.jp`), ou le
-/// texte reçu s'il ne contient pas d'hôte.
-///
-/// LIMITE : `SourceMangaDex.nomSiteExterne` donne un nom commercial
-/// (« MANGA Plus »), mais la couche état ne peut pas importer
-/// `lib/sources/` (PLAYBOOK.md section 4). Il faudra qu'un service
-/// l'expose ; en attendant, le nom de domaine est affiché.
-String nomSiteExterne(String urlExterne) {
-  final texte = urlExterne.trim();
-  final hote = Uri.tryParse(texte)?.host.toLowerCase() ?? '';
-  if (hote.isEmpty) return texte;
-  return hote.startsWith('www.') ? hote.substring(4) : hote;
-}
-
 /// Regroupe [chapitres] par numéro, du plus petit au plus grand.
 ///
 /// La version retenue est choisie par `PolitiqueTelechargement` (même règle

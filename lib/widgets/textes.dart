@@ -889,6 +889,33 @@ abstract final class Textes {
   /// Section « À propos ».
   static const String sectionAPropos = 'À propos';
 
+  /// Section « Sauvegarde et export ».
+  static const String sectionSauvegardeExport = 'Sauvegarde et export';
+
+  /// Explication de l'export.
+  static const String explicationExport =
+      "Enregistre la liste de vos titres et de vos sites dans deux fichiers : "
+      "un fichier JSON complet (pour une future réimportation) et un fichier "
+      "Markdown lisible, avec des liens cliquables.";
+
+  /// Bouton de l'export.
+  static const String exporterTitresEtSites =
+      'Exporter mes titres et mes sites';
+
+  /// Titre de la boîte affichée après un export réussi.
+  static const String exportEnregistre = 'Export enregistré';
+
+  /// Contenu d'un export réussi.
+  static String resumeExport(int titres, int sites) =>
+      "${titres <= 1 ? '$titres titre' : '$titres titres'} et "
+      "${sites <= 1 ? '$sites site' : '$sites sites'} exportés.";
+
+  /// Libellé du chemin du fichier JSON.
+  static const String fichierJson = 'Fichier JSON (complet) :';
+
+  /// Libellé du chemin du fichier Markdown.
+  static const String fichierMarkdown = 'Fichier Markdown (lisible) :';
+
   /// Introduction des règles de téléchargement.
   static const String introReglesTelechargement =
       'Les chapitres sont téléchargés automatiquement pour la lecture '

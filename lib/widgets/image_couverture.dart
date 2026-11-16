@@ -1,6 +1,7 @@
 /// Image de couverture chargée par le service (jamais par `Image.network`).
 library;
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:material_ui/material_ui.dart';
@@ -12,27 +13,38 @@ import '../modeles/titre.dart';
 /// Couverture d'un titre, avec un espace réservé pendant le chargement et en
 /// cas d'erreur.
 ///
-/// Avec [titre] : la couverture enregistrée sur l'appareil (lisible
+/// Avec [titre] : la vignette enregistrée sur l'appareil (lisible
 /// hors-ligne), sinon téléchargée puis enregistrée par
-/// `ServiceBibliotheque.chargerCouverture`. Avec [ImageCouverture.adresse] :
-/// une image du site (miniatures du choix de la couverture), par
-/// `ServiceBibliotheque.recupererCouverture`. Les deux passent par
-/// `ClientHttpPoli` : délai par domaine et User-Agent respectés
-/// (PLAYBOOK.md section 6). `Image.network` contournerait ces règles.
+/// `ServiceBibliotheque.chargerCouverture` ; avec [pleineTaille], la
+/// vignette est ensuite remplacée par l'image d'origine
+/// (`chargerCouvertureOriginale`). Avec [ImageCouverture.adresse] : la
+/// vignette d'une image du site (miniatures du choix de la couverture), par
+/// `ServiceBibliotheque.recupererVignette`. Tout passe par `ClientHttpPoli` :
+/// délai par domaine et User-Agent respectés (PLAYBOOK.md section 6).
+/// `Image.network` contournerait ces règles.
 class ImageCouverture extends StatefulWidget {
   /// Couverture affichée de [titre] (celle choisie par le client, sinon
-  /// celle du site).
-  const ImageCouverture({super.key, required Titre this.titre})
-    : url = null,
-      referer = null;
+  /// celle du site). [pleineTaille] : fiche d'un titre (vignette, puis
+  /// image d'origine).
+  const ImageCouverture({
+    super.key,
+    required Titre this.titre,
+    this.pleineTaille = false,
+  }) : url = null,
+       referer = null;
 
-  /// Image du site à [url] ; [referer] est l'URL de base du site (beaucoup
-  /// de sites refusent leurs images sans elle).
+  /// Vignette de l'image du site à [url] ; [referer] est l'URL de base du
+  /// site (beaucoup de sites refusent leurs images sans elle).
   const ImageCouverture.adresse({
     super.key,
     required String this.url,
     this.referer,
-  }) : titre = null;
+  }) : titre = null,
+       pleineTaille = false;
+
+  /// `true` pour la fiche d'un titre : l'image d'origine remplace la
+  /// vignette dès qu'elle arrive.
+  final bool pleineTaille;
 
   /// Titre dont on affiche la couverture, ou `null` (image par adresse).
   final Titre? titre;
@@ -48,7 +60,12 @@ class ImageCouverture extends StatefulWidget {
 }
 
 class _EtatImageCouverture extends State<ImageCouverture> {
+  /// Octets affichés : la vignette, puis l'image d'origine pour la fiche.
   Future<Uint8List?>? _octets;
+
+  /// Numéro de la demande en cours : une réponse arrivée après un
+  /// changement de titre ou de couverture est ignorée.
+  int _demande = 0;
 
   @override
   void initState() {
@@ -69,7 +86,13 @@ class _EtatImageCouverture extends State<ImageCouverture> {
   static Object? _cle(ImageCouverture image) {
     final titre = image.titre;
     if (titre == null) return (image.url, image.referer);
-    return (titre.id, titre.couvertureAffichee, titre.nom, titre.typeTitre);
+    return (
+      titre.id,
+      titre.couvertureAffichee,
+      titre.nom,
+      titre.typeTitre,
+      image.pleineTaille,
+    );
   }
 
   // Le Future est créé une seule fois par image (et non dans build) : sinon
@@ -78,12 +101,32 @@ class _EtatImageCouverture extends State<ImageCouverture> {
     final couvertures = context.read<EtatCouvertures>();
     final titre = widget.titre;
     final url = widget.url;
+    final demande = ++_demande;
     if (titre != null) {
-      _octets = titre.couvertureAffichee == null
+      final vignette = titre.couvertureAffichee == null
           ? null
           : couvertures.chargerCouverture(titre);
+      _octets = vignette;
+      if (vignette != null && widget.pleineTaille) {
+        // L'original n'est demandé qu'une fois la vignette affichée : la
+        // fiche s'ouvre sans attendre une image dix fois plus lourde, et
+        // les deux requêtes ne se concurrencent pas.
+        unawaited(
+          vignette
+              .then((_) => couvertures.chargerCouvertureOriginale(titre))
+              .then((original) {
+                if (!mounted || demande != _demande || original == null) {
+                  return;
+                }
+                // Nouveau Future plutôt qu'un autre widget : le
+                // FutureBuilder garde la vignette jusqu'à la réponse et
+                // l'Image garde son état (passage sans clignotement).
+                setState(() => _octets = Future<Uint8List?>.value(original));
+              }),
+        );
+      }
     } else if (url != null && url.isNotEmpty) {
-      _octets = couvertures.recupererCouverture(url, referer: widget.referer);
+      _octets = couvertures.recupererVignette(url, referer: widget.referer);
     } else {
       _octets = null;
     }
@@ -109,25 +152,30 @@ class _EtatImageCouverture extends State<ImageCouverture> {
                 : Icons.menu_book_outlined,
           );
         }
-        // Image décodée à la taille affichée (et non à sa taille réelle) :
-        // une grille de centaines de couvertures reste légère en mémoire.
-        return LayoutBuilder(
-          builder: (context, contraintes) {
-            final ratio = MediaQuery.devicePixelRatioOf(context);
-            final largeur = contraintes.hasBoundedWidth
-                ? (contraintes.maxWidth * ratio).ceil()
-                : null;
-            return Image.memory(
-              donnees,
-              fit: BoxFit.cover,
-              cacheWidth: largeur == null || largeur <= 0 ? null : largeur,
-              gaplessPlayback: true,
-              // Octets reçus mais illisibles (page HTML d'erreur…) : espace
-              // réservé plutôt qu'une exception.
-              errorBuilder: (context, erreur, pile) =>
-                  const _EspaceReserve(icone: Icons.broken_image_outlined),
-            );
-          },
+        return _image(donnees);
+      },
+    );
+  }
+
+  /// Image décodée à la taille affichée (et non à sa taille réelle) : une
+  /// grille de centaines de couvertures reste légère en mémoire.
+  Widget _image(Uint8List donnees) {
+    return LayoutBuilder(
+      builder: (context, contraintes) {
+        final ratio = MediaQuery.devicePixelRatioOf(context);
+        final largeur = contraintes.hasBoundedWidth
+            ? (contraintes.maxWidth * ratio).ceil()
+            : null;
+        return Image.memory(
+          donnees,
+          fit: BoxFit.cover,
+          cacheWidth: largeur == null || largeur <= 0 ? null : largeur,
+          // Passage vignette → original sans clignotement.
+          gaplessPlayback: true,
+          // Octets reçus mais illisibles (page HTML d'erreur…) : espace
+          // réservé plutôt qu'une exception.
+          errorBuilder: (context, erreur, pile) =>
+              const _EspaceReserve(icone: Icons.broken_image_outlined),
         );
       },
     );

@@ -17,20 +17,27 @@ class EtatCouvertures {
 
   final ServiceBibliotheque _service;
 
-  /// Couverture affichée de [titre] : celle enregistrée sur l'appareil
-  /// (lisible hors-ligne), sinon téléchargée puis enregistrée. `null` si
-  /// aucune n'est disponible ; ne lève jamais.
+  /// Couverture affichée de [titre] en vignette (512 px pour MangaDex) :
+  /// celle enregistrée sur l'appareil (lisible hors-ligne), sinon
+  /// téléchargée puis enregistrée. Pour la grille, les cartes et l'onglet
+  /// Mises à jour. `null` si aucune n'est disponible ; ne lève jamais.
   Future<Uint8List?> chargerCouverture(Titre titre) =>
       _service.chargerCouverture(titre);
 
-  /// Octets de l'image à [urlCouverture] (miniatures du choix de la
-  /// couverture), mis en cache par le service pour la session.
+  /// Couverture de [titre] en pleine taille, pour la fiche d'un titre (la
+  /// vignette en cas d'échec). `null` si aucune image n'est disponible ; ne
+  /// lève jamais.
+  Future<Uint8List?> chargerCouvertureOriginale(Titre titre) =>
+      _service.chargerCouvertureOriginale(titre);
+
+  /// Vignette de l'image à [urlCouverture] (miniatures du choix de la
+  /// couverture), mise en cache par le service pour la session.
   ///
   /// [referer] est l'URL de base du site du titre, si elle est connue. Lève
   /// l'erreur du service en cas d'échec : le widget affiche alors un espace
   /// réservé.
-  Future<Uint8List> recupererCouverture(
+  Future<Uint8List> recupererVignette(
     String urlCouverture, {
     String? referer,
-  }) => _service.recupererCouverture(urlCouverture, referer: referer);
+  }) => _service.recupererVignette(urlCouverture, referer: referer);
 }

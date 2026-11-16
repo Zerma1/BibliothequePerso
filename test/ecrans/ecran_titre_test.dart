@@ -97,6 +97,9 @@ void main() {
     // La couverture est demandée au service pour ce titre (appareil
     // d'abord, puis site avec son Referer).
     expect(service.couverturesChargees, contains(1));
+    // Fiche : la pleine taille est demandée après la vignette.
+    await tester.pump();
+    expect(service.couverturesOriginalesChargees, contains(1));
     expect(find.text(Textes.changerCouverture), findsOneWidget);
 
     // Titres alternatifs repliés par défaut.
@@ -443,7 +446,7 @@ void main() {
 
       // Mention sous le nom et icône « lien externe » dans la colonne.
       expect(
-        find.text(Textes.publieSur('mangaplus.shueisha.co.jp')),
+        find.text(Textes.publieSur('MANGA Plus')),
         findsOneWidget,
       );
       expect(
@@ -460,7 +463,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.text(Textes.lireSur('mangaplus.shueisha.co.jp')),
+        find.text(Textes.lireSur('MANGA Plus')),
         findsOneWidget,
       );
       expect(find.text(Textes.telecharger), findsNothing);

@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../etat/description_erreur.dart';
+import '../etat/etat_export.dart';
 import '../etat/etat_mises_a_jour.dart';
 import '../etat/etat_parametres.dart';
 import '../etat/etat_sources.dart';
@@ -15,8 +16,8 @@ import '../widgets/messages.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
 
-/// Réglages de l'application, en trois sections : « Téléchargements »,
-/// « Sites » et « À propos ».
+/// Réglages de l'application : langues, mises à jour, téléchargements,
+/// sites, sauvegarde et export, puis « À propos ».
 class EcranParametres extends StatelessWidget {
   /// Crée l'écran.
   const EcranParametres({super.key});
@@ -44,6 +45,7 @@ class EcranParametres extends StatelessWidget {
               SizedBox(height: espacementGrand),
               _SectionSites(),
               SizedBox(height: espacementGrand),
+              _SectionExport(),
               _SectionAPropos(),
             ],
           ),
@@ -676,6 +678,105 @@ class _EtatDialogueSite extends State<_DialogueSite> {
           child: const Text(Textes.enregistrer),
         ),
       ],
+    );
+  }
+}
+
+// --------------------------------------------------------- Sauvegarde, export
+
+/// Export des titres et des sites (JSON complet et Markdown lisible).
+/// Absente si l'application n'a pas de service d'export (tests).
+class _SectionExport extends StatelessWidget {
+  const _SectionExport();
+
+  Future<void> _exporter(BuildContext context, EtatExport etat) async {
+    final resultat = await etat.exporter();
+    if (!context.mounted) return;
+    final export = resultat.donnee;
+    if (export == null) {
+      afficherResultat(context, resultat);
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (contexteDialogue) => AlertDialog(
+        title: const Text(Textes.exportEnregistre),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: largeurMaxFormulaire),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Text(
+                  Textes.resumeExport(export.nombreTitres, export.nombreSites),
+                ),
+                const SizedBox(height: espacementPetit),
+                // Chemins sélectionnables : le client peut les copier pour
+                // retrouver ou envoyer les fichiers.
+                const Text(Textes.fichierJson),
+                SelectableText(export.cheminJson),
+                const SizedBox(height: espacementPetit),
+                const Text(Textes.fichierMarkdown),
+                SelectableText(export.cheminMarkdown),
+              ],
+            ),
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => ouvrirLienExterne(
+              contexteDialogue,
+              Uri.directory(etat.dossierExports).toString(),
+            ),
+            child: const Text(Textes.ouvrirDossier),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(contexteDialogue).pop(),
+            child: const Text(Textes.fermer),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final EtatExport etat;
+    try {
+      etat = context.watch<EtatExport>();
+    } on ProviderNotFoundException {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      // L'espace avant la section suivante n'existe que si celle-ci est
+      // affichée.
+      padding: const EdgeInsets.only(bottom: espacementGrand),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const _TitreSection(Textes.sectionSauvegardeExport),
+          const Text(Textes.explicationExport),
+          const SizedBox(height: espacementPetit),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: FilledButton.tonalIcon(
+              onPressed: etat.estEnCours
+                  ? null
+                  : () => _exporter(context, etat),
+              icon: etat.estEnCours
+                  ? SizedBox.square(
+                      dimension: IconTheme.of(context).size,
+                      child: const CircularProgressIndicator(
+                        strokeWidth: epaisseurIndicateurBouton,
+                      ),
+                    )
+                  : const Icon(Icons.save_alt_outlined),
+              label: const Text(Textes.exporterTitresEtSites),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
