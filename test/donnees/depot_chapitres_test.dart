@@ -168,4 +168,162 @@ void main() {
     );
     expect(await depot.chargerChapitres(idTitre), isEmpty);
   });
+
+  test("enregistrerArchive : chemin et est_telecharge cohérents", () async {
+    await depot.enregistrerChapitres(<Chapitre>[chapitre(1), chapitre(2)]);
+    final ids = (await depot.chargerChapitres(
+      idTitre,
+    )).map((c) => c.id!).toList();
+
+    expect(
+      await depot.enregistrerArchive(ids[0], 'manga/Titre/ch1.en.zip'),
+      isTrue,
+    );
+    var charge = (await depot.chargerChapitre(ids[0]))!;
+    expect(charge.nomArchive, 'manga/Titre/ch1.en.zip');
+    expect(charge.estTelecharge, isTrue);
+
+    // null = plus téléchargé : chemin et suppression prévue effacés.
+    await depot.planifierSuppression(ids[0], DateTime.utc(2027));
+    expect(await depot.enregistrerArchive(ids[0], null), isTrue);
+    charge = (await depot.chargerChapitre(ids[0]))!;
+    expect(charge.nomArchive, isNull);
+    expect(charge.estTelecharge, isFalse);
+    expect(charge.dateSuppressionPrevue, isNull);
+
+    expect(await depot.enregistrerArchive(9999, 'manga/x/ch1.zip'), isFalse);
+    expect(() => depot.enregistrerArchive(ids[0], '  '), throwsArgumentError);
+  });
+
+  test(
+    "enregistrerArchive : un chemin repris retire l'ancien propriétaire",
+    () async {
+      await depot.enregistrerChapitres(<Chapitre>[chapitre(1), chapitre(2)]);
+      final ids = (await depot.chargerChapitres(
+        idTitre,
+      )).map((c) => c.id!).toList();
+      const nom = 'manga/Titre/ch1.en.zip';
+      await depot.enregistrerArchive(ids[0], nom);
+      await depot.planifierSuppression(ids[0], DateTime.utc(2027));
+
+      // L'archive du premier n'existait plus : le second obtient ce nom.
+      await depot.enregistrerArchive(ids[1], nom);
+      final premier = (await depot.chargerChapitre(ids[0]))!;
+      expect(premier.nomArchive, isNull);
+      expect(premier.estTelecharge, isFalse);
+      expect(premier.dateSuppressionPrevue, isNull);
+      expect((await depot.chargerChapitre(ids[1]))!.nomArchive, nom);
+
+      // Réenregistrer le même nom sur le même chapitre ne change rien.
+      expect(await depot.enregistrerArchive(ids[1], nom), isTrue);
+      expect((await depot.chargerChapitre(ids[1]))!.estTelecharge, isTrue);
+    },
+  );
+
+  test('marquerTelecharge(false) efface aussi le chemin enregistré', () async {
+    await depot.enregistrerChapitres(<Chapitre>[chapitre(1)]);
+    final id = (await depot.chargerChapitres(idTitre)).single.id!;
+    await depot.enregistrerArchive(id, 'manga/Titre/ch1.en.zip');
+    await depot.marquerTelecharge(id, estTelecharge: false);
+    final charge = (await depot.chargerChapitre(id))!;
+    expect(charge.estTelecharge, isFalse);
+    expect(charge.nomArchive, isNull);
+    // marquerTelecharge(true) ne touche pas au chemin.
+    await depot.enregistrerArchive(id, 'manga/Titre/ch1.en.zip');
+    await depot.marquerTelecharge(id);
+    expect(
+      (await depot.chargerChapitre(id))!.nomArchive,
+      'manga/Titre/ch1.en.zip',
+    );
+  });
+
+  test('suppressions planifiées : échues seulement, annulation', () async {
+    await depot.enregistrerChapitres(<Chapitre>[
+      chapitre(1),
+      chapitre(2),
+      chapitre(3),
+    ]);
+    final ids = (await depot.chargerChapitres(
+      idTitre,
+    )).map((c) => c.id!).toList();
+    final maintenant = DateTime.utc(2026, 11, 15, 12);
+    expect(await depot.chargerSuppressionsEchues(maintenant), isEmpty);
+
+    await depot.planifierSuppression(
+      ids[0],
+      maintenant.subtract(const Duration(days: 1)),
+    );
+    await depot.planifierSuppression(ids[1], maintenant);
+    await depot.planifierSuppression(
+      ids[2],
+      maintenant.add(const Duration(days: 1)),
+    );
+    expect(
+      (await depot.chargerChapitre(ids[2]))!.dateSuppressionPrevue,
+      maintenant.add(const Duration(days: 1)),
+    );
+
+    final echues = await depot.chargerSuppressionsEchues(maintenant);
+    expect(echues.map((c) => c.id).toList(), <int?>[ids[0], ids[1]]);
+
+    expect(await depot.planifierSuppression(ids[0], null), isTrue);
+    expect(
+      (await depot.chargerSuppressionsEchues(
+        maintenant,
+      )).map((c) => c.id).toList(),
+      <int?>[ids[1]],
+    );
+    expect(await depot.planifierSuppression(9999, maintenant), isFalse);
+  });
+
+  test(
+    "chargerChapitresTelecharges : seuls les téléchargés, filtre par titre",
+    () async {
+      expect(await depot.chargerChapitresTelecharges(), isEmpty);
+
+      final idSource = (await DepotSources(base).chargerSources()).first.id!;
+      final idAutreTitre = (await DepotTitres(base).enregistrerTitre(
+        titreReference(idSource).copierAvec(
+          urlTitre: 'https://mangadex.org/title/autre',
+          nom: 'Autre titre',
+        ),
+      )).id!;
+      await depot.enregistrerChapitres(<Chapitre>[
+        chapitre(2),
+        chapitre(1),
+        chapitre(3),
+        Chapitre(
+          idTitre: idAutreTitre,
+          urlChapitre: 'https://mangadex.org/chapter/autre-1',
+          nom: 'Chapitre 1',
+          numero: 1,
+          langue: 'en',
+        ),
+      ]);
+      final chapitres = await depot.chargerChapitres(idTitre);
+      final autre = (await depot.chargerChapitres(idAutreTitre)).single;
+      await depot.marquerTelecharge(chapitres[2].id!);
+      await depot.marquerTelecharge(chapitres[0].id!);
+      await depot.marquerTelecharge(autre.id!);
+
+      final tous = await depot.chargerChapitresTelecharges();
+      expect(tous.map((c) => c.id).toList(), <int?>[
+        chapitres[0].id,
+        chapitres[2].id,
+        autre.id,
+      ]);
+      expect(tous.every((c) => c.estTelecharge), isTrue);
+
+      final duTitre = await depot.chargerChapitresTelecharges(idTitre: idTitre);
+      expect(duTitre.map((c) => c.numero).toList(), <double>[1, 3]);
+
+      await depot.marquerTelecharge(chapitres[0].id!, estTelecharge: false);
+      expect(
+        (await depot.chargerChapitresTelecharges(idTitre: idTitre))
+            .map((c) => c.id)
+            .toList(),
+        <int?>[chapitres[2].id],
+      );
+    },
+  );
 }

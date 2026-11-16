@@ -14,6 +14,31 @@ const String suffixeArchivePartielle = '.part';
 /// Préfixe du nom de fichier d'un chapitre (`ch<numero>.<langue>.zip`).
 const String prefixeFichierChapitre = 'ch';
 
+/// Séparateur des dossiers dans un `nomArchive` enregistré en base
+/// (`manga/One Punch Man/ch1.en.zip`).
+///
+/// Toujours `/`, quelle que soit la plateforme : la valeur en base reste
+/// identique sur Windows, Linux et Android (une bibliothèque copiée d'un
+/// système à l'autre reste lisible). Elle est convertie en chemin du système
+/// au moment de l'accès au fichier.
+const String separateurNomArchive = '/';
+
+/// Séparateur placé devant le numéro d'une archive homonyme quand le
+/// chapitre n'a pas de langue (`ch1_2.zip`).
+///
+/// Avec une langue, le numéro suit la langue après un point
+/// (`ch1.fr.2.zip`). Sans langue, un point serait ambigu : `ch1.2.zip` est
+/// aussi le nom du chapitre 1.2. Un numéro de chapitre ne contient jamais de
+/// `_`, donc `ch1_2.zip` ne peut désigner que la 2e archive du chapitre 1.
+const String separateurNumeroArchiveSansLangue = '_';
+
+/// Nombre maximal de noms essayés pour trouver un nom d'archive libre
+/// (`ch1.fr.zip`, `ch1.fr.2.zip`… `ch1.fr.<max>.zip`).
+///
+/// Garde-fou contre une boucle sans fin si le disque refuse toute création ;
+/// en pratique, deux ou trois homonymes au plus.
+const int nombreMaxArchivesHomonymes = 1000;
+
 /// Préfixe des images dans une archive (`img1.jpg`, `img2.webp`…).
 const String prefixePageArchive = 'img';
 

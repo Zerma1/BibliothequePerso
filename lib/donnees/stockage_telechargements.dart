@@ -58,6 +58,20 @@ Future<String> cheminParDefautDossierTelechargements() async {
 /// de décider si le suffixe de source est nécessaire (collision de noms entre
 /// deux sources), et il doit passer la même valeur à chaque appel.
 ///
+/// Chemin enregistré (migration 4) : si `chapitre.nomArchive` est connu, il
+/// est **toujours** utilisé (il reste valable si le titre est renommé ou si
+/// la langue de la source change) ; le calcul `<type>/<titre>/ch….zip`
+/// n'est qu'un repli pour les chapitres téléchargés avant la migration. Les
+/// méthodes `…Archive(nomArchive)` travaillent directement à partir de ce
+/// chemin, sans titre.
+///
+/// Noms uniques (décision du client) : à l'écriture d'un nouveau chapitre,
+/// le nom reste `ch<numero>.<langue>.zip` ; **seulement** si ce nom est déjà
+/// pris (archive existante ou écriture en cours d'un autre chapitre), un
+/// numéro est ajouté : `ch1.fr.2.zip`, `ch1.fr.3.zip`… (`ch1_2.zip` sans
+/// langue). Deux oneshots (numéro 0) ou deux scans d'un même chapitre ont
+/// ainsi chacun leur archive.
+///
 /// LIMITE : la lecture et l'écriture des archives sont **synchrones** dans le
 /// paquet `archive` (seule la fermeture et le renommage sont asynchrones).
 /// Une page fait en général moins de quelques Mio, ce qui reste rapide ; si
@@ -86,6 +100,13 @@ class StockageTelechargements {
   /// Sert à refuser deux écritures simultanées du même chapitre et à ne pas
   /// supprimer une archive en cours dans [nettoyerFichiersPartiels].
   final Set<String> _ecrituresOuvertes = <String>{};
+
+  /// URL des chapitres en cours d'écriture dans cette instance.
+  ///
+  /// Un chapitre est reconnu par son URL (unique en base) : deux écritures
+  /// du **même** chapitre sont refusées, alors qu'un **autre** chapitre au
+  /// nom identique reçoit un nom numéroté.
+  final Set<String> _chapitresEnEcriture = <String>{};
 
   // Caractères interdits par le playbook (interdits sous Windows) et
   // caractères de contrôle U+0000 à U+001F (également refusés par Windows).
@@ -231,15 +252,115 @@ class StockageTelechargements {
     );
   }
 
-  /// Chemin complet de l'archive d'un chapitre :
+  /// Nom du fichier d'un chapitre avec un numéro d'homonyme : 1 donne
+  /// [nomFichierChapitre] (`ch1.fr.zip`), 2 donne `ch1.fr.2.zip`, 3
+  /// `ch1.fr.3.zip`… Sans langue : `ch1.zip`, `ch1_2.zip`… (voir
+  /// [separateurNumeroArchiveSansLangue]).
+  ///
+  /// Lève une [ArgumentError] si [numeroHomonyme] est inférieur à 1.
+  static String nomFichierNumerote(Chapitre chapitre, int numeroHomonyme) {
+    if (numeroHomonyme < 1) {
+      throw ArgumentError.value(
+        numeroHomonyme,
+        'numeroHomonyme',
+        'doit être ≥ 1',
+      );
+    }
+    if (numeroHomonyme == 1) {
+      return nomFichierChapitre(chapitre);
+    }
+    final numero = formaterNumero(chapitre.numero);
+    final langue = normaliserLangue(chapitre.langue);
+    if (langue.isEmpty) {
+      return '$prefixeFichierChapitre$numero'
+          '$separateurNumeroArchiveSansLangue$numeroHomonyme'
+          '$extensionArchiveChapitre';
+    }
+    return '$prefixeFichierChapitre$numero.$langue.$numeroHomonyme'
+        '$extensionArchiveChapitre';
+  }
+
+  /// Chemin relatif **calculé** de l'archive d'un chapitre (sans numéro
+  /// d'homonyme) : `<type>/<nom du titre>/ch<numero>.<langue>.zip`, avec
+  /// [separateurNomArchive].
+  ///
+  /// Repli pour les chapitres sans `nomArchive` enregistré.
+  static String nomArchiveCalcule(
+    Titre titre,
+    Chapitre chapitre, {
+    String? nomSource,
+  }) {
+    return <String>[
+      titre.typeTitre.name,
+      nomDossierTitre(titre.nom, nomSource: nomSource),
+      nomFichierChapitre(chapitre),
+    ].join(separateurNomArchive);
+  }
+
+  /// Chemin relatif effectif de l'archive d'un chapitre : le `nomArchive`
+  /// enregistré s'il existe, sinon [nomArchiveCalcule].
+  static String nomArchiveDuChapitre(
+    Titre titre,
+    Chapitre chapitre, {
+    String? nomSource,
+  }) {
+    return chapitre.nomArchive ??
+        nomArchiveCalcule(titre, chapitre, nomSource: nomSource);
+  }
+
+  /// `true` si [nomArchive] est un chemin relatif d'archive acceptable :
+  /// exactement trois éléments `<type>/<dossier>/<fichier>.zip` séparés par
+  /// [separateurNomArchive], aucun élément vide, `.` ou `..`, aucun caractère
+  /// interdit (dont `\` et `:`, donc ni lecteur ni chemin absolu), ni point
+  /// ou espace final.
+  ///
+  /// Une valeur lue en base est ainsi vérifiée avant tout accès au disque :
+  /// elle ne peut pas sortir du dossier racine.
+  static bool estNomArchiveValide(String nomArchive) {
+    final elements = nomArchive.split(separateurNomArchive);
+    if (elements.length != 3) {
+      return false;
+    }
+    for (final element in elements) {
+      if (element.isEmpty ||
+          _caracteresInterdits.hasMatch(element) ||
+          _finInterdite.hasMatch(element)) {
+        return false;
+      }
+    }
+    final fichier = elements.last;
+    return fichier.endsWith(extensionArchiveChapitre) &&
+        fichier.length > extensionArchiveChapitre.length;
+  }
+
+  /// Chemin complet (du système) d'une archive à partir de son chemin
+  /// relatif enregistré.
+  ///
+  /// Lève une [ErreurStockage] si [nomArchive] n'est pas valide
+  /// ([estNomArchiveValide]).
+  String cheminDepuisNomArchive(String nomArchive) {
+    if (!estNomArchiveValide(nomArchive)) {
+      throw ErreurStockage(
+        "Le chemin enregistré de l'archive est invalide.",
+        chemin: nomArchive,
+      );
+    }
+    return chemins.joinAll(<String>[
+      dossierRacine,
+      ...nomArchive.split(separateurNomArchive),
+    ]);
+  }
+
+  /// Chemin complet de l'archive d'un chapitre : celui du `nomArchive`
+  /// enregistré s'il existe, sinon le chemin calculé
   /// `<racine>/<type>/<nom du titre>/ch<numero>.<langue>.zip`.
   ///
   /// Voir [nomDossierTitre] pour [nomSource] et [nomFichierChapitre] pour le
-  /// nom du fichier.
+  /// nom du fichier. Lève une [ErreurStockage] si le `nomArchive` enregistré
+  /// est invalide.
   String cheminChapitre(Titre titre, Chapitre chapitre, {String? nomSource}) {
-    return chemins.join(
-      cheminDossierTitre(titre, nomSource: nomSource),
-      nomFichierChapitre(chapitre),
+    return cheminDepuisNomArchive(
+      nomArchiveDuChapitre(titre, chapitre, nomSource: nomSource),
     );
   }
 
@@ -295,48 +416,174 @@ class StockageTelechargements {
   /// ([EcritureChapitre.finaliser]) ou abandonnée
   /// ([EcritureChapitre.abandonner]).
   ///
-  /// Un `.zip.part` laissé par une interruption précédente est écrasé. Une
-  /// archive `.zip` déjà complète n'est remplacée qu'à la finalisation.
+  /// Choix du nom de l'archive :
+  /// - le chapitre a un `nomArchive` enregistré (re-téléchargement) : ce nom
+  ///   est réutilisé, l'ancienne archive est remplacée à la finalisation ;
+  /// - le chapitre est marqué téléchargé sans `nomArchive` (téléchargé avant
+  ///   la migration 4) : le nom calculé est réutilisé de la même façon ;
+  /// - sinon : premier nom libre parmi `ch1.fr.zip`, `ch1.fr.2.zip`… (voir
+  ///   [nomFichierNumerote]). Un nom est libre s'il n'existe ni archive
+  ///   `.zip` ni `.zip.part` à ce nom (un `.zip.part` peut être l'écriture
+  ///   d'un autre isolat). Le `.zip.part` est créé en mode exclusif (atomique
+  ///   sur le disque), puis l'absence du `.zip` est revérifiée : deux isolats
+  ///   ne peuvent pas obtenir le même nom.
+  ///
+  /// Le nom retenu est [EcritureChapitre.nomArchive] (chemin relatif) : le
+  /// service l'enregistre en base à la fin du téléchargement
+  /// (`DepotTelechargements.enregistrerStatut(…, nomArchive:)` ou
+  /// `DepotChapitres.enregistrerArchive`). Une archive `.zip` déjà complète
+  /// n'est remplacée qu'à la finalisation.
+  ///
+  /// LIMITE : un `.zip.part` orphelin (interruption) au nom calculé fait
+  /// passer au numéro suivant tant qu'il n'est pas nettoyé par
+  /// [nettoyerFichiersPartiels] ; cela ne fait que décaler la numérotation.
   ///
   /// Lève une [ErreurStockage] si ce chapitre est déjà en cours d'écriture
-  /// ou si le fichier ne peut pas être créé.
+  /// dans cette instance, si aucun nom n'est libre ou si le fichier ne peut
+  /// pas être créé.
   Future<EcritureChapitre> ouvrirEcriture(
     Titre titre,
     Chapitre chapitre, {
     String? nomSource,
   }) async {
-    final cheminFinal = cheminChapitre(titre, chapitre, nomSource: nomSource);
-    final cheminPartiel = '$cheminFinal$suffixeArchivePartielle';
-    final cle = chemins.normalize(cheminPartiel);
-    if (_ecrituresOuvertes.contains(cle)) {
+    final identite = chapitre.urlChapitre;
+    // Ajout synchrone (avant tout await) : deux appels simultanés pour le
+    // même chapitre ne peuvent pas passer tous les deux.
+    if (!_chapitresEnEcriture.add(identite)) {
       throw ErreurStockage(
-        'Ce chapitre est déjà en cours d\'écriture.',
-        chemin: cheminPartiel,
+        "Ce chapitre est déjà en cours d'écriture.",
+        chemin: nomArchiveDuChapitre(titre, chapitre, nomSource: nomSource),
       );
     }
+    String? cle;
+    var reussi = false;
     try {
-      await Directory(chemins.dirname(cheminFinal)).create(recursive: true);
+      final nomImpose =
+          chapitre.nomArchive ??
+          (chapitre.estTelecharge
+              ? nomArchiveCalcule(titre, chapitre, nomSource: nomSource)
+              : null);
+      final (nomArchive, cheminFinal) = nomImpose != null
+          ? await _preparerNomImpose(nomImpose)
+          : await _reserverNomLibre(titre, chapitre, nomSource);
+      final cheminPartiel = '$cheminFinal$suffixeArchivePartielle';
+      cle = chemins.normalize(cheminPartiel);
       // FileAccess.write ouvre le fichier en FileMode.write : un ancien
-      // .zip.part est tronqué.
+      // .zip.part (ou celui créé vide par la réservation) est tronqué.
       final sortie = OutputFileStream(
         cheminPartiel,
         bufferSize: tailleTamponEcritureArchive,
       );
       final encodeur = ZipEncoder()..startEncode(sortie);
-      _ecrituresOuvertes.add(cle);
-      return EcritureChapitre._(
+      final cleOuverte = cle;
+      final ecriture = EcritureChapitre._(
+        nomArchive: nomArchive,
         cheminFinal: cheminFinal,
         cheminPartiel: cheminPartiel,
         sortie: sortie,
         encodeur: encodeur,
-        surFermeture: () => _ecrituresOuvertes.remove(cle),
+        surFermeture: () {
+          _ecrituresOuvertes.remove(cleOuverte);
+          _chapitresEnEcriture.remove(identite);
+        },
       );
+      reussi = true;
+      return ecriture;
     } on FileSystemException catch (erreur) {
       throw ErreurStockage(
-        'Impossible de créer l\'archive du chapitre.',
-        chemin: cheminPartiel,
+        "Impossible de créer l'archive du chapitre.",
+        chemin: erreur.path,
         cause: erreur,
       );
+    } finally {
+      if (!reussi) {
+        _chapitresEnEcriture.remove(identite);
+        if (cle != null) {
+          _ecrituresOuvertes.remove(cle);
+        }
+      }
+    }
+  }
+
+  /// Prépare l'écriture sous un nom imposé (re-téléchargement) : vérifie le
+  /// nom, crée le dossier et réserve le `.zip.part` dans cette instance.
+  /// Renvoie `(nomArchive, cheminFinal)`.
+  Future<(String, String)> _preparerNomImpose(String nomArchive) async {
+    final cheminFinal = cheminDepuisNomArchive(nomArchive);
+    final cle = chemins.normalize('$cheminFinal$suffixeArchivePartielle');
+    if (!_ecrituresOuvertes.add(cle)) {
+      throw ErreurStockage(
+        "Cette archive est déjà en cours d'écriture.",
+        chemin: cheminFinal,
+      );
+    }
+    try {
+      await Directory(chemins.dirname(cheminFinal)).create(recursive: true);
+    } on FileSystemException {
+      _ecrituresOuvertes.remove(cle);
+      rethrow;
+    }
+    return (nomArchive, cheminFinal);
+  }
+
+  /// Trouve et réserve le premier nom d'archive libre pour un chapitre qui
+  /// n'en a pas encore (voir [ouvrirEcriture]) : le `.zip.part` est créé
+  /// (vide) et ajouté à [_ecrituresOuvertes]. Renvoie
+  /// `(nomArchive, cheminFinal)`.
+  Future<(String, String)> _reserverNomLibre(
+    Titre titre,
+    Chapitre chapitre,
+    String? nomSource,
+  ) async {
+    final dossier = cheminDossierTitre(titre, nomSource: nomSource);
+    await Directory(dossier).create(recursive: true);
+    final prefixeNom = <String>[
+      titre.typeTitre.name,
+      nomDossierTitre(titre.nom, nomSource: nomSource),
+    ].join(separateurNomArchive);
+    for (var numero = 1; numero <= nombreMaxArchivesHomonymes; numero++) {
+      final fichier = nomFichierNumerote(chapitre, numero);
+      final cheminFinal = chemins.join(dossier, fichier);
+      final cheminPartiel = '$cheminFinal$suffixeArchivePartielle';
+      final cle = chemins.normalize(cheminPartiel);
+      if (_ecrituresOuvertes.contains(cle) ||
+          await File(cheminFinal).exists()) {
+        continue;
+      }
+      try {
+        // Création exclusive : échoue si le .part existe déjà (écriture d'un
+        // autre isolat ou orphelin), de façon atomique sur le disque.
+        await File(cheminPartiel).create(exclusive: true);
+      } on FileSystemException {
+        if (await File(cheminPartiel).exists()) {
+          continue;
+        }
+        rethrow;
+      }
+      _ecrituresOuvertes.add(cle);
+      // Seconde vérification : un autre isolat a pu renommer son .part en
+      // .zip entre la première vérification et la création ci-dessus.
+      if (await File(cheminFinal).exists()) {
+        _ecrituresOuvertes.remove(cle);
+        await _supprimerSansErreur(File(cheminPartiel));
+        continue;
+      }
+      return ('$prefixeNom$separateurNomArchive$fichier', cheminFinal);
+    }
+    throw ErreurStockage(
+      "Aucun nom d'archive libre pour ce chapitre.",
+      chemin: dossier,
+    );
+  }
+
+  /// Supprime [fichier] en ignorant les erreurs (chemin d'abandon).
+  static Future<void> _supprimerSansErreur(File fichier) async {
+    try {
+      if (await fichier.exists()) {
+        await fichier.delete();
+      }
+    } on FileSystemException {
+      // Le .part restant sera retiré par nettoyerFichiersPartiels().
     }
   }
 
@@ -344,15 +591,26 @@ class StockageTelechargements {
   // Lecture
   // ---------------------------------------------------------------------
 
-  /// `true` si l'archive complète (`.zip`) du chapitre existe.
+  /// `true` si l'archive complète (`.zip`) du chapitre existe (chemin
+  /// enregistré ou, à défaut, calculé : voir [cheminChapitre]).
   ///
   /// Un `.zip.part` (écriture interrompue ou en cours) ne compte jamais.
   Future<bool> estTelecharge(
     Titre titre,
     Chapitre chapitre, {
     String? nomSource,
-  }) {
-    return File(cheminChapitre(titre, chapitre, nomSource: nomSource)).exists();
+  }) async {
+    return existeArchive(
+      nomArchiveDuChapitre(titre, chapitre, nomSource: nomSource),
+    );
+  }
+
+  /// `true` si l'archive complète désignée par son chemin relatif
+  /// enregistré existe. Sert au contrôle de cohérence au démarrage.
+  ///
+  /// Lève une [ErreurStockage] si [nomArchive] est invalide.
+  Future<bool> existeArchive(String nomArchive) async {
+    return File(cheminDepuisNomArchive(nomArchive)).exists();
   }
 
   /// Nombre de pages (`img<n>.<ext>`) de l'archive du chapitre.
@@ -363,7 +621,14 @@ class StockageTelechargements {
     Chapitre chapitre, {
     String? nomSource,
   }) async {
-    final chemin = cheminChapitre(titre, chapitre, nomSource: nomSource);
+    return compterPagesArchive(
+      nomArchiveDuChapitre(titre, chapitre, nomSource: nomSource),
+    );
+  }
+
+  /// Comme [compterPages], à partir du chemin relatif enregistré.
+  Future<int> compterPagesArchive(String nomArchive) async {
+    final chemin = cheminDepuisNomArchive(nomArchive);
     return _lireArchive(chemin, (archive) => _pagesTriees(archive).length);
   }
 
@@ -379,7 +644,15 @@ class StockageTelechargements {
     int index, {
     String? nomSource,
   }) async {
-    final chemin = cheminChapitre(titre, chapitre, nomSource: nomSource);
+    return lirePageArchive(
+      nomArchiveDuChapitre(titre, chapitre, nomSource: nomSource),
+      index,
+    );
+  }
+
+  /// Comme [lirePage], à partir du chemin relatif enregistré.
+  Future<Uint8List> lirePageArchive(String nomArchive, int index) async {
+    final chemin = cheminDepuisNomArchive(nomArchive);
     return _lireArchive(chemin, (archive) {
       final pages = _pagesTriees(archive);
       if (index < 0 || index >= pages.length) {
@@ -402,7 +675,14 @@ class StockageTelechargements {
     Chapitre chapitre, {
     String? nomSource,
   }) async {
-    final chemin = cheminChapitre(titre, chapitre, nomSource: nomSource);
+    return lireTexteArchive(
+      nomArchiveDuChapitre(titre, chapitre, nomSource: nomSource),
+    );
+  }
+
+  /// Comme [lireTexte], à partir du chemin relatif enregistré.
+  Future<String?> lireTexteArchive(String nomArchive) async {
+    final chemin = cheminDepuisNomArchive(nomArchive);
     return _lireArchive(chemin, (archive) {
       final entree = archive.find(nomEntreeContenuTexte);
       if (entree == null) {
@@ -503,7 +783,17 @@ class StockageTelechargements {
     Chapitre chapitre, {
     String? nomSource,
   }) async {
-    final chemin = cheminChapitre(titre, chapitre, nomSource: nomSource);
+    return supprimerArchive(
+      nomArchiveDuChapitre(titre, chapitre, nomSource: nomSource),
+    );
+  }
+
+  /// Comme [supprimerChapitre], à partir du chemin relatif enregistré.
+  ///
+  /// Lève une [ErreurStockage] si [nomArchive] est invalide ou si le disque
+  /// refuse la suppression.
+  Future<bool> supprimerArchive(String nomArchive) async {
+    final chemin = cheminDepuisNomArchive(nomArchive);
     final cheminPartiel = '$chemin$suffixeArchivePartielle';
     try {
       final archive = File(chemin);
@@ -538,17 +828,34 @@ class StockageTelechargements {
     }
   }
 
-  /// Supprime tous les `.zip.part` laissés par des écritures interrompues
+  /// Supprime les `.zip.part` laissés par des écritures interrompues
   /// (application fermée ou tuée pendant un téléchargement) et renvoie leur
   /// nombre.
   ///
   /// À appeler au démarrage, avant de relancer la file. Les écritures en
-  /// cours dans cette instance sont épargnées.
-  Future<int> nettoyerFichiersPartiels() async {
+  /// cours dans cette instance sont toujours épargnées.
+  ///
+  /// - Sans [ancienneteMinimale] : tous les autres `.zip.part` sont effacés.
+  /// - Avec [ancienneteMinimale] : seuls ceux dont la date de modification
+  ///   est plus ancienne que maintenant moins ce délai (strictement). Sur
+  ///   Android, un autre isolat peut être en train d'écrire un `.zip.part`
+  ///   que cette instance ne connaît pas ; il est vidé sur le disque à
+  ///   chaque page, donc sa date reste récente et il est épargné. Utiliser le
+  ///   même délai que `DepotTelechargements.reprendreApresInterruption`.
+  ///
+  /// LIMITE : la date de modification vient du système de fichiers, dont la
+  /// précision varie (jusqu'à 2 s sur FAT) ; le délai doit rester large.
+  Future<int> nettoyerFichiersPartiels({Duration? ancienneteMinimale}) async {
+    if (ancienneteMinimale != null && ancienneteMinimale.isNegative) {
+      throw ArgumentError.value(ancienneteMinimale, 'ancienneteMinimale');
+    }
     final racine = Directory(dossierRacine);
     if (!await racine.exists()) {
       return 0;
     }
+    final limite = ancienneteMinimale == null
+        ? null
+        : DateTime.now().subtract(ancienneteMinimale);
     var nombre = 0;
     final suffixe = '$extensionArchiveChapitre$suffixeArchivePartielle';
     try {
@@ -556,11 +863,23 @@ class StockageTelechargements {
         recursive: true,
         followLinks: false,
       )) {
-        if (entite is File &&
-            entite.path.endsWith(suffixe) &&
-            !_ecrituresOuvertes.contains(chemins.normalize(entite.path))) {
+        if (entite is! File ||
+            !entite.path.endsWith(suffixe) ||
+            _ecrituresOuvertes.contains(chemins.normalize(entite.path))) {
+          continue;
+        }
+        try {
+          if (limite != null) {
+            final modification = await entite.lastModified();
+            if (!modification.isBefore(limite)) {
+              continue;
+            }
+          }
           await entite.delete();
           nombre++;
+        } on PathNotFoundException {
+          // Fichier disparu entre la liste et la suppression (finalisé ou
+          // abandonné par un autre isolat) : rien à nettoyer.
         }
       }
     } on FileSystemException catch (erreur) {
@@ -588,12 +907,20 @@ class StockageTelechargements {
 /// chapitre est réécrit depuis la première page.
 class EcritureChapitre {
   EcritureChapitre._({
+    required this.nomArchive,
     required this.cheminFinal,
     required this.cheminPartiel,
     required this._sortie,
     required this._encodeur,
     required this._surFermeture,
   });
+
+  /// Chemin de l'archive retenue, **relatif** au dossier racine, avec `/`
+  /// comme séparateur (`manga/One Punch Man/ch1.fr.2.zip`).
+  ///
+  /// C'est la valeur à enregistrer en base (`chapitres.nom_archive`) après
+  /// [finaliser], pour retrouver l'archive même si le titre est renommé.
+  final String nomArchive;
 
   /// Chemin de l'archive complète (`….zip`), créée par [finaliser].
   final String cheminFinal;

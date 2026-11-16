@@ -302,6 +302,78 @@ void main() {
     },
   );
 
+  group('langues préférées du titre', () {
+    test('enregistrées normalisées, puis remises à null', () async {
+      final titre = await depotTitres.enregistrerTitre(
+        titreReference(idSource),
+      );
+      expect(titre.languesPreferees, isNull);
+
+      expect(
+        await depotTitres.enregistrerLanguesPreferees(titre.id!, ' FR, en,fr,'),
+        isTrue,
+      );
+      var relu = (await depotTitres.chargerTitre(titre.id!))!;
+      expect(relu.languesPreferees, 'fr,en');
+      expect(relu.listeLanguesPreferees, <String>['fr', 'en']);
+
+      await depotTitres.enregistrerLanguesPreferees(titre.id!, null);
+      relu = (await depotTitres.chargerTitre(titre.id!))!;
+      expect(relu.languesPreferees, isNull);
+      expect(relu.listeLanguesPreferees, isEmpty);
+
+      // Une liste vide après nettoyage revient aussi au réglage général.
+      await depotTitres.enregistrerLanguesPreferees(titre.id!, ' , ');
+      relu = (await depotTitres.chargerTitre(titre.id!))!;
+      expect(relu.languesPreferees, isNull);
+    });
+
+    test('un titre inexistant renvoie false', () async {
+      expect(await depotTitres.enregistrerLanguesPreferees(999, 'fr'), isFalse);
+    });
+
+    test('un code de langue invalide est refusé', () async {
+      final titre = await depotTitres.enregistrerTitre(
+        titreReference(idSource),
+      );
+      expect(
+        () => depotTitres.enregistrerLanguesPreferees(titre.id!, "fr;DROP"),
+        throwsArgumentError,
+      );
+      expect(
+        (await depotTitres.chargerTitre(titre.id!))!.languesPreferees,
+        isNull,
+      );
+    });
+
+    test("l'actualisation du titre depuis le site ne les écrase pas", () async {
+      final titre = await depotTitres.enregistrerTitre(
+        titreReference(idSource),
+      );
+      await depotTitres.enregistrerLanguesPreferees(titre.id!, 'en,fr');
+
+      // Titre reconstruit par une source : languesPreferees à null.
+      await depotTitres.enregistrerTitre(
+        titreReference(idSource).copierAvec(resume: 'Résumé mis à jour'),
+      );
+      // Même chose avec une autre valeur fournie dans l'objet.
+      final relu = await depotTitres.enregistrerTitre(
+        titre.copierAvec(languesPreferees: 'ja'),
+      );
+      expect(relu.languesPreferees, 'en,fr');
+    });
+
+    test(
+      "les langues fournies à l'insertion sont gardées, normalisées",
+      () async {
+        final titre = await depotTitres.enregistrerTitre(
+          titreReference(idSource).copierAvec(languesPreferees: 'FR,fr, en'),
+        );
+        expect(titre.languesPreferees, 'fr,en');
+      },
+    );
+  });
+
   test(
     'la recherche à la casse exacte trouve un nom à majuscule accentuée',
     () async {

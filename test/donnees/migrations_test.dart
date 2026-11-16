@@ -20,8 +20,8 @@ void main() {
     await base.close();
   });
 
-  test('la version du schéma est 3 et correspond à la base ouverte', () async {
-    expect(versionSchema, 3);
+  test('la version du schéma est 4 et correspond à la base ouverte', () async {
+    expect(versionSchema, 4);
     expect(await base.getVersion(), versionSchema);
   });
 
@@ -202,7 +202,8 @@ void main() {
           fabrique: databaseFactoryFfi,
         );
         try {
-          expect(await version3.getVersion(), 3);
+          // Toutes les migrations suivantes sont appliquées.
+          expect(await version3.getVersion(), versionSchema);
           expect(
             (await version3.query('titres')).single['nom'],
             'Titre existant',
@@ -228,6 +229,125 @@ void main() {
       }
     },
   );
+
+  test(
+    "la migration 3 → 4 conserve les données et ajoute les nouvelles colonnes",
+    () async {
+      final dossier = await Directory.systemTemp.createTemp('migration4_test_');
+      final chemin = p.join(dossier.path, 'version3.db');
+      try {
+        final version3 = await databaseFactoryFfi.openDatabase(
+          chemin,
+          options: OpenDatabaseOptions(
+            version: 3,
+            onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+            onCreate: (db, version) => appliquerMigrations(db, 0, 3),
+          ),
+        );
+        final idSource = await version3.insert('sources', <String, Object?>{
+          'nom': 'MangaDex',
+          'url_base': 'https://mangadex.org',
+          'type_source': 'mangaDex',
+        });
+        final idTitre = await version3.insert('titres', <String, Object?>{
+          'id_source': idSource,
+          'url_titre': 'https://mangadex.org/title/abc',
+          'nom': 'Titre existant',
+          'type_titre': 'manga',
+        });
+        final idChapitre = await version3.insert('chapitres', <String, Object?>{
+          'id_titre': idTitre,
+          'url_chapitre': 'https://mangadex.org/chapter/1',
+          'nom': 'Chapitre 1',
+          'numero': 1.0,
+          'langue': 'en',
+          'est_lu': 1,
+          'est_telecharge': 1,
+        });
+        await version3.insert('telechargements', <String, Object?>{
+          'id_chapitre': idChapitre,
+          'statut': 'termine',
+          'date_ajout': 1,
+          'date_maj': 2,
+        });
+        await version3.insert('parametres', <String, Object?>{
+          'cle': 'langue',
+          'valeur': 'fr',
+        });
+        await version3.close();
+
+        final version4 = await ouvrirBaseDeDonnees(
+          chemin: chemin,
+          fabrique: databaseFactoryFfi,
+        );
+        try {
+          expect(await version4.getVersion(), 4);
+          final chapitre = (await version4.query('chapitres')).single;
+          expect(chapitre['nom'], 'Chapitre 1');
+          expect(chapitre['est_lu'], 1);
+          expect(chapitre['est_telecharge'], 1);
+          // Les lignes existantes reçoivent NULL : chemin non enregistré
+          // (repli sur le calcul) et aucune suppression prévue.
+          expect(chapitre.containsKey('nom_archive'), isTrue);
+          expect(chapitre['nom_archive'], isNull);
+          expect(chapitre['date_suppression_prevue'], isNull);
+          final titre = (await version4.query('titres')).single;
+          expect(titre['nom'], 'Titre existant');
+          expect(titre.containsKey('langues_preferees'), isTrue);
+          expect(titre['langues_preferees'], isNull);
+          expect(
+            (await version4.query('telechargements')).single['statut'],
+            'termine',
+          );
+          expect((await version4.query('parametres')).single['valeur'], 'fr');
+          expect(await version4.query('listes'), hasLength(2));
+
+          final index = await version4.rawQuery(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            'AND name IN (?, ?)',
+            <Object?>[
+              'index_chapitres_nom_archive',
+              'index_chapitres_suppression_prevue',
+            ],
+          );
+          expect(index, hasLength(2));
+        } finally {
+          await version4.close();
+        }
+      } finally {
+        await dossier.delete(recursive: true);
+      }
+    },
+  );
+
+  test('nom_archive est unique, mais plusieurs NULL sont permis', () async {
+    final idSource = await base.insert('sources', <String, Object?>{
+      'nom': 'MangaDex',
+      'url_base': 'https://mangadex.org',
+      'type_source': 'mangaDex',
+    });
+    final idTitre = await base.insert('titres', <String, Object?>{
+      'id_source': idSource,
+      'url_titre': 'https://mangadex.org/title/abc',
+      'nom': 'Titre',
+      'type_titre': 'manga',
+    });
+    Map<String, Object?> chapitre(int n, String? nomArchive) =>
+        <String, Object?>{
+          'id_titre': idTitre,
+          'url_chapitre': 'https://mangadex.org/chapter/$n',
+          'nom': 'Chapitre $n',
+          'numero': n.toDouble(),
+          'nom_archive': nomArchive,
+        };
+    await base.insert('chapitres', chapitre(1, null));
+    await base.insert('chapitres', chapitre(2, null));
+    await base.insert('chapitres', chapitre(3, 'manga/Titre/ch3.zip'));
+    await expectLater(
+      base.insert('chapitres', chapitre(4, 'manga/Titre/ch3.zip')),
+      throwsA(isA<DatabaseException>()),
+    );
+  });
 
   test('parametres : la clé est unique et la valeur obligatoire', () async {
     await base.insert('parametres', <String, Object?>{

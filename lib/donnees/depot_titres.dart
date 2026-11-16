@@ -42,8 +42,9 @@ class DepotTitres {
   /// sont réutilisées. `null` laisse les catégories actuelles inchangées ; une
   /// liste vide les retire toutes.
   ///
-  /// Lors d'une mise à jour, `date_derniere_verification` n'est pas modifiée :
-  /// elle n'est écrite que par [enregistrerDateVerification].
+  /// Lors d'une mise à jour, `date_derniere_verification` et
+  /// `langues_preferees` ne sont pas modifiées : elles ne sont écrites que
+  /// par [enregistrerDateVerification] et [enregistrerLanguesPreferees].
   ///
   /// Tout se fait dans une seule transaction : en cas d'erreur, rien n'est
   /// écrit. Lève une [ErreurBaseDeDonnees] si [Titre.idSource] est absent ou
@@ -177,11 +178,19 @@ class DepotTitres {
 
     final ligne = titre.versMap()..remove('id');
     if (id == null) {
+      // Insertion : les langues éventuellement fournies sont gardées,
+      // normalisées comme dans enregistrerLanguesPreferees.
+      ligne['langues_preferees'] = normaliserLanguesPreferees(
+        titre.languesPreferees,
+      );
       return txn.insert('titres', ligne);
     }
-    // Mise à jour : la date de vérification a sa propre méthode. Un Titre
-    // reconstruit par une source (date à null) ne doit pas l'effacer.
-    ligne.remove('date_derniere_verification');
+    // Mise à jour : la date de vérification et les langues préférées ont
+    // leur propre méthode. Un Titre reconstruit par une source (valeurs à
+    // null) ne doit pas les effacer : les langues sont un choix du client.
+    ligne
+      ..remove('date_derniere_verification')
+      ..remove('langues_preferees');
     final modifiees = await txn.update(
       'titres',
       ligne,
@@ -286,6 +295,58 @@ class DepotTitres {
       where: 'id = ?',
       whereArgs: <Object?>[idTitre],
     );
+  }
+
+  /// Enregistre les langues favorites propres à un titre, sans toucher aux
+  /// autres colonnes ; `null` (ou une liste vide après nettoyage) revient au
+  /// réglage général.
+  ///
+  /// La valeur est normalisée par [normaliserLanguesPreferees] (`" FR, en,fr"`
+  /// → `"fr,en"`). Renvoie `false` si le titre n'existe pas. Lève une
+  /// [ArgumentError] si un code contient autre chose que des lettres, des
+  /// chiffres ou des tirets.
+  Future<bool> enregistrerLanguesPreferees(int idTitre, String? langues) async {
+    final modifiees = await _baseDeDonnees.update(
+      'titres',
+      <String, Object?>{
+        'langues_preferees': normaliserLanguesPreferees(langues),
+      },
+      where: 'id = ?',
+      whereArgs: <Object?>[idTitre],
+    );
+    return modifiees > 0;
+  }
+
+  // Un code de langue : lettres minuscules, chiffres et tirets (`pt-br`).
+  static final RegExp _codeLangue = RegExp(r'^[a-z0-9-]+$');
+
+  /// Normalise une liste de langues séparées par des virgules : espaces
+  /// retirés, minuscules, éléments vides et doublons supprimés (le premier
+  /// gardé, l'ordre de préférence est conservé). Renvoie `null` si rien ne
+  /// reste.
+  ///
+  /// Lève une [ArgumentError] si un code contient autre chose que des
+  /// lettres, des chiffres ou des tirets.
+  static String? normaliserLanguesPreferees(String? langues) {
+    if (langues == null) {
+      return null;
+    }
+    final codes = <String>{};
+    for (final brut in langues.split(',')) {
+      final code = brut.trim().toLowerCase();
+      if (code.isEmpty) {
+        continue;
+      }
+      if (!_codeLangue.hasMatch(code)) {
+        throw ArgumentError.value(
+          langues,
+          'langues',
+          'code de langue invalide : « $code »',
+        );
+      }
+      codes.add(code);
+    }
+    return codes.isEmpty ? null : codes.join(',');
   }
 
   /// Supprime un titre. Ses chapitres, titres alternatifs, appartenances aux

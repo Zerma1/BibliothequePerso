@@ -7,6 +7,7 @@ import '../modeles/constantes.dart';
 import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/outils_modeles.dart';
 import '../modeles/telechargement.dart';
+import 'depot_chapitres.dart' show enregistrerArchiveChapitre;
 
 /// Fonction qui renvoie l'heure courante ; injectable pour les tests.
 typedef Horloge = DateTime Function();
@@ -202,6 +203,57 @@ class DepotTelechargements {
     return lignes.isEmpty ? null : Telechargement.depuisMap(lignes.first);
   }
 
+  /// Réserve le prochain téléchargement à lancer : prend le plus ancien « en
+  /// attente », le passe « en cours » (avec `date_maj` à maintenant) et le
+  /// renvoie ; `null` s'il n'y a plus rien en attente.
+  ///
+  /// Sûr entre plusieurs isolats ou connexions qui traitent la même file
+  /// (sur Android : l'application et la tâche de fond). La réservation est un
+  /// `UPDATE … WHERE id = ? AND statut = 'en_attente'` : SQLite l'exécute de
+  /// façon atomique, donc un seul appelant obtient « 1 ligne modifiée » pour
+  /// un même téléchargement. Si un autre appelant l'a pris entre la lecture
+  /// et la mise à jour (0 ligne modifiée), on passe au suivant. La boucle se
+  /// termine toujours : une ligne perdue n'est plus « en attente » et ne
+  /// revient pas dans la lecture suivante.
+  ///
+  /// Pas de transaction : une transaction différée (`BEGIN`) entre deux
+  /// connexions peut échouer en « base verrouillée » au moment d'écrire,
+  /// alors que l'UPDATE conditionnel seul suffit à garantir l'exclusivité.
+  /// `UPDATE … RETURNING` n'est pas utilisé : il exige SQLite 3.35, absent
+  /// des anciennes versions d'Android.
+  Future<Telechargement?> reserverProchain() async {
+    try {
+      while (true) {
+        final candidat = await chargerProchainEnAttente();
+        if (candidat == null) {
+          return null;
+        }
+        final modifiees = await _baseDeDonnees.update(
+          _table,
+          <String, Object?>{
+            'statut': StatutTelechargement.enCours.valeurSql,
+            'message_erreur': null,
+            'date_maj': _maintenant(),
+          },
+          where: 'id = ? AND statut = ?',
+          whereArgs: <Object?>[
+            candidat.id,
+            StatutTelechargement.enAttente.valeurSql,
+          ],
+        );
+        if (modifiees == 1) {
+          // Relecture : renvoie l'état réellement enregistré (date_maj).
+          return await chargerTelechargement(candidat.id!);
+        }
+      }
+    } on DatabaseException catch (erreur) {
+      throw ErreurBaseDeDonnees(
+        "Impossible de réserver le prochain téléchargement.",
+        cause: erreur,
+      );
+    }
+  }
+
   /// Change le statut d'un téléchargement et met à jour `date_maj`.
   ///
   /// - [StatutTelechargement.echec] : [messageErreur] est enregistré.
@@ -210,13 +262,18 @@ class DepotTelechargements {
   ///   0, car une archive interrompue est réécrite depuis le début.
   /// - [StatutTelechargement.termine] : `chapitres.est_telecharge` passe aussi
   ///   à 1, dans la même transaction, pour que la base ne dise jamais
-  ///   « terminé » sans que le chapitre soit marqué téléchargé.
+  ///   « terminé » sans que le chapitre soit marqué téléchargé. Si
+  ///   [nomArchive] est donné (`EcritureChapitre.nomArchive`), il est
+  ///   enregistré dans `chapitres.nom_archive` dans la même transaction
+  ///   (voir `enregistrerArchiveChapitre`) ; il est ignoré pour les autres
+  ///   statuts.
   ///
   /// Renvoie `false` si le téléchargement n'existe pas.
   Future<bool> enregistrerStatut(
     int id,
     StatutTelechargement statut, {
     String? messageErreur,
+    String? nomArchive,
   }) async {
     final valeurs = <String, Object?>{
       'statut': statut.valeurSql,
@@ -237,7 +294,20 @@ class DepotTelechargements {
         if (modifiees == 0) {
           return false;
         }
-        if (statut == StatutTelechargement.termine) {
+        if (statut == StatutTelechargement.termine && nomArchive != null) {
+          final lignes = await txn.query(
+            _table,
+            columns: <String>['id_chapitre'],
+            where: 'id = ?',
+            whereArgs: <Object?>[id],
+            limit: 1,
+          );
+          await enregistrerArchiveChapitre(
+            txn,
+            lignes.first.lireEntier('id_chapitre', 'Telechargement'),
+            nomArchive,
+          );
+        } else if (statut == StatutTelechargement.termine) {
           await txn.rawUpdate(
             'UPDATE chapitres SET est_telecharge = ? WHERE id = '
             '(SELECT id_chapitre FROM telechargements WHERE id = ?)',
@@ -283,24 +353,49 @@ class DepotTelechargements {
     return modifiees > 0;
   }
 
-  /// Reprise après interruption : remet tous les téléchargements « en cours »
-  /// en « en attente », progression à 0, et renvoie leur nombre.
+  /// Reprise après interruption : remet les téléchargements « en cours » en
+  /// « en attente », progression à 0, et renvoie leur nombre.
   ///
-  /// À appeler au démarrage, avant de relancer la file : un statut « en
-  /// cours » à l'ouverture signifie que l'application a été fermée pendant
-  /// le téléchargement. Leurs `.zip.part` sont à supprimer avec
-  /// `StockageTelechargements.nettoyerFichiersPartiels()`.
-  Future<int> reprendreApresInterruption() {
+  /// - Sans [ancienneteMinimale] : **tous** les « en cours » sont repris
+  ///   (cas d'un seul processus : au démarrage, un « en cours » signifie que
+  ///   l'application a été fermée pendant le téléchargement).
+  /// - Avec [ancienneteMinimale] : seuls ceux dont `date_maj` est plus
+  ///   ancienne que maintenant moins ce délai (strictement) sont repris.
+  ///   Sur Android, un autre isolat (application ou tâche de fond) peut être
+  ///   en train de télécharger : son `date_maj` est rafraîchi à chaque page
+  ///   par [enregistrerProgression], il n'est donc pas « vieux » et n'est
+  ///   pas volé. Le délai doit dépasser largement le temps d'une page.
+  ///
+  /// Les `.zip.part` correspondants sont à supprimer avec
+  /// `StockageTelechargements.nettoyerFichiersPartiels()`, avec le même
+  /// délai.
+  Future<int> reprendreApresInterruption({Duration? ancienneteMinimale}) {
+    if (ancienneteMinimale != null && ancienneteMinimale.isNegative) {
+      throw ArgumentError.value(ancienneteMinimale, 'ancienneteMinimale');
+    }
+    final maintenant = _horloge();
+    final valeurs = <String, Object?>{
+      'statut': StatutTelechargement.enAttente.valeurSql,
+      'nombre_pages_faites': 0,
+      'message_erreur': null,
+      'date_maj': dateVersMillisecondes(maintenant),
+    };
+    if (ancienneteMinimale == null) {
+      return _baseDeDonnees.update(
+        _table,
+        valeurs,
+        where: 'statut = ?',
+        whereArgs: <Object?>[StatutTelechargement.enCours.valeurSql],
+      );
+    }
+    final limite = dateVersMillisecondes(
+      maintenant.subtract(ancienneteMinimale),
+    );
     return _baseDeDonnees.update(
       _table,
-      <String, Object?>{
-        'statut': StatutTelechargement.enAttente.valeurSql,
-        'nombre_pages_faites': 0,
-        'message_erreur': null,
-        'date_maj': _maintenant(),
-      },
-      where: 'statut = ?',
-      whereArgs: <Object?>[StatutTelechargement.enCours.valeurSql],
+      valeurs,
+      where: 'statut = ? AND date_maj < ?',
+      whereArgs: <Object?>[StatutTelechargement.enCours.valeurSql, limite],
     );
   }
 

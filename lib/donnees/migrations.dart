@@ -22,6 +22,7 @@ const List<Migration> migrations = <Migration>[
   _migration1,
   _migration2,
   _migration3,
+  _migration4,
 ];
 
 /// Version actuelle du schéma (nombre de migrations).
@@ -245,4 +246,53 @@ Future<void> _migration3(DatabaseExecutor executeur) async {
       valeur TEXT NOT NULL
     )
     ''');
+}
+
+/// Migration 4 : chemin enregistré de l'archive hors-ligne, suppression
+/// automatique planifiée des chapitres téléchargés et langues favorites
+/// propres à chaque titre.
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration4(DatabaseExecutor executeur) async {
+  const instructions = <String>[
+    // nom_archive : chemin RELATIF au dossier racine des téléchargements
+    // (séparateur « / »), NULL si le chapitre n'est pas téléchargé ou l'a été
+    // avant cette migration (le chemin est alors recalculé). Relatif pour que
+    // la base reste valable si le client déplace le dossier racine.
+    // ADD COLUMN sans DEFAULT : les lignes existantes reçoivent NULL, ce qui
+    // est exactement « chemin non enregistré ».
+    'ALTER TABLE chapitres ADD COLUMN nom_archive TEXT',
+    // date_suppression_prevue : millisecondes UTC, NULL = aucune suppression
+    // prévue (comme les autres dates du schéma).
+    'ALTER TABLE chapitres ADD COLUMN date_suppression_prevue INTEGER',
+    // Index UNIQUE : deux chapitres ne peuvent jamais désigner la même
+    // archive (sinon supprimer l'un effacerait le fichier de l'autre).
+    // SQLite considère les NULL comme distincts : les chapitres non
+    // téléchargés ne sont pas concernés. L'index sert aussi à retrouver le
+    // chapitre d'une archive.
+    // LIMITE : comparaison binaire (sensible à la casse), comme les noms
+    // calculés ; Windows ignore la casse des fichiers, mais la couche
+    // StockageTelechargements choisit un nom libre sur le disque lui-même.
+    'CREATE UNIQUE INDEX index_chapitres_nom_archive '
+        'ON chapitres (nom_archive)',
+    // Index partiel : seules les quelques lignes avec une suppression prévue
+    // sont indexées (la grande majorité des chapitres a NULL). Il couvre la
+    // recherche des suppressions échues (date_suppression_prevue <= ?), faite
+    // à chaque démarrage et à chaque passage de la tâche de fond, sans
+    // parcourir toute la table. Index partiels : SQLite 3.8.0+, disponible
+    // sur tous les Android visés.
+    'CREATE INDEX index_chapitres_suppression_prevue '
+        'ON chapitres (date_suppression_prevue) '
+        'WHERE date_suppression_prevue IS NOT NULL',
+    // langues_preferees : codes de langue séparés par des virgules, par ordre
+    // de préférence (« fr,en »). NULL = réglage général. Une simple colonne
+    // texte plutôt qu'une table : la liste est courte, toujours lue en
+    // entier avec le titre, et jamais filtrée en SQL. Pas d'index : aucune
+    // recherche ne porte sur cette colonne.
+    'ALTER TABLE titres ADD COLUMN langues_preferees TEXT',
+  ];
+
+  for (final instruction in instructions) {
+    await executeur.execute(instruction);
+  }
 }

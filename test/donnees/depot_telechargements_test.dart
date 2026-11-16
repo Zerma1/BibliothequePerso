@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:bibliotheque_perso/donnees/base_de_donnees.dart';
 import 'package:bibliotheque_perso/donnees/depot_chapitres.dart';
 import 'package:bibliotheque_perso/donnees/depot_sources.dart';
 import 'package:bibliotheque_perso/donnees/depot_telechargements.dart';
@@ -6,6 +9,7 @@ import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/erreur_base_de_donnees.dart';
 import 'package:bibliotheque_perso/modeles/telechargement.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'outils_tests_donnees.dart';
@@ -200,6 +204,30 @@ void main() {
     );
   });
 
+  test("le statut terminé enregistre aussi le nomArchive donné", () async {
+    final telechargement = await depot.ajouterEnFile(idsChapitres[2]);
+    await depot.enregistrerStatut(
+      telechargement.id!,
+      StatutTelechargement.termine,
+      nomArchive: 'manga/Titre/ch3.en.zip',
+    );
+    final chapitre = (await depotChapitres.chargerChapitre(idsChapitres[2]))!;
+    expect(chapitre.estTelecharge, isTrue);
+    expect(chapitre.nomArchive, 'manga/Titre/ch3.en.zip');
+
+    // Ignoré pour un autre statut.
+    final autre = await depot.ajouterEnFile(idsChapitres[3]);
+    await depot.enregistrerStatut(
+      autre.id!,
+      StatutTelechargement.echec,
+      nomArchive: 'manga/Titre/ch4.en.zip',
+    );
+    expect(
+      (await depotChapitres.chargerChapitre(idsChapitres[3]))!.nomArchive,
+      isNull,
+    );
+  });
+
   test('enregistrerProgression met à jour les compteurs', () async {
     final id = (await depot.ajouterEnFile(idsChapitres[0])).id!;
     expect(
@@ -255,6 +283,181 @@ void main() {
     expect((await depot.chargerProchainEnAttente())!.id, file[0].id);
     expect(await depot.reprendreApresInterruption(), 0);
   });
+
+  test(
+    "reprise avec ancienneteMinimale : seuls les en_cours trop vieux",
+    () async {
+      await depot.ajouterPlusieursEnFile(idsChapitres);
+      final file = await depot.chargerFile();
+      // Horloge : chaque lecture avance d'une seconde.
+      await depot.enregistrerStatut(file[0].id!, StatutTelechargement.enCours);
+      final vieux = (await depot.chargerTelechargement(file[0].id!))!.dateMaj!;
+      instant = instant.add(const Duration(minutes: 10));
+      await depot.enregistrerStatut(file[1].id!, StatutTelechargement.enCours);
+      await depot.enregistrerProgression(file[1].id!, nombrePagesFaites: 3);
+
+      // Prochaine lecture de l'horloge : vieux + 10 min + 3 s environ.
+      expect(
+        await depot.reprendreApresInterruption(
+          ancienneteMinimale: const Duration(minutes: 5),
+        ),
+        1,
+      );
+      final apres = await depot.chargerFile();
+      expect(apres[0].statut, StatutTelechargement.enAttente);
+      expect(apres[0].dateMaj!.isAfter(vieux), isTrue);
+      expect(apres[1].statut, StatutTelechargement.enCours);
+      expect(apres[1].nombrePagesFaites, 3);
+
+      // Délai plus long que l'âge du second : il reste en cours.
+      expect(
+        await depot.reprendreApresInterruption(
+          ancienneteMinimale: const Duration(hours: 1),
+        ),
+        0,
+      );
+      // Délai nul : tout « en cours » antérieur à maintenant est repris.
+      expect(
+        await depot.reprendreApresInterruption(
+          ancienneteMinimale: Duration.zero,
+        ),
+        1,
+      );
+      expect(
+        () => depot.reprendreApresInterruption(
+          ancienneteMinimale: const Duration(seconds: -1),
+        ),
+        throwsArgumentError,
+      );
+    },
+  );
+
+  test(
+    "reserverProchain prend les en_attente dans l'ordre de la file",
+    () async {
+      expect(await depot.reserverProchain(), isNull);
+      await depot.ajouterPlusieursEnFile(<int>[
+        idsChapitres[0],
+        idsChapitres[1],
+      ]);
+      final file = await depot.chargerFile();
+      await depot.enregistrerStatut(file[0].id!, StatutTelechargement.echec);
+      await depot.ajouterEnFile(idsChapitres[2]);
+
+      final premier = await depot.reserverProchain();
+      expect(premier!.idChapitre, idsChapitres[1]);
+      expect(premier.statut, StatutTelechargement.enCours);
+      expect(premier.dateMaj!.isAfter(premier.dateAjout!), isTrue);
+      expect(
+        (await depot.chargerTelechargement(premier.id!))!.statut,
+        StatutTelechargement.enCours,
+      );
+
+      final second = await depot.reserverProchain();
+      expect(second!.idChapitre, idsChapitres[2]);
+      // L'échec n'est jamais réservé, et la file est maintenant vide.
+      expect(await depot.reserverProchain(), isNull);
+      expect(
+        (await depot.chargerTelechargement(file[0].id!))!.statut,
+        StatutTelechargement.echec,
+      );
+    },
+  );
+
+  test(
+    "deux réservations simultanées sur la même base : une seule réussit",
+    () async {
+      await depot.ajouterEnFile(idsChapitres[0]);
+      final autreDepot = DepotTelechargements(base, horloge: horloge);
+      final resultats = await Future.wait(<Future<Telechargement?>>[
+        depot.reserverProchain(),
+        autreDepot.reserverProchain(),
+      ]);
+      expect(resultats.whereType<Telechargement>(), hasLength(1));
+      expect(resultats.where((r) => r == null), hasLength(1));
+      expect(
+        (await depot.chargerFile()).single.statut,
+        StatutTelechargement.enCours,
+      );
+    },
+  );
+
+  test(
+    "réservations concurrentes : chaque téléchargement est pris une fois",
+    () async {
+      await depot.ajouterPlusieursEnFile(idsChapitres);
+      final autreDepot = DepotTelechargements(base, horloge: horloge);
+      final pris = <int>[];
+      Future<void> travailleur(DepotTelechargements d) async {
+        while (true) {
+          final t = await d.reserverProchain();
+          if (t == null) {
+            return;
+          }
+          pris.add(t.id!);
+        }
+      }
+
+      await Future.wait(<Future<void>>[
+        travailleur(depot),
+        travailleur(autreDepot),
+      ]);
+      expect(pris, hasLength(idsChapitres.length));
+      expect(pris.toSet(), hasLength(idsChapitres.length));
+    },
+  );
+
+  test(
+    "deux connexions sur le même fichier (deux isolats) : une seule réussit",
+    () async {
+      final dossier = await Directory.systemTemp.createTemp('reservation_');
+      final chemin = p.join(dossier.path, 'base.db');
+      final premiere = await ouvrirBaseDeDonnees(
+        chemin: chemin,
+        fabrique: databaseFactoryFfi,
+      );
+      // Seconde connexion indépendante, comme celle d'un autre isolat.
+      final seconde = await databaseFactoryFfi.openDatabase(
+        chemin,
+        options: OpenDatabaseOptions(singleInstance: false),
+      );
+      try {
+        final idSource = (await DepotSources(
+          premiere,
+        ).enregistrerSource(sourceMangaDex)).id!;
+        final id = (await DepotTitres(
+          premiere,
+        ).enregistrerTitre(titreReference(idSource))).id!;
+        await DepotChapitres(premiere).enregistrerChapitres(<Chapitre>[
+          Chapitre(
+            idTitre: id,
+            urlChapitre: 'https://mangadex.org/chapter/1',
+            nom: 'Chapitre 1',
+            numero: 1,
+            langue: 'en',
+          ),
+        ]);
+        final idChapitre = (await DepotChapitres(premiere).chargerChapitres(id))
+            .single
+            .id!;
+        await DepotTelechargements(premiere).ajouterEnFile(idChapitre);
+
+        final resultats = await Future.wait(<Future<Telechargement?>>[
+          DepotTelechargements(premiere).reserverProchain(),
+          DepotTelechargements(seconde).reserverProchain(),
+        ]);
+        expect(resultats.whereType<Telechargement>(), hasLength(1));
+        expect(
+          (await DepotTelechargements(seconde).chargerFile()).single.statut,
+          StatutTelechargement.enCours,
+        );
+      } finally {
+        await seconde.close();
+        await premiere.close();
+        await dossier.delete(recursive: true);
+      }
+    },
+  );
 
   test('suppression d\'un téléchargement et des terminés', () async {
     await depot.ajouterPlusieursEnFile(idsChapitres);

@@ -17,6 +17,8 @@ class Chapitre {
     this.estLu = false,
     this.estTelecharge = false,
     this.dateDetection,
+    this.nomArchive,
+    this.dateSuppressionPrevue,
   });
 
   static const String _entite = 'Chapitre';
@@ -57,6 +59,19 @@ class Chapitre {
   /// signaler les nouveaux chapitres.
   final DateTime? dateDetection;
 
+  /// Chemin de l'archive hors-ligne **relatif** au dossier racine des
+  /// téléchargements, avec `/` comme séparateur
+  /// (`manga/One Punch Man/ch1.en.zip`), ou `null` si le chapitre n'est pas
+  /// téléchargé (ou l'a été avant que ce chemin soit enregistré).
+  ///
+  /// Enregistré à la fin du téléchargement : le chemin reste valable même si
+  /// le titre est renommé ou si la langue par défaut de la source change.
+  final String? nomArchive;
+
+  /// Date (UTC) à laquelle l'archive hors-ligne doit être supprimée
+  /// automatiquement, ou `null` si aucune suppression n'est prévue.
+  final DateTime? dateSuppressionPrevue;
+
   /// Convertit le chapitre en ligne SQLite (colonnes en `snake_case`).
   Map<String, Object?> versMap() {
     return <String, Object?>{
@@ -70,6 +85,8 @@ class Chapitre {
       'est_lu': booleenVersEntier(estLu),
       'est_telecharge': booleenVersEntier(estTelecharge),
       'date_detection': dateVersMillisecondes(dateDetection),
+      'nom_archive': nomArchive,
+      'date_suppression_prevue': dateVersMillisecondes(dateSuppressionPrevue),
     };
   }
 
@@ -88,13 +105,25 @@ class Chapitre {
       estLu: map.lireBooleen('est_lu', _entite),
       estTelecharge: map.lireBooleen('est_telecharge', _entite),
       dateDetection: map.lireDateOptionnelle('date_detection', _entite),
+      nomArchive: map.lireTexteOptionnel('nom_archive', _entite),
+      dateSuppressionPrevue: map.lireDateOptionnelle(
+        'date_suppression_prevue',
+        _entite,
+      ),
     );
   }
 
   /// Renvoie une copie avec les champs donnés remplacés.
   ///
   /// LIMITE : un champ nullable ne peut pas être remis à `null` par cette
-  /// méthode.
+  /// méthode (un argument `null` signifie « inchangé »), sauf :
+  /// - [nomArchive] : `effacerNomArchive: true` le remet à `null` ;
+  /// - [dateSuppressionPrevue] : `effacerDateSuppressionPrevue: true` le
+  ///   remet à `null` (suppression annulée).
+  ///
+  /// Un indicateur `effacer…` l'emporte sur la valeur donnée pour le même
+  /// champ. En base, l'effacement se fait par `DepotChapitres`
+  /// (`enregistrerArchive(id, null)`, `planifierSuppression(id, null)`).
   Chapitre copierAvec({
     int? id,
     int? idTitre,
@@ -106,6 +135,10 @@ class Chapitre {
     bool? estLu,
     bool? estTelecharge,
     DateTime? dateDetection,
+    String? nomArchive,
+    DateTime? dateSuppressionPrevue,
+    bool effacerNomArchive = false,
+    bool effacerDateSuppressionPrevue = false,
   }) {
     return Chapitre(
       id: id ?? this.id,
@@ -118,6 +151,10 @@ class Chapitre {
       estLu: estLu ?? this.estLu,
       estTelecharge: estTelecharge ?? this.estTelecharge,
       dateDetection: dateDetection ?? this.dateDetection,
+      nomArchive: effacerNomArchive ? null : nomArchive ?? this.nomArchive,
+      dateSuppressionPrevue: effacerDateSuppressionPrevue
+          ? null
+          : dateSuppressionPrevue ?? this.dateSuppressionPrevue,
     );
   }
 
@@ -134,7 +171,9 @@ class Chapitre {
             other.datePublication == datePublication &&
             other.estLu == estLu &&
             other.estTelecharge == estTelecharge &&
-            other.dateDetection == dateDetection;
+            other.dateDetection == dateDetection &&
+            other.nomArchive == nomArchive &&
+            other.dateSuppressionPrevue == dateSuppressionPrevue;
   }
 
   @override
@@ -149,10 +188,13 @@ class Chapitre {
     estLu,
     estTelecharge,
     dateDetection,
+    nomArchive,
+    dateSuppressionPrevue,
   );
 
   @override
   String toString() =>
       'Chapitre(id: $id, idTitre: $idTitre, numero: $numero, nom: $nom, '
-      'langue: $langue, estLu: $estLu, estTelecharge: $estTelecharge)';
+      'langue: $langue, estLu: $estLu, estTelecharge: $estTelecharge, '
+      'nomArchive: $nomArchive)';
 }

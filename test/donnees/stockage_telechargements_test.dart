@@ -390,7 +390,13 @@ void main() {
       await premiere.ajouterPage(image(2), extension: 'jpg');
       await premiere.finaliser();
 
-      final seconde = await stockage.ouvrirEcriture(titreTest, chapitreTest);
+      // Re-téléchargement : le chapitre porte le nom enregistré à la fin du
+      // premier téléchargement, réutilisé tel quel.
+      final enregistre = chapitreTest.copierAvec(
+        nomArchive: premiere.nomArchive,
+      );
+      final seconde = await stockage.ouvrirEcriture(titreTest, enregistre);
+      expect(seconde.nomArchive, premiere.nomArchive);
       // Pendant la réécriture, l'ancienne archive complète reste lisible.
       expect(await stockage.compterPages(titreTest, chapitreTest), 2);
       await seconde.ajouterPage(image(5), extension: 'png');
@@ -460,5 +466,198 @@ void main() {
         expect(await stockage.compterPages(titreTest, chapitre(4)), 1);
       },
     );
+
+    test(
+      "nettoyage avec ancienneteMinimale : seuls les .part trop vieux",
+      () async {
+        final vieux = File(
+          '${stockage.cheminChapitre(titreTest, chapitre(1))}.part',
+        );
+        final recent = File(
+          '${stockage.cheminChapitre(titreTest, chapitre(2))}.part',
+        );
+        for (final fichier in <File>[vieux, recent]) {
+          await fichier.create(recursive: true);
+          await fichier.writeAsBytes(image(1, taille: 10));
+        }
+        await vieux.setLastModified(
+          DateTime.now().subtract(const Duration(hours: 2)),
+        );
+
+        expect(
+          await stockage.nettoyerFichiersPartiels(
+            ancienneteMinimale: const Duration(hours: 1),
+          ),
+          1,
+        );
+        expect(await vieux.exists(), isFalse);
+        // Le .part récent peut appartenir à un autre isolat : épargné.
+        expect(await recent.exists(), isTrue);
+
+        expect(
+          () => stockage.nettoyerFichiersPartiels(
+            ancienneteMinimale: const Duration(seconds: -1),
+          ),
+          throwsArgumentError,
+        );
+        // Sans délai : comportement d'origine, tout est nettoyé.
+        expect(await stockage.nettoyerFichiersPartiels(), 1);
+        expect(await recent.exists(), isFalse);
+      },
+    );
+  });
+
+  group('noms uniques et nomArchive', () {
+    final titreTest = titre('One Punch Man');
+
+    Chapitre oneshot(String id) => Chapitre(
+      urlChapitre: 'https://exemple.org/oneshot/$id',
+      nom: 'Oneshot $id',
+      numero: 0,
+      langue: 'fr',
+    );
+
+    Future<EcritureChapitre> ecrire(Chapitre c, int graine) async {
+      final ecriture = await stockage.ouvrirEcriture(titreTest, c);
+      await ecriture.ajouterPage(image(graine), extension: 'jpg');
+      await ecriture.finaliser();
+      return ecriture;
+    }
+
+    test('noms numérotés : avec et sans langue', () {
+      expect(
+        StockageTelechargements.nomFichierNumerote(chapitre(1, langue: 'fr'), 1),
+        'ch1.fr.zip',
+      );
+      expect(
+        StockageTelechargements.nomFichierNumerote(chapitre(1, langue: 'fr'), 2),
+        'ch1.fr.2.zip',
+      );
+      // Sans langue : « _ » pour ne pas confondre avec le chapitre 1.2.
+      expect(
+        StockageTelechargements.nomFichierNumerote(chapitre(1, langue: ''), 3),
+        'ch1_3.zip',
+      );
+      expect(
+        () => StockageTelechargements.nomFichierNumerote(chapitre(1), 0),
+        throwsArgumentError,
+      );
+    });
+
+    test('deux oneshots (numéro 0) donnent deux archives distinctes', () async {
+      final premier = await ecrire(oneshot('a'), 1);
+      final second = await ecrire(oneshot('b'), 2);
+      expect(premier.nomArchive, 'manga/One Punch Man/ch0.fr.zip');
+      expect(second.nomArchive, 'manga/One Punch Man/ch0.fr.2.zip');
+      expect(second.cheminFinal, isNot(premier.cheminFinal));
+      // Chaque archive garde son contenu et se lit par son nomArchive.
+      expect(await stockage.lirePageArchive(premier.nomArchive, 0), image(1));
+      expect(await stockage.lirePageArchive(second.nomArchive, 0), image(2));
+      final troisieme = await ecrire(oneshot('c'), 3);
+      expect(troisieme.nomArchive, endsWith('ch0.fr.3.zip'));
+    });
+
+    test("une écriture en cours d'un autre chapitre réserve le nom", () async {
+      final enCours = await stockage.ouvrirEcriture(titreTest, oneshot('a'));
+      final autre = await stockage.ouvrirEcriture(titreTest, oneshot('b'));
+      expect(enCours.nomArchive, endsWith('ch0.fr.zip'));
+      expect(autre.nomArchive, endsWith('ch0.fr.2.zip'));
+      await autre.abandonner();
+      await enCours.abandonner();
+      // Une fois libéré, le nom de base est de nouveau attribué.
+      final nouvelle = await stockage.ouvrirEcriture(titreTest, oneshot('c'));
+      expect(nouvelle.nomArchive, endsWith('ch0.fr.zip'));
+      await nouvelle.abandonner();
+    });
+
+    test('un .part présent sur le disque (autre isolat) réserve le nom', () async {
+      final etranger = File(
+        p.join(racine, 'manga', 'One Punch Man', 'ch0.fr.zip.part'),
+      );
+      await etranger.create(recursive: true);
+      final ecriture = await stockage.ouvrirEcriture(titreTest, oneshot('a'));
+      expect(ecriture.nomArchive, endsWith('ch0.fr.2.zip'));
+      await ecriture.abandonner();
+      expect(await etranger.exists(), isTrue);
+    });
+
+    test('le nomArchive enregistré survit au renommage du titre', () async {
+      final ecriture = await ecrire(oneshot('a'), 7);
+      final enregistre = oneshot('a').copierAvec(
+        nomArchive: ecriture.nomArchive,
+        langue: 'en',
+      );
+      final renomme = titre('One-Punch Man (nouveau nom)');
+      expect(await stockage.estTelecharge(renomme, enregistre), isTrue);
+      expect(await stockage.compterPages(renomme, enregistre), 1);
+      expect(await stockage.lirePage(renomme, enregistre, 0), image(7));
+      expect(
+        stockage.cheminChapitre(renomme, enregistre),
+        p.join(racine, 'manga', 'One Punch Man', 'ch0.fr.zip'),
+      );
+      expect(await stockage.supprimerChapitre(renomme, enregistre), isTrue);
+      expect(await stockage.existeArchive(ecriture.nomArchive), isFalse);
+    });
+
+    test('chapitre téléchargé sans nomArchive (avant migration 4) : '
+        'le nom calculé est réutilisé', () async {
+      await ecrire(chapitre(1), 1);
+      final ancien = chapitre(1).copierAvec(estTelecharge: true);
+      final reecriture = await stockage.ouvrirEcriture(titreTest, ancien);
+      expect(reecriture.nomArchive, 'manga/One Punch Man/ch1.en.zip');
+      await reecriture.ajouterPage(image(4), extension: 'jpg');
+      await reecriture.finaliser();
+      expect(await stockage.lirePage(titreTest, chapitre(1), 0), image(4));
+    });
+
+    test('lecture et suppression par nomArchive, texte compris', () async {
+      final roman = titre('Mushoku Tensei', type: TypeTitre.roman);
+      final ecriture = await stockage.ouvrirEcriture(roman, chapitre(1));
+      await ecriture.ajouterTexte('<p>Texte</p>');
+      await ecriture.finaliser();
+      expect(ecriture.nomArchive, 'roman/Mushoku Tensei/ch1.en.zip');
+      expect(await stockage.existeArchive(ecriture.nomArchive), isTrue);
+      expect(await stockage.lireTexteArchive(ecriture.nomArchive), '<p>Texte</p>');
+      expect(await stockage.compterPagesArchive(ecriture.nomArchive), 0);
+      expect(await stockage.supprimerArchive(ecriture.nomArchive), isTrue);
+      expect(await stockage.supprimerArchive(ecriture.nomArchive), isFalse);
+      expect(
+        await Directory(p.join(racine, 'roman', 'Mushoku Tensei')).exists(),
+        isFalse,
+      );
+    });
+
+    test('un nomArchive invalide est refusé sans toucher au disque', () async {
+      for (final invalide in <String>[
+        '../manga/x/ch1.zip',
+        'manga/../ch1.zip',
+        'manga/x/../ch1.zip',
+        r'manga\x\ch1.zip',
+        'C:/x/ch1.zip',
+        '/manga/x/ch1.zip',
+        'manga/x/ch1.txt',
+        'manga/x/.zip',
+        'manga/x.../ch1.zip',
+        'manga/x',
+        '',
+      ]) {
+        expect(
+          StockageTelechargements.estNomArchiveValide(invalide),
+          isFalse,
+          reason: invalide,
+        );
+        await expectLater(
+          stockage.lirePageArchive(invalide, 0),
+          throwsA(isA<ErreurStockage>()),
+          reason: invalide,
+        );
+      }
+      expect(
+        StockageTelechargements.estNomArchiveValide(
+          'manga/One Punch Man (MangaDex)/ch10.5.pt-br.2.zip',
+        ),
+        isTrue,
+      );
+    });
   });
 }

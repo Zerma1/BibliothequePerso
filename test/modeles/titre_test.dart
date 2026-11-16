@@ -108,6 +108,42 @@ void main() {
       expect(sansSource.copierAvec(idSource: 3).idSource, 3);
     });
 
+    test('languesPreferees : aller-retour, liste, égalité et effacement', () {
+      expect(titre.languesPreferees, isNull);
+      expect(titre.versMap()['langues_preferees'], isNull);
+      expect(titre.listeLanguesPreferees, isEmpty);
+
+      final perso = titre.copierAvec(languesPreferees: 'fr,en');
+      expect(perso.versMap()['langues_preferees'], 'fr,en');
+      expect(perso.listeLanguesPreferees, <String>['fr', 'en']);
+      expect(
+        Titre.depuisMap(
+          perso.versMap(),
+          titresAlternatifs: perso.titresAlternatifs,
+        ),
+        perso,
+      );
+      expect(perso, isNot(titre));
+      expect(perso.copierAvec(), perso);
+      expect(perso.copierAvec().hashCode, perso.hashCode);
+
+      // Retour au réglage général : l'indicateur l'emporte sur la valeur.
+      final general = perso.copierAvec(
+        languesPreferees: 'ja',
+        effacerLanguesPreferees: true,
+      );
+      expect(general.languesPreferees, isNull);
+      expect(general, titre);
+
+      // Liste tolérante aux espaces et éléments vides.
+      expect(
+        titre
+            .copierAvec(languesPreferees: ' fr , ,pt-br')
+            .listeLanguesPreferees,
+        <String>['fr', 'pt-br'],
+      );
+    });
+
     test('toString mentionne le nom', () {
       expect(titre.toString(), contains('Shinigami'));
     });

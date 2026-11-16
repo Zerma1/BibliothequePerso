@@ -51,6 +51,7 @@ class Titre {
     List<TitreAlternatif> titresAlternatifs = const <TitreAlternatif>[],
     this.dateDerniereVerification,
     this.nombreChapitresNonLus = 0,
+    this.languesPreferees,
   }) : titresAlternatifs = List<TitreAlternatif>.unmodifiable(
          titresAlternatifs,
        );
@@ -96,6 +97,27 @@ class Titre {
   /// Nombre de chapitres non lus, calculé par la requête de chargement.
   final int nombreChapitresNonLus;
 
+  /// Langues favorites propres à ce titre : codes ISO 639-1 (ou variantes
+  /// comme `pt-br`) séparés par des virgules, par ordre de préférence
+  /// (`fr,en`), ou `null` pour utiliser le réglage général.
+  ///
+  /// Choix du client : jamais écrasé par une ré-actualisation du titre
+  /// depuis le site (voir `DepotTitres.enregistrerLanguesPreferees`).
+  final String? languesPreferees;
+
+  /// [languesPreferees] découpées en liste (`fr,en` → `['fr', 'en']`), vide
+  /// si aucune langue n'est choisie pour ce titre.
+  List<String> get listeLanguesPreferees {
+    final valeur = languesPreferees;
+    if (valeur == null) {
+      return const <String>[];
+    }
+    return <String>[
+      for (final langue in valeur.split(','))
+        if (langue.trim().isNotEmpty) langue.trim(),
+    ];
+  }
+
   /// Convertit le titre en ligne de la table `titres`.
   ///
   /// [titresAlternatifs] et [nombreChapitresNonLus] sont exclus : ils vivent
@@ -114,6 +136,7 @@ class Titre {
       'date_derniere_verification': dateVersMillisecondes(
         dateDerniereVerification,
       ),
+      'langues_preferees': languesPreferees,
     };
   }
 
@@ -143,13 +166,16 @@ class Titre {
       ),
       nombreChapitresNonLus:
           map.lireEntierOptionnel('nombre_chapitres_non_lus', _entite) ?? 0,
+      languesPreferees: map.lireTexteOptionnel('langues_preferees', _entite),
     );
   }
 
   /// Renvoie une copie avec les champs donnés remplacés.
   ///
   /// LIMITE : un champ nullable ne peut pas être remis à `null` par cette
-  /// méthode (un argument `null` signifie « inchangé »).
+  /// méthode (un argument `null` signifie « inchangé »), sauf
+  /// [languesPreferees] : `effacerLanguesPreferees: true` le remet à `null`
+  /// (retour au réglage général) et l'emporte sur [languesPreferees].
   Titre copierAvec({
     int? id,
     int? idSource,
@@ -163,6 +189,8 @@ class Titre {
     List<TitreAlternatif>? titresAlternatifs,
     DateTime? dateDerniereVerification,
     int? nombreChapitresNonLus,
+    String? languesPreferees,
+    bool effacerLanguesPreferees = false,
   }) {
     return Titre(
       id: id ?? this.id,
@@ -179,6 +207,9 @@ class Titre {
           dateDerniereVerification ?? this.dateDerniereVerification,
       nombreChapitresNonLus:
           nombreChapitresNonLus ?? this.nombreChapitresNonLus,
+      languesPreferees: effacerLanguesPreferees
+          ? null
+          : languesPreferees ?? this.languesPreferees,
     );
   }
 
@@ -197,7 +228,8 @@ class Titre {
             other.statut == statut &&
             listesEgales(other.titresAlternatifs, titresAlternatifs) &&
             other.dateDerniereVerification == dateDerniereVerification &&
-            other.nombreChapitresNonLus == nombreChapitresNonLus;
+            other.nombreChapitresNonLus == nombreChapitresNonLus &&
+            other.languesPreferees == languesPreferees;
   }
 
   @override
@@ -214,6 +246,7 @@ class Titre {
     Object.hashAll(titresAlternatifs),
     dateDerniereVerification,
     nombreChapitresNonLus,
+    languesPreferees,
   );
 
   @override
