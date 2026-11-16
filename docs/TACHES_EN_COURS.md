@@ -69,23 +69,23 @@ Décisions de l'orchestrateur (autonomie accordée par le client jusqu'au vendre
 - [x] SO2. Rapport d'erreur exportable : quand l'ajout d'un site ou la lecture d'un titre échoue, `ErreurSource` garde ce qu'il faut pour un rapport (URL, code HTTP, type détecté, extrait du début de la réponse sans données personnelles) ; fonction qui produit le texte du rapport.
 
 ### developpeur-services
-- [ ] SE1. Listes « Planifié » / « En attente » : classement automatique « En attente », exclusion de « Planifié » des bilans, vérification horaire des titres en attente (`PlanificationMisesAJour` ou équivalent), réglage de l'intervalle.
-- [ ] SE2. Service de l'onglet Mises à jour : titres suivis / favoris / en attente triés par dernière parution dans leurs langues (`languesPourTitre`), avec le dernier chapitre paru.
-- [ ] SE3. Couvertures : téléchargement et enregistrement sur l'appareil à l'ajout et à l'actualisation ; choix d'une couverture (liste du site, image locale) ; `est_garde` utilisé à la place de `parametres` (reprise des anciens) ; `chargerSuppressionsPrevues()` (P2) ; `repousserSuppressionPrevue` dans `protegerChapitre`.
-- [ ] SE4. Niveau de contenu : enregistré à l'ajout / actualisation ; réglage du filtre (par défaut tout sauf `pornographic`).
-- [ ] SE5. Export du rapport d'erreur dans un fichier texte (`Documents/bibliotheque_perso/rapports/`), chemin renvoyé à l'interface.
+- [x] SE1. Listes « Planifié » / « En attente » : classement automatique « En attente », exclusion de « Planifié » des bilans, vérification horaire des titres en attente (`PlanificationMisesAJour` ou équivalent), réglage de l'intervalle.
+- [x] SE2. Service de l'onglet Mises à jour : titres suivis / favoris / en attente triés par dernière parution dans leurs langues (`languesPourTitre`), avec le dernier chapitre paru.
+- [x] SE3. Couvertures : téléchargement et enregistrement sur l'appareil à l'ajout et à l'actualisation ; choix d'une couverture (liste du site, image locale) ; `est_garde` utilisé à la place de `parametres` (reprise des anciens) ; `chargerSuppressionsPrevues()` (P2) ; `repousserSuppressionPrevue` dans `protegerChapitre`.
+- [x] SE4. Niveau de contenu : enregistré à l'ajout / actualisation ; réglage du filtre (par défaut tout sauf `pornographic`).
+- [x] SE5. Export du rapport d'erreur dans un fichier texte (`Documents/bibliotheque_perso/rapports/`), chemin renvoyé à l'interface.
 
 ### developpeur-interface
-- [ ] IN1. Onglet « Mises à jour » (liste triée par dernière parution, badge des nouveautés).
-- [ ] IN2. Bibliothèque : filtre par catégories pensé pour beaucoup de tags (panneau / feuille avec recherche, sélection multiple, regroupement), filtre par niveau de contenu, listes Planifié / En attente.
-- [ ] IN3. Couvertures : affichage depuis l'appareil ; choix de la couverture sur la fiche d'un titre.
-- [ ] IN4. Bouton « Exporter le rapport d'erreur » quand l'ajout d'un site ou d'un titre échoue.
-- [ ] IN5. Onglet Téléchargements : section des suppressions prévues (rouge, compte à rebours) ; repère « gardé ». Réglage avancé des langues d'un site : accepter `pt-br` (P3). Bouton central « Ajouter un titre » en double avec le bouton flottant sur la bibliothèque vide : n'en garder qu'un.
+- [x] IN1. Onglet « Mises à jour » (liste triée par dernière parution, badge des nouveautés).
+- [x] IN2. Bibliothèque : filtre par catégories pensé pour beaucoup de tags (panneau / feuille avec recherche, sélection multiple, regroupement), filtre par niveau de contenu, listes Planifié / En attente.
+- [x] IN3. Couvertures : affichage depuis l'appareil ; choix de la couverture sur la fiche d'un titre.
+- [x] IN4. Bouton « Exporter le rapport d'erreur » quand l'ajout d'un site ou d'un titre échoue.
+- [x] IN5. Onglet Téléchargements : section des suppressions prévues (rouge, compte à rebours) ; repère « gardé ». Réglage avancé des langues d'un site : accepter `pt-br` (P3). Bouton central « Ajouter un titre » en double avec le bouton flottant sur la bibliothèque vide : n'en garder qu'un.
 
 ## Retours du client sur la 0.1.0-test.1 (2026-11-16)
 - [ ] R1. BUG : couvertures / vignettes jamais affichées (diagnostic confié à analyste-erreurs, E10).
 - [ ] R2. BUG : chapitres non téléchargés automatiquement à l'ajout d'un titre ou d'un nouveau chapitre (diagnostic confié à analyste-erreurs, E11).
-- [ ] R3. Filtre des catégories : « Toutes » + entonnoir ouvrant une fenêtre avec toutes les catégories, chacune incluse / exclue (transmis à developpeur-interface avec IN2).
+- [x] R3. Filtre des catégories : « Toutes » + entonnoir ouvrant une fenêtre avec toutes les catégories, chacune incluse / exclue (transmis à developpeur-interface avec IN2).
 - [ ] R4. **Chapitres hébergés sur un site externe** (ex. Ruri Dragon : MangaDex renvoie vers le site de l'éditeur) : les lister dans l'application avec un lien « Lire sur <site> », non téléchargeables. developpeur-sources (`includeExternalUrl=1`, champ `externalUrl` — vérifier la doc), developpeur-donnees (colonne `chapitres.url_externe`, migration 6), developpeur-services (exclus des règles de téléchargement), developpeur-interface (icône lien externe + légende).
 - [ ] R5. **Ajouter un autre site à un titre** (bouton sur la fiche) : priorité avancée — l'étape 8 (plusieurs sources par titre) passe juste après l'étape 6.
 - [x] R6. Listes obligatoires manquantes : déjà couvertes par l'étape 6 (« Planifié », « En attente »).
