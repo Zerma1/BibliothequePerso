@@ -81,8 +81,41 @@ Limites actuelles (à lever à l'étape 9 de la feuille de route) :
 
 ## 4. Mettre les fichiers à disposition
 
-Les fichiers construits ne vont **jamais** dans Git (dossier `build/` ignoré). On les dépose dans
-une **« release » GitHub** :
+### Sur la branche `test` : les fichiers sont dans Git (choix du client)
+
+Pour que le client puisse récupérer une version de test **depuis n'importe où en téléchargeant
+simplement le dépôt**, les fichiers à installer de l'étape 3 sont commités sur la branche
+`test`, dans `livraisons/<version>/` :
+
+```
+livraisons/0.1.0-test.1/
+    bibliotheque_perso-0.1.0-test.1-windows.zip
+    bibliotheque_perso-0.1.0-test.1-android.apk
+    LISEZMOI.md          (comment installer)
+```
+
+```powershell
+git switch test
+git add -f livraisons/0.1.0-test.1     # -f : le dossier est ignoré sur dev
+git commit -m "Fichiers à installer de la version 0.1.0-test.1"
+git push origin test
+git switch dev
+```
+
+Règles :
+- seulement les fichiers prêts à installer, **jamais** le dossier `build/` complet (plusieurs
+  Go de fichiers intermédiaires) ;
+- jamais sur `dev` ni sur `main` (le dossier `livraisons/` y reste ignoré) ;
+- un fichier ne doit pas dépasser 100 Mo (limite de GitHub) ;
+- on peut retirer les livraisons des anciennes versions de test pour garder un dépôt léger
+  (elles restent dans l'historique et dans leur étiquette).
+
+Pour récupérer la version de test sans Git : sur GitHub, choisir la branche `test`, puis
+« Code » → « Download ZIP », et ouvrir `livraisons/<version>/`.
+
+### Pour une version publiée (`main`) : « release » GitHub
+
+Les fichiers ne vont pas dans Git sur `main`. On les dépose dans une **« release » GitHub** :
 
 1. Sur https://github.com/Zerma1/BibliothequePerso/releases, « Draft a new release ».
 2. Choisir l'étiquette `v0.1.0-test.1`, branche `test`.
