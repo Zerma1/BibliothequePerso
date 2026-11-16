@@ -20,7 +20,8 @@ import '../modeles/outils_modeles.dart';
 ///   restée incohérente). Sans cela, l'index UNIQUE de la migration 4
 ///   ferait échouer l'enregistrement d'un téléchargement réussi.
 /// - [nomArchive] nul : `nom_archive` et `date_suppression_prevue` à NULL,
-///   `est_telecharge` = 0.
+///   `est_telecharge` = 0 et `est_garde` = 0 (un chapitre sans archive n'a
+///   rien à garder ; retéléchargé, il suit de nouveau les règles).
 ///
 /// Renvoie `false` si le chapitre n'existe pas. Lève une [ArgumentError] si
 /// [nomArchive] est vide.
@@ -43,6 +44,7 @@ Future<bool> enregistrerArchiveChapitre(
         'nom_archive': null,
         'date_suppression_prevue': null,
         'est_telecharge': valeurSqlFaux,
+        'est_garde': valeurSqlFaux,
       },
       where: 'nom_archive = ? AND id != ?',
       whereArgs: <Object?>[nomArchive, idChapitre],
@@ -54,6 +56,7 @@ Future<bool> enregistrerArchiveChapitre(
       'nom_archive': nomArchive,
       'est_telecharge': nomArchive == null ? valeurSqlFaux : valeurSqlVrai,
       if (nomArchive == null) 'date_suppression_prevue': null,
+      if (nomArchive == null) 'est_garde': valeurSqlFaux,
     },
     where: 'id = ?',
     whereArgs: <Object?>[idChapitre],
@@ -222,9 +225,9 @@ class DepotChapitres {
 
   /// Enregistre si l'archive hors-ligne d'un chapitre est complète.
   ///
-  /// Avec `estTelecharge: false`, le chemin enregistré (`nom_archive`) et la
-  /// suppression prévue sont aussi effacés : un chapitre non téléchargé n'a
-  /// ni archive ni suppression à faire. Pour enregistrer le chemin d'une
+  /// Avec `estTelecharge: false`, le chemin enregistré (`nom_archive`), la
+  /// suppression prévue et le choix « Garder » sont aussi effacés : un
+  /// chapitre non téléchargé n'a ni archive ni suppression à faire. Pour enregistrer le chemin d'une
   /// nouvelle archive, utiliser plutôt [enregistrerArchive].
   Future<void> marquerTelecharge(
     int idChapitre, {
@@ -248,7 +251,8 @@ class DepotChapitres {
   /// - [nomArchive] non nul : `nom_archive` = [nomArchive] et
   ///   `est_telecharge` = 1.
   /// - [nomArchive] nul (« plus téléchargé ») : `nom_archive`,
-  ///   `date_suppression_prevue` à NULL et `est_telecharge` = 0.
+  ///   `date_suppression_prevue` à NULL, `est_telecharge` = 0 et
+  ///   `est_garde` = 0.
   ///
   /// Voir [enregistrerArchiveChapitre] pour le cas d'un chemin déjà attribué
   /// à un autre chapitre. Renvoie `false` si le chapitre n'existe pas. Lève
@@ -283,6 +287,9 @@ class DepotChapitres {
   /// Charge les chapitres dont la suppression prévue est échue
   /// (`date_suppression_prevue <= maintenant`), la plus ancienne d'abord.
   ///
+  /// Les chapitres gardés (`est_garde = 1`) sont exclus : le choix
+  /// « Garder » du client l'emporte toujours sur une date restée en base.
+  ///
   /// Le service supprime leur archive puis appelle
   /// [enregistrerArchive]`(id, null)`, qui efface aussi la date. La
   /// recherche utilise l'index partiel `index_chapitres_suppression_prevue`
@@ -290,11 +297,207 @@ class DepotChapitres {
   Future<List<Chapitre>> chargerSuppressionsEchues(DateTime maintenant) async {
     final lignes = await _baseDeDonnees.query(
       'chapitres',
-      where: 'date_suppression_prevue <= ?',
-      whereArgs: <Object?>[dateVersMillisecondes(maintenant)],
+      where: 'date_suppression_prevue <= ? AND est_garde = ?',
+      whereArgs: <Object?>[dateVersMillisecondes(maintenant), valeurSqlFaux],
       orderBy: 'date_suppression_prevue, id',
     );
     return lignes.map(Chapitre.depuisMap).toList();
+  }
+
+  /// Charge tous les chapitres qui ont une suppression prévue (échue ou
+  /// non), la plus proche d'abord ; si [idTitre] est donné, seulement ceux
+  /// de ce titre.
+  ///
+  /// Sert à l'onglet Téléchargements (chapitres affichés en rouge avec leur
+  /// compte à rebours). Utilise l'index partiel
+  /// `index_chapitres_suppression_prevue` (migration 4).
+  Future<List<Chapitre>> chargerSuppressionsPrevues({int? idTitre}) async {
+    final lignes = await _baseDeDonnees.query(
+      'chapitres',
+      where: idTitre == null
+          ? 'date_suppression_prevue IS NOT NULL'
+          : 'date_suppression_prevue IS NOT NULL AND id_titre = ?',
+      whereArgs: <Object?>[?idTitre],
+      orderBy: 'date_suppression_prevue, id',
+    );
+    return lignes.map(Chapitre.depuisMap).toList();
+  }
+
+  /// Repousse à [date] la suppression prévue d'un chapitre, **seulement** si
+  /// une suppression est déjà prévue et plus tôt que [date].
+  ///
+  /// Sert à protéger le chapitre ouvert dans le lecteur : la suppression
+  /// n'est jamais créée (un chapitre sans date reste sans date) ni avancée.
+  /// Le test et l'écriture se font en une seule requête `UPDATE … WHERE`,
+  /// donc sans course avec un autre isolat. Renvoie `true` si la date a été
+  /// modifiée.
+  Future<bool> repousserSuppressionPrevue(int idChapitre, DateTime date) async {
+    final modifiees = await _baseDeDonnees.rawUpdate(
+      'UPDATE chapitres SET date_suppression_prevue = ? '
+      'WHERE id = ? AND date_suppression_prevue IS NOT NULL '
+      'AND date_suppression_prevue < ?',
+      <Object?>[
+        dateVersMillisecondes(date),
+        idChapitre,
+        dateVersMillisecondes(date),
+      ],
+    );
+    return modifiees > 0;
+  }
+
+  /// Marque un chapitre comme gardé par le client (bouton « Garder »), ou
+  /// retire ce choix si [estGarde] vaut `false`.
+  ///
+  /// Garder un chapitre annule aussi sa suppression prévue
+  /// (`date_suppression_prevue` à NULL), dans la même requête : le chapitre
+  /// ne peut pas être supprimé entre les deux écritures. Renvoie `false` si
+  /// le chapitre n'existe pas.
+  Future<bool> marquerGarde(int idChapitre, {bool estGarde = true}) async {
+    final modifiees = await _baseDeDonnees.update(
+      'chapitres',
+      <String, Object?>{
+        'est_garde': booleenVersEntier(estGarde),
+        if (estGarde) 'date_suppression_prevue': null,
+      },
+      where: 'id = ?',
+      whereArgs: <Object?>[idChapitre],
+    );
+    return modifiees > 0;
+  }
+
+  /// Marque plusieurs chapitres comme gardés en une transaction et renvoie
+  /// le nombre de chapitres trouvés.
+  ///
+  /// Sert à la reprise des identifiants gardés que la couche services
+  /// mémorisait dans `parametres` avant la migration 5 : les identifiants
+  /// de chapitres disparus sont ignorés. Comme [marquerGarde], annule leur
+  /// suppression prévue.
+  Future<int> marquerGardes(Iterable<int> idsChapitres) async {
+    final ids = idsChapitres.toSet().toList();
+    if (ids.isEmpty) {
+      return 0;
+    }
+    return _baseDeDonnees.transaction((txn) async {
+      var nombre = 0;
+      for (
+        var debut = 0;
+        debut < ids.length;
+        debut += tailleMaxLotParametresSql
+      ) {
+        final fin = debut + tailleMaxLotParametresSql < ids.length
+            ? debut + tailleMaxLotParametresSql
+            : ids.length;
+        final lot = ids.sublist(debut, fin);
+        // Seuls des `?` sont générés ; les identifiants sont des paramètres.
+        final marqueurs = List<String>.filled(lot.length, '?').join(', ');
+        nombre += await txn.rawUpdate(
+          'UPDATE chapitres SET est_garde = ?, date_suppression_prevue = NULL '
+          'WHERE id IN ($marqueurs)',
+          <Object?>[valeurSqlVrai, ...lot],
+        );
+      }
+      return nombre;
+    });
+  }
+
+  /// Identifiants des chapitres gardés par le client.
+  ///
+  /// Requête servie par l'index partiel `index_chapitres_gardes`
+  /// (migration 5).
+  Future<Set<int>> chargerIdsChapitresGardes() async {
+    final lignes = await _baseDeDonnees.query(
+      'chapitres',
+      columns: <String>['id'],
+      where: 'est_garde = ?',
+      whereArgs: <Object?>[valeurSqlVrai],
+    );
+    return <int>{
+      for (final ligne in lignes)
+        if (ligne['id'] case final int id) id,
+    };
+  }
+
+  /// Date de la dernière parution, par titre, parmi les chapitres dans l'une
+  /// des [langues] données (idTitre → date UTC), pour l'onglet Mises à jour.
+  ///
+  /// La date d'un chapitre est sa date de publication, ou à défaut sa date
+  /// de détection (sites qui ne donnent pas de date). Les titres sans aucun
+  /// chapitre daté dans ces langues sont absents du résultat. Les langues
+  /// sont comparées sans tenir compte de la casse (`pt-BR` = `pt-br`) ; une
+  /// liste vide donne un résultat vide.
+  ///
+  /// Les titres n'ayant pas tous les mêmes langues (`languesPourTitre`), le
+  /// service appelle cette méthode une fois par jeu de langues et ne garde
+  /// que les titres concernés.
+  ///
+  /// LIMITE : la requête parcourt toute la table `chapitres` (pas d'index
+  /// sur `lower(langue)`) ; elle n'est faite qu'à l'ouverture de l'onglet,
+  /// ce qui reste rapide pour quelques dizaines de milliers de chapitres.
+  Future<Map<int, DateTime>> chargerDernieresParutions(
+    List<String> langues,
+  ) async {
+    final codes = _normaliserLangues(langues);
+    if (codes.isEmpty) {
+      return <int, DateTime>{};
+    }
+    final marqueurs = List<String>.filled(codes.length, '?').join(', ');
+    final lignes = await _baseDeDonnees.rawQuery(
+      'SELECT id_titre, MAX(COALESCE(date_publication, date_detection)) '
+      'AS derniere_parution FROM chapitres '
+      'WHERE lower(langue) IN ($marqueurs) '
+      'GROUP BY id_titre',
+      codes,
+    );
+    final resultat = <int, DateTime>{};
+    for (final ligne in lignes) {
+      final idTitre = ligne['id_titre'];
+      final date = ligne['derniere_parution'];
+      if (idTitre is int && date is int) {
+        resultat[idTitre] = DateTime.fromMillisecondsSinceEpoch(
+          date,
+          isUtc: true,
+        );
+      }
+    }
+    return resultat;
+  }
+
+  /// Dernier chapitre paru d'un titre dans l'une des [langues] données (même
+  /// date que [chargerDernieresParutions]), ou `null` s'il n'y en a pas.
+  ///
+  /// À égalité de date, le plus grand numéro l'emporte. Requête servie par
+  /// l'index `index_chapitres_titre_lu` (filtre sur `id_titre`).
+  Future<Chapitre?> chargerDernierChapitreParu(
+    int idTitre,
+    List<String> langues,
+  ) async {
+    final codes = _normaliserLangues(langues);
+    if (codes.isEmpty) {
+      return null;
+    }
+    final marqueurs = List<String>.filled(codes.length, '?').join(', ');
+    final lignes = await _baseDeDonnees.rawQuery(
+      'SELECT * FROM chapitres '
+      'WHERE id_titre = ? AND lower(langue) IN ($marqueurs) '
+      'AND COALESCE(date_publication, date_detection) IS NOT NULL '
+      'ORDER BY COALESCE(date_publication, date_detection) DESC, '
+      'numero DESC, id DESC LIMIT 1',
+      <Object?>[idTitre, ...codes],
+    );
+    return lignes.isEmpty ? null : Chapitre.depuisMap(lignes.first);
+  }
+
+  /// Codes de langue en minuscules, sans espaces, vides et doublons retirés,
+  /// au plus [tailleMaxLotParametresSql] (une personne lit bien moins de
+  /// langues que cela).
+  static List<String> _normaliserLangues(List<String> langues) {
+    final codes = <String>{
+      for (final langue in langues)
+        if (langue.trim().isNotEmpty) langue.trim().toLowerCase(),
+    }.toList();
+    return codes.length > tailleMaxLotParametresSql
+        ? codes.sublist(0, tailleMaxLotParametresSql)
+        : codes;
   }
 
   /// Compte les chapitres non lus d'un titre.

@@ -19,6 +19,7 @@ class Chapitre {
     this.dateDetection,
     this.nomArchive,
     this.dateSuppressionPrevue,
+    this.estGarde = false,
   });
 
   static const String _entite = 'Chapitre';
@@ -72,6 +73,13 @@ class Chapitre {
   /// automatiquement, ou `null` si aucune suppression n'est prévue.
   final DateTime? dateSuppressionPrevue;
 
+  /// `true` si le client a choisi « Garder » ce chapitre téléchargé : les
+  /// règles de conservation ne le suppriment jamais automatiquement.
+  ///
+  /// Remis à `false` quand l'archive est supprimée (un chapitre retéléchargé
+  /// suit de nouveau les règles).
+  final bool estGarde;
+
   /// Convertit le chapitre en ligne SQLite (colonnes en `snake_case`).
   Map<String, Object?> versMap() {
     return <String, Object?>{
@@ -87,6 +95,7 @@ class Chapitre {
       'date_detection': dateVersMillisecondes(dateDetection),
       'nom_archive': nomArchive,
       'date_suppression_prevue': dateVersMillisecondes(dateSuppressionPrevue),
+      'est_garde': booleenVersEntier(estGarde),
     };
   }
 
@@ -110,6 +119,11 @@ class Chapitre {
         'date_suppression_prevue',
         _entite,
       ),
+      // Colonne absente (ligne construite à la main ou requête partielle) :
+      // non gardé, comme la valeur par défaut de la migration 5.
+      estGarde: map.containsKey('est_garde')
+          ? map.lireBooleen('est_garde', _entite)
+          : false,
     );
   }
 
@@ -137,6 +151,7 @@ class Chapitre {
     DateTime? dateDetection,
     String? nomArchive,
     DateTime? dateSuppressionPrevue,
+    bool? estGarde,
     bool effacerNomArchive = false,
     bool effacerDateSuppressionPrevue = false,
   }) {
@@ -155,6 +170,7 @@ class Chapitre {
       dateSuppressionPrevue: effacerDateSuppressionPrevue
           ? null
           : dateSuppressionPrevue ?? this.dateSuppressionPrevue,
+      estGarde: estGarde ?? this.estGarde,
     );
   }
 
@@ -173,7 +189,8 @@ class Chapitre {
             other.estTelecharge == estTelecharge &&
             other.dateDetection == dateDetection &&
             other.nomArchive == nomArchive &&
-            other.dateSuppressionPrevue == dateSuppressionPrevue;
+            other.dateSuppressionPrevue == dateSuppressionPrevue &&
+            other.estGarde == estGarde;
   }
 
   @override
@@ -190,11 +207,12 @@ class Chapitre {
     dateDetection,
     nomArchive,
     dateSuppressionPrevue,
+    estGarde,
   );
 
   @override
   String toString() =>
       'Chapitre(id: $id, idTitre: $idTitre, numero: $numero, nom: $nom, '
       'langue: $langue, estLu: $estLu, estTelecharge: $estTelecharge, '
-      'nomArchive: $nomArchive)';
+      'nomArchive: $nomArchive, estGarde: $estGarde)';
 }

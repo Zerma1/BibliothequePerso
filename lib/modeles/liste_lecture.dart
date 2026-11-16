@@ -6,8 +6,9 @@ import 'outils_modeles.dart';
 
 /// Une liste de lecture.
 ///
-/// Les listes système (« Favoris » et « Suivis ») ne peuvent être ni renommées
-/// ni supprimées : `DepotListes` lève une erreur.
+/// Les listes système (« Favoris », « Suivis », « Planifié » et « En
+/// attente ») ne peuvent être ni renommées ni supprimées : `DepotListes`
+/// lève une erreur.
 class ListeLecture {
   /// Crée une liste. [id] vaut `null` tant qu'elle n'est pas enregistrée.
   const ListeLecture({
@@ -25,7 +26,8 @@ class ListeLecture {
   /// Nom affiché de la liste (unique, sans tenir compte de la casse).
   final String nom;
 
-  /// `true` pour « Favoris » et « Suivis ».
+  /// `true` pour les listes système (« Favoris », « Suivis », « Planifié »,
+  /// « En attente »).
   final bool estSysteme;
 
   /// Position d'affichage (croissante).

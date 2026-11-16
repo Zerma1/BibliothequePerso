@@ -215,7 +215,7 @@ void main() {
         expect(await base.query(table), isEmpty, reason: table);
       }
       // Les listes et les catégories elles-mêmes restent.
-      expect(await depotListes.chargerListes(), hasLength(2));
+      expect(await depotListes.chargerListes(), hasLength(4));
       expect(await depotCategories.chargerCategories(), hasLength(9));
     });
   });

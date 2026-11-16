@@ -59,6 +59,19 @@ const int longueurMaxNomDossierTitre = 100;
 /// Longueur maximale d'une extension d'image (`jpg`, `jpeg`, `webp`, `avif`…).
 const int longueurMaxExtensionPage = 5;
 
+/// Nom (sans extension) du fichier de couverture d'un titre, enregistré dans
+/// le dossier du titre : `<type>/<nom du titre>/couverture.<ext>`.
+///
+/// Ne peut pas être confondu avec une archive de chapitre, qui commence par
+/// [prefixeFichierChapitre] et finit par `.zip`.
+const String nomFichierCouverture = 'couverture';
+
+/// Taille maximale d'une image de couverture enregistrée (20 Mio).
+///
+/// Une couverture MangaDex pèse quelques centaines de Kio ; la limite évite
+/// qu'une image locale énorme, choisie par erreur, soit copiée en entier.
+const int tailleMaxCouverture = 20 * 1024 * 1024;
+
 /// Taille du tampon d'écriture d'une archive (256 Kio).
 ///
 /// Le tampon par défaut d'`OutputFileStream` fait 1 Mio ; on le réduit car

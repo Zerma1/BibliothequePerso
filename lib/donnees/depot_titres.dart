@@ -42,9 +42,12 @@ class DepotTitres {
   /// sont réutilisées. `null` laisse les catégories actuelles inchangées ; une
   /// liste vide les retire toutes.
   ///
-  /// Lors d'une mise à jour, `date_derniere_verification` et
-  /// `langues_preferees` ne sont pas modifiées : elles ne sont écrites que
-  /// par [enregistrerDateVerification] et [enregistrerLanguesPreferees].
+  /// Lors d'une mise à jour, `date_derniere_verification`,
+  /// `langues_preferees` et `couverture_choisie` ne sont pas modifiées :
+  /// elles ne sont écrites que par [enregistrerDateVerification],
+  /// [enregistrerLanguesPreferees] et [enregistrerCouvertureChoisie]. Un
+  /// [Titre.niveauContenu] `null` laisse aussi le niveau enregistré
+  /// inchangé.
   ///
   /// Tout se fait dans une seule transaction : en cas d'erreur, rien n'est
   /// écrit. Lève une [ErreurBaseDeDonnees] si [Titre.idSource] est absent ou
@@ -178,19 +181,30 @@ class DepotTitres {
 
     final ligne = titre.versMap()..remove('id');
     if (id == null) {
-      // Insertion : les langues éventuellement fournies sont gardées,
-      // normalisées comme dans enregistrerLanguesPreferees.
+      // Insertion : les langues et la couverture choisie éventuellement
+      // fournies sont gardées, normalisées comme dans leurs méthodes.
       ligne['langues_preferees'] = normaliserLanguesPreferees(
         titre.languesPreferees,
       );
+      ligne['couverture_choisie'] = _normaliserCouverture(
+        titre.couvertureChoisie,
+      );
       return txn.insert('titres', ligne);
     }
-    // Mise à jour : la date de vérification et les langues préférées ont
-    // leur propre méthode. Un Titre reconstruit par une source (valeurs à
-    // null) ne doit pas les effacer : les langues sont un choix du client.
+    // Mise à jour : la date de vérification, les langues préférées et la
+    // couverture choisie ont leur propre méthode. Un Titre reconstruit par
+    // une source (valeurs à null) ne doit pas les effacer : ce sont des
+    // choix du client.
     ligne
       ..remove('date_derniere_verification')
-      ..remove('langues_preferees');
+      ..remove('langues_preferees')
+      ..remove('couverture_choisie');
+    // Un site qui ne donne pas (ou plus, en cas d'erreur de lecture) le
+    // niveau de contenu ne doit pas effacer celui déjà connu : un titre
+    // `pornographic` réapparaîtrait sinon dans la bibliothèque filtrée.
+    if (titre.niveauContenu == null) {
+      ligne.remove('niveau_contenu');
+    }
     final modifiees = await txn.update(
       'titres',
       ligne,
@@ -225,7 +239,14 @@ class DepotTitres {
   ///   alternatifs, sans tenir compte de la casse ;
   /// - [idListe] : uniquement les titres de cette liste ;
   /// - [idCategorie] : uniquement les titres de cette catégorie ;
-  /// - [idSource] : uniquement les titres de cette source.
+  /// - [idSource] : uniquement les titres de cette source ;
+  /// - [niveauxContenu] : uniquement les titres dont le niveau de contenu
+  ///   fait partie de cette liste (`niveauxContenuParDefaut` pour le filtre
+  ///   par défaut). Les titres sans niveau connu (sites autres que MangaDex)
+  ///   sont gardés si [inclureNiveauInconnu] vaut `true` (par défaut). `null`
+  ///   = pas de filtre ; une liste vide ne garde que les niveaux inconnus
+  ///   (ou rien). Comparaison exacte : les niveaux sont stockés tels que
+  ///   MangaDex les donne.
   ///
   /// LIMITE : `LIKE` et `lower()` de SQLite (sans extension ICU, absente sur
   /// Android) ne replient que les lettres ASCII. « death » trouve « Death »,
@@ -236,6 +257,8 @@ class DepotTitres {
     int? idListe,
     int? idCategorie,
     int? idSource,
+    List<String>? niveauxContenu,
+    bool inclureNiveauInconnu = true,
   }) {
     // Seuls des fragments SQL constants sont assemblés ; toutes les valeurs
     // passent par des paramètres `?`.
@@ -278,6 +301,22 @@ class DepotTitres {
       conditions.add('t.id_source = ?');
       arguments.add(idSource);
     }
+    if (niveauxContenu != null) {
+      // Dédoublonnés et bornés : la liste ne contient en pratique que les
+      // quatre niveaux MangaDex.
+      final niveaux = niveauxContenu.toSet().take(tailleMaxLotParametresSql);
+      final alternatives = <String>[
+        if (niveaux.isNotEmpty)
+          't.niveau_contenu IN '
+              '(${List<String>.filled(niveaux.length, '?').join(', ')})',
+        if (inclureNiveauInconnu) 't.niveau_contenu IS NULL',
+      ];
+      // Aucune alternative : aucun titre ne peut correspondre.
+      conditions.add(
+        alternatives.isEmpty ? '0' : '(${alternatives.join(' OR ')})',
+      );
+      arguments.addAll(niveaux);
+    }
 
     return _chargerAvecConditions(
       conditions.isEmpty ? null : conditions.join(' AND '),
@@ -315,6 +354,34 @@ class DepotTitres {
       whereArgs: <Object?>[idTitre],
     );
     return modifiees > 0;
+  }
+
+  /// Enregistre la couverture choisie par le client (URL d'une autre
+  /// couverture du site ou chemin d'une image de l'appareil), sans toucher
+  /// aux autres colonnes ; `null` ou un texte vide revient à la couverture
+  /// du site.
+  ///
+  /// Renvoie `false` si le titre n'existe pas. Une ré-actualisation du titre
+  /// par [enregistrerTitre] ne modifie jamais ce choix.
+  Future<bool> enregistrerCouvertureChoisie(
+    int idTitre,
+    String? couverture,
+  ) async {
+    final modifiees = await _baseDeDonnees.update(
+      'titres',
+      <String, Object?>{
+        'couverture_choisie': _normaliserCouverture(couverture),
+      },
+      where: 'id = ?',
+      whereArgs: <Object?>[idTitre],
+    );
+    return modifiees > 0;
+  }
+
+  /// Couverture choisie sans espaces autour, `null` si vide.
+  static String? _normaliserCouverture(String? couverture) {
+    final valeur = couverture?.trim() ?? '';
+    return valeur.isEmpty ? null : valeur;
   }
 
   // Un code de langue : lettres minuscules, chiffres et tirets (`pt-br`).
