@@ -92,6 +92,10 @@ cause et solution). Toute erreur inattendue ou récurrente est confiée à `anal
   échappement dans un fichier, utiliser `\x..` et vérifier les octets (voir E7).
 - Le C++ Windows est compilé avec `/utf-8` (`windows/CMakeLists.txt`) : ne pas retirer
   cette option, sinon les accents des textes natifs sont abîmés.
+- Toute requête vers un serveur MangaDex (`mangadex.org`, `*.mangadex.org`,
+  `*.mangadex.network`) envoie le User-Agent de l'application : avec un User-Agent de
+  navigateur, MangaDex renvoie une page anti-robot HTML (code 200) au lieu de l'image (E10).
+  Un essai réel d'image vérifie le type des octets, pas seulement leur présence.
 - Le cache pub réel est `C:\Users\bapti\AppData\Local\Pub\Cache` (et non `D:\dev\pub-cache`
   comme l'indique le README). Le projet étant sur D:, le cache Kotlin incrémental plante entre
   les deux disques : d'où `kotlin.incremental=false` dans `android/gradle.properties`.
