@@ -71,3 +71,42 @@ erreur qui semble déjà vue.
 - **Prévention** : demander aux agents d'écrire leurs fichiers au fur et à mesure ; découper les
   grosses tâches ; garder la consigne complète pour pouvoir relancer.
 - **Statut** : contourné.
+
+### E7 — Titre de la fenêtre Windows mal encodé (« BibliothÃ¨que »)
+- **Date(s)** : 2026-11-16 (2 occurrences : la première « correction » n'a rien changé)
+- **Symptôme** : la barre de titre affiche « BibliothÃ¨que perso », même après avoir
+  « remplacé » le « è » de `windows/runner/main.cpp` par un échappement Unicode et recompilé.
+- **Cause racine** (prouvée) : deux causes combinées.
+  1. MSVC compile `windows/runner/main.cpp` sans `/utf-8` (`windows/CMakeLists.txt`,
+     `APPLY_STANDARD_SETTINGS` : `/W4 /WX /wd4100 /EHsc` seulement) : il lit le fichier UTF-8
+     en Windows-1252, et les octets `C3 A8` de « è » deviennent « Ã¨ ». Preuve : l'exécutable
+     Debug contient le texte UTF-16 « BibliothÃ¨que » ; un `t.cpp` minimal compilé avec
+     `cl` 14.44 donne « Ã¨ » sans `/utf-8` et « è » avec.
+  2. L'échappement n'a jamais été écrit : dans les paramètres des outils (Edit/Write, décodés
+     comme du JSON), la séquence antislash-u-00e8 est convertie en « è » avant l'écriture.
+     Le fichier contient toujours les octets `C3 A8` (vérifié en hexadécimal, ainsi que dans
+     `HEAD`). Les outils conservent en revanche `\x`. Même famille que E1.
+  - Fausse piste écartée : `MaterialApp(title: …)` → `SystemChrome.setApplicationSwitcherDescription`
+    n'est pas traité par le moteur Windows (`flutter_windows.dll` ne contient ni ce nom ni
+    `SetWindowTextW`) ; le titre vient seulement de `window.Create(…)` du runner.
+- **Solution appliquée** : à faire par `integrateur-plateformes` : ajouter `/utf-8` dans
+  `windows/CMakeLists.txt` (`target_compile_options(${TARGET} PRIVATE /W4 /WX /wd4100 /utf-8)`),
+  puis `flutter clean` et recompiler. En complément possible : écrire le littéral
+  `L"Biblioth\x00E8que perso"` (le `\x` survit aux outils).
+- **Prévention** : compiler le C++ Windows avec `/utf-8` ; ne pas écrire d'échappement
+  antislash-u dans un paramètre d'outil (utiliser `\x`) ; après toute édition d'un caractère
+  spécial, vérifier les octets du fichier (`[IO.File]::ReadAllBytes`) et non l'affichage ;
+  vérifier la correction dans l'exécutable ou par capture, pas seulement la compilation.
+- **Statut** : résolu le 2026-11-16 (option `/utf-8` ajoutée dans `windows/CMakeLists.txt`, vérifié dans l'exécutable : « Bibliothèque perso »).
+
+### E8 — L'application lancée depuis la session Claude ne voit pas les données du client
+- **Date(s)** : 2026-11-16
+- **Symptôme** : bibliothèque vide alors que le client avait ajouté des titres.
+- **Cause racine** : les processus lancés depuis l'application Claude (paquet Windows) voient un
+  dossier `AppData\Roaming` virtualisé (`AppData\Local\Packages\Claude_…\LocalCache\Roaming`) :
+  la base `io.github.zerma1\bibliotheque_perso\bibliotheque_perso.db` y est une copie à part. Le
+  dossier `Documents` (archives) n'est pas virtualisé.
+- **Solution appliquée** : aucune nécessaire (pas de perte de données).
+- **Prévention** : pour tester avec les données réelles du client, le client lance lui-même
+  l'application ; les essais de l'orchestrateur se font sur une base de test séparée.
+- **Statut** : connu, sans conséquence.

@@ -39,7 +39,9 @@ add_definitions(-DUNICODE -D_UNICODE)
 # of modifying this function.
 function(APPLY_STANDARD_SETTINGS TARGET)
   target_compile_features(${TARGET} PUBLIC cxx_std_17)
-  target_compile_options(${TARGET} PRIVATE /W4 /WX /wd4100)
+  # /utf-8 : les sources sont en UTF-8 ; sans cette option, MSVC les lit en
+  # Windows-1252 et les accents sont abimes (voir E7 dans docs/JOURNAL_ERREURS.md).
+  target_compile_options(${TARGET} PRIVATE /W4 /WX /wd4100 /utf-8)
   target_compile_options(${TARGET} PRIVATE /EHsc)
   target_compile_definitions(${TARGET} PRIVATE "_HAS_EXCEPTIONS=0")
   target_compile_definitions(${TARGET} PRIVATE "$<$<CONFIG:Debug>:_DEBUG>")

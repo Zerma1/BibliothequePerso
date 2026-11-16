@@ -27,8 +27,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  // Titre de la fenetre ; è = e accent grave, ecrit en echappement (et commentaire
-  // sans accent) pour ne pas dependre de l'encodage du fichier source avec MSVC.
+  // Titre de la fenetre. Le fichier est en UTF-8 et compile avec /utf-8
+  // (windows/CMakeLists.txt) : sans cette option, l'accent serait abime
+  // (voir E7 dans docs/JOURNAL_ERREURS.md).
   if (!window.Create(L"Bibliothèque perso", origin, size)) {
     return EXIT_FAILURE;
   }

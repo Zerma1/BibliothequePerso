@@ -85,6 +85,11 @@ cause et solution). Toute erreur inattendue ou récurrente est confiée à `anal
   tête de commande si `flutter` est introuvable.
 - Les chaînes Dart contenant une apostrophe s'écrivent entre guillemets doubles
   (`"l'anglais"`) : voir E1 du journal des erreurs.
+- Dans les paramètres des outils Edit/Write (décodés comme du JSON), un échappement
+  Unicode antislash-u est transformé en caractère avant l'écriture : pour garder un
+  échappement dans un fichier, utiliser `\x..` et vérifier les octets (voir E7).
+- Le C++ Windows est compilé avec `/utf-8` (`windows/CMakeLists.txt`) : ne pas retirer
+  cette option, sinon les accents des textes natifs sont abîmés.
 - Le cache pub réel est `C:\Users\bapti\AppData\Local\Pub\Cache` (et non `D:\dev\pub-cache`
   comme l'indique le README). Le projet étant sur D:, le cache Kotlin incrémental plante entre
   les deux disques : d'où `kotlin.incremental=false` dans `android/gradle.properties`.
