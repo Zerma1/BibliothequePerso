@@ -463,6 +463,135 @@ void main() {
     }
   });
 
+  /// Crée une base fichier en schéma v4 avec un titre, puis appelle
+  /// [preparer] pour y ajouter les listes du client, et l'ouvre avec le code
+  /// actuel. Renvoie la base mise à niveau (à fermer par l'appelant) et le
+  /// dossier temporaire (à supprimer).
+  Future<(Database, Directory)> monterDepuisV4(
+    Future<void> Function(Database base, int idTitre) preparer,
+  ) async {
+    final dossier = await Directory.systemTemp.createTemp('migration5b_test_');
+    final chemin = p.join(dossier.path, 'version4.db');
+    final version4 = await databaseFactoryFfi.openDatabase(
+      chemin,
+      options: OpenDatabaseOptions(
+        version: 4,
+        onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+        onCreate: (db, version) => appliquerMigrations(db, 0, 4),
+      ),
+    );
+    final idSource = await version4.insert('sources', <String, Object?>{
+      'nom': 'MangaDex',
+      'url_base': 'https://mangadex.org',
+      'type_source': 'mangaDex',
+    });
+    final idTitre = await version4.insert('titres', <String, Object?>{
+      'id_source': idSource,
+      'url_titre': 'https://mangadex.org/title/abc',
+      'nom': 'Titre existant',
+      'type_titre': 'manga',
+    });
+    await preparer(version4, idTitre);
+    await version4.close();
+    final misANiveau = await ouvrirBaseDeDonnees(
+      chemin: chemin,
+      fabrique: databaseFactoryFfi,
+    );
+    return (misANiveau, dossier);
+  }
+
+  test("la migration 4 → 5 renomme la liste « en attente » du client en "
+      "« En attente (perso) » avec ses titres", () async {
+    late int idListeClient;
+    final (version5, dossier) = await monterDepuisV4((base, idTitre) async {
+      idListeClient = await base.insert('listes', <String, Object?>{
+        'nom': 'en attente',
+        'ordre': 2,
+      });
+      await base.insert('titres_listes', <String, Object?>{
+        'id_titre': idTitre,
+        'id_liste': idListeClient,
+      });
+    });
+    try {
+      expect(await version5.getVersion(), versionSchema);
+      // La liste système est créée, vide.
+      final systeme = (await version5.query(
+        'listes',
+        where: 'nom = ?',
+        whereArgs: <Object?>[nomListeEnAttente],
+      )).single;
+      expect(systeme['est_systeme'], 1);
+      expect(systeme['ordre'], ordreListeEnAttente);
+      expect(systeme['id'], isNot(idListeClient));
+      expect(
+        await version5.query(
+          'titres_listes',
+          where: 'id_liste = ?',
+          whereArgs: <Object?>[systeme['id']],
+        ),
+        isEmpty,
+      );
+      // La liste du client est renommée et garde ses titres.
+      final perso = (await version5.query(
+        'listes',
+        where: 'id = ?',
+        whereArgs: <Object?>[idListeClient],
+      )).single;
+      expect(perso['nom'], 'En attente (perso)');
+      expect(perso['est_systeme'], 0);
+      expect(
+        await version5.query(
+          'titres_listes',
+          where: 'id_liste = ?',
+          whereArgs: <Object?>[idListeClient],
+        ),
+        hasLength(1),
+      );
+      expect(await version5.query('listes'), hasLength(5));
+    } finally {
+      await version5.close();
+      await dossier.delete(recursive: true);
+    }
+  });
+
+  test("la migration 4 → 5 numérote le nouveau nom si « En attente (perso) » "
+      'existe déjà', () async {
+    late int idListeClient;
+    final (version5, dossier) = await monterDepuisV4((base, idTitre) async {
+      idListeClient = await base.insert('listes', <String, Object?>{
+        'nom': 'EN ATTENTE',
+        'ordre': 2,
+      });
+      await base.insert('listes', <String, Object?>{
+        'nom': 'en attente (perso)',
+        'ordre': 3,
+      });
+    });
+    try {
+      final perso = (await version5.query(
+        'listes',
+        where: 'id = ?',
+        whereArgs: <Object?>[idListeClient],
+      )).single;
+      expect(perso['nom'], 'En attente (perso 2)');
+      final noms = (await version5.query('listes'))
+          .map((liste) => liste['nom'])
+          .toSet();
+      expect(
+        noms,
+        containsAll(<String>[
+          nomListeEnAttente,
+          'en attente (perso)',
+          'En attente (perso 2)',
+        ]),
+      );
+    } finally {
+      await version5.close();
+      await dossier.delete(recursive: true);
+    }
+  });
+
   test('la migration 5 → 6 conserve les données et ajoute url_externe '
       '(NULL = chapitre hébergé)', () async {
     final dossier = await Directory.systemTemp.createTemp('migration6_test_');

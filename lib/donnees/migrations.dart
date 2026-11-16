@@ -348,11 +348,17 @@ Future<void> _migration5(DatabaseExecutor executeur) async {
   // une migration livrée doit toujours produire le même résultat. Les
   // constantes nomListePlanifie, nomListeEnAttente, ordreListePlanifie et
   // ordreListeEnAttente doivent rester égales (vérifié par migrations_test).
-  const listesSysteme = <(String, int)>[('Planifié', 2), ('En attente', 3)];
-  for (final (nom, ordre) in listesSysteme) {
+  //
+  // Le booléen indique s'il faut renommer une liste du client de même nom
+  // au lieu de la fusionner (voir plus bas).
+  const listesSysteme = <(String, int, bool)>[
+    ('Planifié', 2, false),
+    ('En attente', 3, true),
+  ];
+  for (final (nom, ordre, renommerCollision) in listesSysteme) {
     // Le client a pu créer lui-même une liste de ce nom (nom UNIQUE COLLATE
     // NOCASE) : une insertion échouerait et bloquerait l'ouverture de la
-    // base. Sa liste devient alors la liste système, avec ses titres.
+    // base.
     final existantes = await executeur.query(
       'listes',
       columns: <String>['id'],
@@ -366,13 +372,63 @@ Future<void> _migration5(DatabaseExecutor executeur) async {
         'est_systeme': 1,
         'ordre': ordre,
       });
+    } else if (renommerCollision) {
+      // « En attente » est remplie et vidée automatiquement par le
+      // classement : fusionnée, la liste du client perdrait ses titres en
+      // silence. Elle est donc renommée « En attente (perso) » (puis
+      // « En attente (perso 2) », « (perso 3) »... si ce nom est déjà
+      // pris), garde son identifiant, ses titres et sa position, et la
+      // liste système est créée à côté, vide.
+      final nouveauNom = await _nomLibre(executeur, '$nom (perso)');
+      await executeur.update(
+        'listes',
+        <String, Object?>{'nom': nouveauNom},
+        where: 'id = ?',
+        whereArgs: <Object?>[existantes.first['id']],
+      );
+      await executeur.insert('listes', <String, Object?>{
+        'nom': nom,
+        'est_systeme': 1,
+        'ordre': ordre,
+      });
     } else {
+      // « Planifié » n'est jamais vidée automatiquement : la liste du
+      // client devient la liste système, avec ses titres.
       await executeur.update(
         'listes',
         <String, Object?>{'nom': nom, 'est_systeme': 1, 'ordre': ordre},
         where: 'id = ?',
         whereArgs: <Object?>[existantes.first['id']],
       );
+    }
+  }
+}
+
+/// Renvoie [base] s'il n'est porté par aucune liste (comparaison insensible
+/// à la casse, comme la contrainte UNIQUE COLLATE NOCASE de `listes.nom`),
+/// sinon le premier nom libre parmi « base sans la parenthèse finale + 2) »,
+/// « ... 3) », etc. Ex. : « En attente (perso) » → « En attente (perso 2) ».
+///
+/// Utilisée par la migration 5 : NE PLUS MODIFIER après livraison.
+Future<String> _nomLibre(DatabaseExecutor executeur, String base) async {
+  Future<bool> estPris(String nom) async => (await executeur.query(
+    'listes',
+    columns: <String>['id'],
+    where: 'nom = ? COLLATE NOCASE',
+    whereArgs: <Object?>[nom],
+    limit: 1,
+  )).isNotEmpty;
+
+  if (!await estPris(base)) {
+    return base;
+  }
+  final racine = base.endsWith(')') ? base.substring(0, base.length - 1) : base;
+  for (var numero = 2; ; numero++) {
+    final candidat = base.endsWith(')')
+        ? '$racine $numero)'
+        : '$racine $numero';
+    if (!await estPris(candidat)) {
+      return candidat;
     }
   }
 }
