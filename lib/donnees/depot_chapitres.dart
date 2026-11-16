@@ -7,6 +7,7 @@ import '../modeles/chapitre.dart';
 import '../modeles/constantes.dart';
 import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/outils_modeles.dart';
+import '../modeles/telechargement.dart';
 
 /// Enregistre le chemin relatif de l'archive d'un chapitre dans [executeur]
 /// (une transaction) ; partagé par `DepotChapitres.enregistrerArchive` et
@@ -64,6 +65,45 @@ Future<bool> enregistrerArchiveChapitre(
   return modifiees > 0;
 }
 
+/// Supprime, dans [executeur] (une transaction), les chapitres du titre
+/// [idTitre] venant de la source [idSource] que rien ne justifie de garder,
+/// et renvoie leur nombre ; partagé par
+/// `DepotChapitres.supprimerChapitresNonConserves` et
+/// `DepotTitresSources.retirerSourceSecondaire`.
+///
+/// Sont supprimés les chapitres **non lus**, **non téléchargés** (ni
+/// `est_telecharge`, ni archive enregistrée) et **non gardés**, sans
+/// téléchargement en cours (`telechargements.statut = 'en_cours'` : le
+/// service écrirait sinon une archive pour un chapitre disparu). Leur
+/// éventuelle entrée en attente dans la file disparaît par `ON DELETE
+/// CASCADE`. Les chapitres lus ou téléchargés restent, avec leur
+/// `id_source` : l'état de lecture n'est jamais perdu, et les archives
+/// suivent la règle des 24 h (couche services).
+///
+/// Requête servie par l'index `index_chapitres_titre_source` (migration 7).
+Future<int> supprimerChapitresNonConservesSource(
+  DatabaseExecutor executeur,
+  int idTitre,
+  int idSource,
+) {
+  return executeur.rawDelete(
+    'DELETE FROM chapitres '
+    'WHERE id_titre = ? AND id_source = ? '
+    'AND est_lu = ? AND est_telecharge = ? AND nom_archive IS NULL '
+    'AND est_garde = ? '
+    'AND NOT EXISTS (SELECT 1 FROM telechargements d '
+    'WHERE d.id_chapitre = chapitres.id AND d.statut = ?)',
+    <Object?>[
+      idTitre,
+      idSource,
+      valeurSqlFaux,
+      valeurSqlFaux,
+      valeurSqlFaux,
+      StatutTelechargement.enCours.valeurSql,
+    ],
+  );
+}
+
 /// Accès à la table `chapitres`.
 class DepotChapitres {
   /// Crée le dépôt sur une base déjà ouverte.
@@ -83,19 +123,36 @@ class DepotChapitres {
   /// comme NULL. Les chapitres sans [Chapitre.dateDetection] reçoivent
   /// [dateDetection] (par défaut : maintenant).
   ///
+  /// Site d'origine (étape 8) : si [idSource] est donné, il s'applique aux
+  /// chapitres qui n'ont pas leur propre [Chapitre.idSource] ; un chapitre
+  /// resté sans source reçoit la source principale de son titre (déclencheur
+  /// de la migration 7). Un chapitre déjà connu garde sa source d'origine.
+  ///
   /// Lève une [ErreurBaseDeDonnees] si un chapitre n'a pas de
-  /// [Chapitre.idTitre] ou si ce titre n'existe pas ; rien n'est alors écrit.
+  /// [Chapitre.idTitre], si ce titre n'existe pas, ou si sa source n'est pas
+  /// l'un des sites du titre (`titres_sources`) ; rien n'est alors écrit.
   Future<int> enregistrerChapitres(
     List<Chapitre> chapitres, {
     DateTime? dateDetection,
+    int? idSource,
   }) async {
     if (chapitres.isEmpty) {
       return 0;
     }
     final detection = dateDetection ?? DateTime.now().toUtc();
+    final aEnregistrer = idSource == null
+        ? chapitres
+        : <Chapitre>[
+            for (final chapitre in chapitres)
+              chapitre.idSource == null
+                  ? chapitre.copierAvec(idSource: idSource)
+                  : chapitre,
+          ];
 
     final idsTitres = <int>{};
-    for (final chapitre in chapitres) {
+    // Couples (titre, source) explicites, à vérifier dans titres_sources.
+    final sitesAVerifier = <(int, int)>{};
+    for (final chapitre in aEnregistrer) {
       final idTitre = chapitre.idTitre;
       if (idTitre == null) {
         throw ErreurBaseDeDonnees(
@@ -104,6 +161,10 @@ class DepotChapitres {
         );
       }
       idsTitres.add(idTitre);
+      final idSourceChapitre = chapitre.idSource;
+      if (idSourceChapitre != null) {
+        sitesAVerifier.add((idTitre, idSourceChapitre));
+      }
     }
 
     try {
@@ -126,8 +187,26 @@ class DepotChapitres {
             );
           }
         }
-        final nouveaux = await _insererChapitres(txn, chapitres, detection);
-        await _mettreAJourUrlsExternes(txn, chapitres);
+        // Un chapitre ne peut venir que d'un site lié au titre : sinon il
+        // ne serait ni affiché avec un site connu, ni supprimé au retrait
+        // du site. Recherche servie par l'index UNIQUE (id_titre, id_source).
+        for (final (idTitre, idSourceChapitre) in sitesAVerifier) {
+          final liens = await txn.query(
+            'titres_sources',
+            columns: <String>['id'],
+            where: 'id_titre = ? AND id_source = ?',
+            whereArgs: <Object?>[idTitre, idSourceChapitre],
+            limit: 1,
+          );
+          if (liens.isEmpty) {
+            throw ErreurBaseDeDonnees(
+              "Impossible d'enregistrer les chapitres : la source "
+              "n°$idSourceChapitre n'est pas un site du titre n°$idTitre.",
+            );
+          }
+        }
+        final nouveaux = await _insererChapitres(txn, aEnregistrer, detection);
+        await _mettreAJourUrlsExternes(txn, aEnregistrer);
         return nouveaux;
       });
     } on DatabaseException catch (erreur) {
@@ -200,15 +279,45 @@ class DepotChapitres {
     return url == null || url.isEmpty ? null : url;
   }
 
-  /// Charge les chapitres d'un titre, triés par numéro croissant.
-  Future<List<Chapitre>> chargerChapitres(int idTitre) async {
+  /// Charge les chapitres d'un titre, triés par numéro croissant ; si
+  /// [idSource] est donné, seulement ceux venant de ce site.
+  ///
+  /// Chaque chapitre porte son site d'origine ([Chapitre.idSource]) : un
+  /// même numéro peut donc apparaître une fois par site. À numéro égal,
+  /// l'ordre est celui d'insertion. Sans filtre, la requête est servie par
+  /// `index_chapitres_titre_lu` ; avec filtre, par
+  /// `index_chapitres_titre_source` (migration 7).
+  Future<List<Chapitre>> chargerChapitres(int idTitre, {int? idSource}) async {
     final lignes = await _baseDeDonnees.query(
       'chapitres',
-      where: 'id_titre = ?',
-      whereArgs: <Object?>[idTitre],
+      where: idSource == null
+          ? 'id_titre = ?'
+          : 'id_titre = ? AND id_source = ?',
+      whereArgs: <Object?>[idTitre, ?idSource],
       orderBy: 'numero, id',
     );
     return lignes.map(Chapitre.depuisMap).toList();
+  }
+
+  /// Supprime les chapitres du titre [idTitre] venant de la source
+  /// [idSource] qui ne sont ni lus, ni téléchargés, ni gardés, ni en cours
+  /// de téléchargement, et renvoie leur nombre (voir
+  /// [supprimerChapitresNonConservesSource]).
+  ///
+  /// Sert au retrait d'un site secondaire ; `DepotTitresSources
+  /// .retirerSourceSecondaire` l'appelle déjà dans sa transaction.
+  Future<int> supprimerChapitresNonConserves(int idTitre, int idSource) async {
+    try {
+      return await _baseDeDonnees.transaction(
+        (txn) => supprimerChapitresNonConservesSource(txn, idTitre, idSource),
+      );
+    } on DatabaseException catch (erreur) {
+      throw ErreurBaseDeDonnees(
+        "Impossible de supprimer les chapitres de la source n°$idSource "
+        'pour le titre n°$idTitre.',
+        cause: erreur,
+      );
+    }
   }
 
   /// Charge un chapitre par son identifiant, ou `null`.
