@@ -17,8 +17,10 @@ import '../donnees/depot_chapitres.dart';
 import '../donnees/depot_listes.dart';
 import '../donnees/depot_sources.dart';
 import '../donnees/depot_titres.dart';
+import '../donnees/depot_titres_sources.dart';
 import '../donnees/stockage_telechargements.dart';
 import '../modeles/chapitre.dart';
+import '../modeles/lien_titre_source.dart';
 import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
 import '../modeles/titre.dart';
@@ -61,13 +63,17 @@ class TitreExporte {
     this.categories = const <String>[],
     this.dernierChapitreLu,
     this.nombreChapitres = 0,
+    this.sitesSecondaires = const <SiteExporte>[],
   });
 
   /// Titre enregistré.
   final Titre titre;
 
-  /// Site du titre, ou `null` s'il n'existe plus.
+  /// Site principal du titre, ou `null` s'il n'existe plus.
   final Source? source;
+
+  /// Autres sites du titre (étape 8), dans l'ordre d'ajout.
+  final List<SiteExporte> sitesSecondaires;
 
   /// Noms des listes qui contiennent le titre (ordre d'affichage).
   final List<String> listes;
@@ -80,6 +86,18 @@ class TitreExporte {
 
   /// Nombre de chapitres connus du titre.
   final int nombreChapitres;
+}
+
+/// Un site secondaire d'un titre exporté : l'adresse du titre sur ce site.
+class SiteExporte {
+  /// Crée la ligne.
+  const SiteExporte({required this.url, this.source});
+
+  /// Adresse du titre sur ce site.
+  final String url;
+
+  /// Site configuré, ou `null` s'il n'existe plus.
+  final Source? source;
 }
 
 /// Tout ce qu'un export contient, lu dans la base. Séparé de l'écriture des
@@ -142,7 +160,9 @@ class ServiceExport {
     ServiceParametres? serviceParametres,
     String? versionApplication,
     DateTime Function()? horloge,
-  }) : _depotSources = depotSources,
+    DepotTitresSources? depotTitresSources,
+  }) : _depotTitresSources = depotTitresSources,
+       _depotSources = depotSources,
        _depotTitres = depotTitres,
        _depotChapitres = depotChapitres,
        _depotListes = depotListes,
@@ -172,6 +192,10 @@ class ServiceExport {
   final DepotChapitres _depotChapitres;
   final DepotListes _depotListes;
   final DepotCategories _depotCategories;
+
+  /// Sites de chaque titre (étape 8) ; sans lui, seul le site principal est
+  /// exporté.
+  final DepotTitresSources? _depotTitresSources;
 
   /// Réglages du client (langues, niveaux de contenu) ; sans lui, les
   /// valeurs par défaut sont exportées.
@@ -337,6 +361,16 @@ class ServiceExport {
           ],
           dernierChapitreLu: dernierChapitreLu(chapitres),
           nombreChapitres: chapitres.length,
+          sitesSecondaires: <SiteExporte>[
+            for (final lien
+                in await _depotTitresSources?.chargerLiensTitre(id) ??
+                    const <LienTitreSource>[])
+              if (!lien.estPrincipale)
+                SiteExporte(
+                  url: lien.urlTitre,
+                  source: sourcesParId[lien.idSource],
+                ),
+          ],
         ),
       );
     }
@@ -408,7 +442,9 @@ class ServiceExport {
   /// (UTC, ISO 8601), `versionApplication`, `reglages` (`langues`,
   /// `niveauxContenu`), `listes`, `sources`, `titres`. Les titres désignent
   /// leur site par son nom **et** son `urlBase` (unique), pour que l'import
-  /// retrouve le bon site même si deux sites portent le même nom.
+  /// retrouve le bon site même si deux sites portent le même nom. Champ
+  /// `sites` (étape 8, ajout compatible) : tous les sites du titre (`url`,
+  /// `source`, `urlSource`, `principal`), le principal d'abord.
   static String produireJson(ContenuExport contenu) {
     Map<String, Object?> versSource(Source source) => <String, Object?>{
       'nom': source.nom,
@@ -448,6 +484,24 @@ class ServiceExport {
         'url': titre.urlTitre,
         'source': exporte.source?.nom,
         'urlSource': exporte.source?.urlBase,
+        // Étape 8 : tous les sites du titre, le principal d'abord (repris
+        // aussi dans `url` / `source` / `urlSource` pour les lecteurs du
+        // format 1 qui ne connaissent pas ce champ).
+        'sites': <Map<String, Object?>>[
+          <String, Object?>{
+            'url': titre.urlTitre,
+            'source': exporte.source?.nom,
+            'urlSource': exporte.source?.urlBase,
+            'principal': true,
+          },
+          for (final site in exporte.sitesSecondaires)
+            <String, Object?>{
+              'url': site.url,
+              'source': site.source?.nom,
+              'urlSource': site.source?.urlBase,
+              'principal': false,
+            },
+        ],
         'listes': exporte.listes,
         'categories': exporte.categories,
         'langues': titre.listeLanguesPreferees,
@@ -560,6 +614,11 @@ class ServiceExport {
       exporte.source == null
           ? 'site inconnu'
           : echapperMarkdown(exporte.source!.nom),
+      // Étape 8 : autres sites du titre, en liens cliquables.
+      if (exporte.sitesSecondaires.isNotEmpty)
+        'autres sites : ${<String>[
+          for (final site in exporte.sitesSecondaires) _lien(site.source?.nom ?? 'site inconnu', site.url),
+        ].join(', ')}',
       if (exporte.categories.isNotEmpty)
         'catégories : ${echapperMarkdown(exporte.categories.join(', '))}',
       if (exporte.dernierChapitreLu case final chapitre?)

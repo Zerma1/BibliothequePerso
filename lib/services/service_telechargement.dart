@@ -17,6 +17,7 @@ import '../donnees/depot_listes.dart';
 import '../donnees/depot_sources.dart';
 import '../donnees/depot_telechargements.dart';
 import '../donnees/depot_titres.dart';
+import '../donnees/depot_titres_sources.dart';
 import '../donnees/erreur_stockage.dart';
 import '../donnees/stockage_telechargements.dart';
 import '../modeles/chapitre.dart';
@@ -84,7 +85,9 @@ class ServiceTelechargement {
     String? identifiantVerrou,
     Duration dureeVerrou = dureeVerrouParDefaut,
     DateTime Function()? horloge,
-  }) : _identifiantVerrou = identifiantVerrou ?? _genererIdentifiant(),
+    DepotTitresSources? depotTitresSources,
+  }) : _depotTitresSources = depotTitresSources,
+       _identifiantVerrou = identifiantVerrou ?? _genererIdentifiant(),
        _dureeVerrou = dureeVerrou,
        _horloge = horloge ?? DateTime.now,
        _depotTelechargements = depotTelechargements,
@@ -108,6 +111,11 @@ class ServiceTelechargement {
   final ClientHttpPoli _client;
   final ServiceParametres _serviceParametres;
   final SignalementMangaDex _signalement;
+
+  /// Sites de chaque titre (étape 8). Facultatif pour ne pas casser les
+  /// appelants existants : sans lui, tous les chapitres sont considérés
+  /// comme venant d'un site lié, et seul le site principal est connu.
+  final DepotTitresSources? _depotTitresSources;
 
   final String _identifiantVerrou;
   final Duration _dureeVerrou;
@@ -458,6 +466,11 @@ class ServiceTelechargement {
         general: await _serviceParametres.chargerLangues(),
         titre: titre,
       ),
+      // Étape 8 : une version par numéro, le site principal départageant
+      // deux versions équivalentes ; les chapitres d'un site retiré ne sont
+      // plus suivis (leurs archives passent en suppression différée).
+      idSourcePrincipale: idSource,
+      idsSourcesLiees: await _chargerIdsSourcesLiees(idTitre, idSource),
     );
     final chapitres = await _depotChapitres.chargerChapitres(idTitre);
     final plan = politique.calculer(
@@ -466,6 +479,18 @@ class ServiceTelechargement {
       estSuivi: noms.contains(nomListeSuivis),
     );
     return (plan: plan, chapitres: chapitres);
+  }
+
+  /// Sites liés au titre (principal compris), ou `null` sans dépôt des
+  /// sites (pas de filtre par site).
+  Future<Set<int>?> _chargerIdsSourcesLiees(
+    int idTitre,
+    int idSourcePrincipale,
+  ) async {
+    final depot = _depotTitresSources;
+    if (depot == null) return null;
+    final liens = await depot.chargerLiensTitre(idTitre);
+    return <int>{idSourcePrincipale, for (final lien in liens) lien.idSource};
   }
 
   Future<PlanTelechargement> _appliquerRegles(
@@ -858,7 +883,10 @@ class ServiceTelechargement {
     final idTitre = chapitre?.idTitre;
     if (chapitre == null || idTitre == null) return null;
     final titre = await _depotTitres.chargerTitre(idTitre);
-    final idSource = titre?.idSource;
+    // Étape 8 : le contenu d'un chapitre se demande au site d'où il vient
+    // (un site secondaire peut être d'un autre type que le principal) ; un
+    // chapitre sans site connu vient du site principal.
+    final idSource = chapitre.idSource ?? titre?.idSource;
     if (titre == null || idSource == null) return null;
     final source = await _depotSources.chargerSource(idSource);
     if (source == null) return null;

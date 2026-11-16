@@ -9,6 +9,7 @@ import 'package:bibliotheque_perso/donnees/depot_listes.dart';
 import 'package:bibliotheque_perso/donnees/depot_parametres.dart';
 import 'package:bibliotheque_perso/donnees/depot_sources.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres.dart';
+import 'package:bibliotheque_perso/donnees/depot_titres_sources.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
@@ -53,6 +54,7 @@ void main() {
       serviceParametres: parametres,
       versionApplication: '0.1.0',
       horloge: () => dateExport,
+      depotTitresSources: DepotTitresSources(base),
     );
   });
 
@@ -269,6 +271,53 @@ void main() {
       expect(second['nombreChapitres'], 0);
       expect(second['langues'], isEmpty);
       expect(second['couvertureChoisie'], isNull);
+    });
+
+    test('liste tous les sites de chaque titre, le principal en tête '
+        '(étape 8)', () async {
+      await remplir();
+      final premierTitre = (await depotTitres.chargerTitreParUrl(
+        urlTitreReference,
+      ))!;
+      final etagere = (await depotSources.chargerSourceParUrl(
+        'https://etagere.example',
+      ))!;
+      await DepotTitresSources(base).ajouterSourceSecondaire(
+        premierTitre.id!,
+        etagere.id!,
+        'https://etagere.example/manga/death',
+      );
+
+      final resultat = await service.exporter();
+      final titres = (lireJson(resultat.cheminJson)['titres']! as List<Object?>)
+          .cast<Map<String, Object?>>();
+      final premier = titres.firstWhere((t) => t['url'] == urlTitreReference);
+      expect(premier['sites'], <Object?>[
+        <String, Object?>{
+          'url': urlTitreReference,
+          'source': 'MangaDex',
+          'urlSource': 'https://mangadex.org',
+          'principal': true,
+        },
+        <String, Object?>{
+          'url': 'https://etagere.example/manga/death',
+          'source': "L'Étagère",
+          'urlSource': 'https://etagere.example',
+          'principal': false,
+        },
+      ]);
+      final second = titres.firstWhere((t) => t['nom'] == 'Un *livre*');
+      expect(second['sites'], hasLength(1));
+
+      final markdown = File(
+        resultat.cheminMarkdown,
+      ).readAsStringSync(encoding: utf8);
+      expect(
+        markdown,
+        contains(
+          "autres sites : [L'Étagère](https://etagere.example/manga/death)",
+        ),
+      );
     });
 
     test('est encodé en UTF-8 avec accents et apostrophes lisibles', () async {

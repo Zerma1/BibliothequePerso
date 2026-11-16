@@ -135,12 +135,28 @@ class PlanTelechargement {
 /// d'une autre langue (il ne compte pas dans les positions). Une archive
 /// d'un chapitre devenu externe n'est jamais supprimée par les règles : elle
 /// ne pourrait plus être retéléchargée.
+///
+/// Plusieurs sites pour un titre (étape 8) : un même numéro peut exister sur
+/// chaque site. La version retenue est choisie dans cet ordre (décision de
+/// l'orchestrateur) : langue préférée, puis version hébergée plutôt
+/// qu'externe, puis version déjà téléchargée (pour ne pas retélécharger ce
+/// qui est déjà sur l'appareil), puis site principal
+/// ([idSourcePrincipale]), puis la plus ancienne. Les chapitres d'un site
+/// retiré du titre (hors de [idsSourcesLiees]) ne sont jamais retenus ; leurs
+/// archives sont à supprimer (suppression différée de 24 h côté service),
+/// même pour un titre ni favori ni suivi.
 class PolitiqueTelechargement {
   /// Crée la politique avec les [reglages] et les [languesPreferees] (codes
   /// ISO 639-1, par ordre de préférence).
+  ///
+  /// [idSourcePrincipale] : site principal du titre (départage deux versions
+  /// équivalentes) ; [idsSourcesLiees] : sites encore liés au titre (`null`
+  /// = tous les chapitres sont considérés comme venant d'un site lié).
   const PolitiqueTelechargement({
     this.reglages = const ReglagesTelechargement(),
     this.languesPreferees = const <String>[],
+    this.idSourcePrincipale,
+    this.idsSourcesLiees,
   });
 
   /// Limites appliquées.
@@ -148,6 +164,32 @@ class PolitiqueTelechargement {
 
   /// Langues du client, par ordre de préférence.
   final List<String> languesPreferees;
+
+  /// Site principal du titre, ou `null` s'il n'est pas connu (aucune
+  /// préférence de site).
+  final int? idSourcePrincipale;
+
+  /// Sites liés au titre, ou `null` pour ne pas filtrer par site.
+  final Set<int>? idsSourcesLiees;
+
+  /// `true` si [chapitre] vient d'un site qui n'est plus lié au titre
+  /// (site secondaire retiré) : il n'est plus suivi, son archive éventuelle
+  /// est à supprimer. Un chapitre sans site connu (`idSource` nul, lignes
+  /// antérieures à l'étape 8) est considéré comme venant du site principal.
+  bool estDeSiteRetire(Chapitre chapitre) {
+    final liees = idsSourcesLiees;
+    final idSource = chapitre.idSource;
+    return liees != null && idSource != null && !liees.contains(idSource);
+  }
+
+  /// `true` si [chapitre] vient du site principal du titre (un chapitre sans
+  /// site connu aussi, voir [estDeSiteRetire]). Toujours `false` si le site
+  /// principal n'est pas connu.
+  bool estDuSitePrincipal(Chapitre chapitre) {
+    final principal = idSourcePrincipale;
+    if (principal == null) return false;
+    return chapitre.idSource == null || chapitre.idSource == principal;
+  }
 
   /// Garde une version par numéro, triée par numéro croissant.
   ///
@@ -239,10 +281,13 @@ class PolitiqueTelechargement {
   bool estDansLesLangues(Chapitre chapitre) => rangLangue(chapitre) != null;
 
   /// `true` si les règles peuvent mettre [chapitre] en file : dans les
-  /// langues du client ([estDansLesLangues]) et hébergé par le site source
-  /// (pas `Chapitre.estExterne`).
+  /// langues du client ([estDansLesLangues]), hébergé par le site source
+  /// (pas `Chapitre.estExterne`) et venant d'un site encore lié au titre
+  /// ([estDeSiteRetire]).
   bool estTelechargeable(Chapitre chapitre) =>
-      !chapitre.estExterne && estDansLesLangues(chapitre);
+      !chapitre.estExterne &&
+      !estDeSiteRetire(chapitre) &&
+      estDansLesLangues(chapitre);
 
   Chapitre _meilleureVersion(List<Chapitre> versions) {
     // Les langues absentes des préférences passent en dernier : cet ordre
@@ -254,8 +299,12 @@ class PolitiqueTelechargement {
     // client passe avant une version externe, même dans une langue préférée
     // (R4 : la version externe ne se lit pas dans l'application). Une
     // version externe dans ses langues passe encore avant une autre langue.
+    // Un site retiré du titre passe en dernier, comme une autre langue : sa
+    // version n'est plus suivie.
     int groupe(Chapitre chapitre) {
-      if (this.rangLangue(chapitre) == null) return 2;
+      if (this.rangLangue(chapitre) == null || estDeSiteRetire(chapitre)) {
+        return 2;
+      }
       return chapitre.estExterne ? 1 : 0;
     }
 
@@ -266,8 +315,15 @@ class PolitiqueTelechargement {
         final parLangue = rangLangue(a).compareTo(rangLangue(b));
         if (parLangue != 0) return parLangue;
         // Une version déjà téléchargée est préférée : inutile de la
-        // remplacer par une autre traduction équivalente.
+        // remplacer par une autre traduction équivalente. Placé avant le
+        // site principal : une version d'un site secondaire déjà sur
+        // l'appareil n'est pas retéléchargée depuis le principal (elle
+        // resterait sinon en double, affichée en orange).
         if (a.estTelecharge != b.estTelecharge) return a.estTelecharge ? -1 : 1;
+        // Étape 8 : à égalité, la version du site principal (celui que le
+        // client a choisi comme référence pour ce titre).
+        final principalA = estDuSitePrincipal(a);
+        if (principalA != estDuSitePrincipal(b)) return principalA ? -1 : 1;
         final dateA = a.datePublication;
         final dateB = b.datePublication;
         if (dateA != null && dateB != null && dateA != dateB) {
@@ -285,7 +341,16 @@ class PolitiqueTelechargement {
     required bool estSuivi,
   }) {
     if (!estFavori && !estSuivi) {
-      return PlanTelechargement.vide;
+      // Les téléchargements manuels sont conservés, sauf ceux d'un site
+      // retiré du titre : le client a décidé de ne plus suivre ce site.
+      final retires = _archivesDeSitesRetires(chapitres);
+      return retires.isEmpty
+          ? PlanTelechargement.vide
+          : PlanTelechargement(
+              idsVoulus: const <int>{},
+              idsATelecharger: const <int>[],
+              idsASupprimer: retires,
+            );
     }
     // Toutes les versions servent à savoir ce qui est lu (le client a pu
     // lire en ligne un chapitre en russe) ; seules celles dans ses langues
@@ -366,9 +431,12 @@ class PolitiqueTelechargement {
     for (final version in versions) {
       if (!voulus.contains(version.chapitre.id)) continue;
       for (final autre in version.versions) {
+        // Une version d'un site retiré n'est jamais gardée en remplacement
+        // ni comme doublon : sa suppression suit la règle des 24 h.
         if (autre.id == version.chapitre.id ||
             !autre.estTelecharge ||
-            !estDansLesLangues(autre)) {
+            !estDansLesLangues(autre) ||
+            estDeSiteRetire(autre)) {
           continue;
         }
         if (!version.chapitre.estTelecharge ||
@@ -379,11 +447,12 @@ class PolitiqueTelechargement {
     }
     // Un chapitre téléchargé puis devenu externe (l'éditeur a repris ses
     // droits) garde son archive : elle ne pourrait plus être retéléchargée.
+    // Exception : un site retiré du titre par le client (étape 8).
     final aSupprimer = <int>[
       for (final chapitre in chapitres)
         if (chapitre.id != null &&
             chapitre.estTelecharge &&
-            !chapitre.estExterne &&
+            (!chapitre.estExterne || estDeSiteRetire(chapitre)) &&
             !voulus.contains(chapitre.id) &&
             !gardes.contains(chapitre.id))
           chapitre.id!,
@@ -413,6 +482,15 @@ class PolitiqueTelechargement {
     }
     return dansLesLangues;
   }
+
+  /// Chapitres téléchargés venant d'un site retiré du titre.
+  List<int> _archivesDeSitesRetires(List<Chapitre> chapitres) => <int>[
+    for (final chapitre in chapitres)
+      if (chapitre.id != null &&
+          chapitre.estTelecharge &&
+          estDeSiteRetire(chapitre))
+        chapitre.id!,
+  ];
 
   static int _positif(int valeur) => valeur < 0 ? 0 : valeur;
 
