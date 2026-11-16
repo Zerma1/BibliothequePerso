@@ -60,9 +60,9 @@ Décisions de l'orchestrateur (autonomie accordée par le client jusqu'au vendre
   de l'appareil.
 
 ### developpeur-donnees
-- [ ] D5. Migration 5 : `chapitres.est_garde INTEGER NOT NULL DEFAULT 0` (bouton « Garder », remplace le stockage dans `parametres` — prévoir la reprise des identifiants déjà gardés côté service) ; `titres.niveau_contenu TEXT NULL` ; `titres.couverture_choisie TEXT NULL` (URL du site ou chemin d'une image locale) ; listes système « Planifié » et « En attente » (`est_systeme = 1`, ordres 2 et 3). Modèles, dépôts, tests (migration 4→5 sur base fichier avec données).
-- [ ] D6. Requête « dernière parution dans des langues données » par titre (`DepotChapitres.chargerDernieresParutions(List<String> langues)` → idTitre → date) pour l'onglet Mises à jour ; `DepotTitres.chargerTitres(niveauxContenu: …)` ; `DepotChapitres.repousserSuppressionPrevue(id, date)` (UPDATE … WHERE date_suppression_prevue IS NOT NULL).
-- [ ] D7. Couvertures sur l'appareil : `StockageTelechargements.enregistrerCouverture(titre, octets, extension)`, `chargerCouverture(titre)`, suppression avec le titre ; dossier `<type>/<titre>/couverture.<ext>`.
+- [x] D5. Migration 5 : `chapitres.est_garde INTEGER NOT NULL DEFAULT 0` (bouton « Garder », remplace le stockage dans `parametres` — prévoir la reprise des identifiants déjà gardés côté service) ; `titres.niveau_contenu TEXT NULL` ; `titres.couverture_choisie TEXT NULL` (URL du site ou chemin d'une image locale) ; listes système « Planifié » et « En attente » (`est_systeme = 1`, ordres 2 et 3). Modèles, dépôts, tests (migration 4→5 sur base fichier avec données).
+- [x] D6. Requête « dernière parution dans des langues données » par titre (`DepotChapitres.chargerDernieresParutions(List<String> langues)` → idTitre → date) pour l'onglet Mises à jour ; `DepotTitres.chargerTitres(niveauxContenu: …)` ; `DepotChapitres.repousserSuppressionPrevue(id, date)` (UPDATE … WHERE date_suppression_prevue IS NOT NULL).
+- [x] D7. Couvertures sur l'appareil : `StockageTelechargements.enregistrerCouverture(titre, octets, extension)`, `chargerCouverture(titre)`, suppression avec le titre ; dossier `<type>/<titre>/couverture.<ext>`.
 
 ### developpeur-sources
 - [ ] SO1. `SourceMangaDex` : niveau de contenu (`contentRating`) dans la fiche ; liste des couvertures d'un titre (`GET /cover` — vérifier la doc) pour le choix du client ; recherche avec filtre de niveau de contenu.
