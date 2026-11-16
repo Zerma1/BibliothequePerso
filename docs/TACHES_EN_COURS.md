@@ -108,6 +108,6 @@ Décisions de l'orchestrateur :
 - Retirer un site secondaire supprime ses chapitres non lus et non téléchargés ; les archives
   déjà téléchargées suivent la règle des 24 h.
 
-- [ ] M1. developpeur-donnees : migration 7 — table `titres_sources(id, id_titre → titres CASCADE, id_source → sources, url_titre, est_principale, date_ajout, UNIQUE(id_titre, id_source), UNIQUE(url_titre))` remplie depuis `titres.id_source/url_titre` pour les titres existants ; colonne `chapitres.id_source` (NULL = site principal pour les anciennes lignes, remplie par la migration) ; dépôt `DepotTitresSources` ; `DepotChapitres` filtre par source.
+- [x] M1. developpeur-donnees : migration 7 — table `titres_sources(id, id_titre → titres CASCADE, id_source → sources, url_titre, est_principale, date_ajout, UNIQUE(id_titre, id_source), UNIQUE(url_titre))` remplie depuis `titres.id_source/url_titre` pour les titres existants ; colonne `chapitres.id_source` (NULL = site principal pour les anciennes lignes, remplie par la migration) ; dépôt `DepotTitresSources` ; `DepotChapitres` filtre par source.
 - [ ] M2. developpeur-services : ajout / retrait d'un site à un titre (vérifie que l'adresse est bien un titre du site, sans le dupliquer ailleurs), actualisation sur tous les sites, politique multi-sites (ordre ci-dessus), mises à jour multi-sites, export (tous les liens).
 - [ ] M3. developpeur-interface : fiche — section « Sites » (principal + secondaires, ajouter, retirer, définir comme principal), chapitres avec le nom du site, légende ; filtre « site » dans la liste des chapitres.
