@@ -43,3 +43,41 @@ au fur et à mesure ; ne pas commiter ; `flutter analyze` à 0 sur son périmèt
 - [ ] P1. Migration 5 : colonne `chapitres.est_garde` pour le bouton « Garder » (aujourd'hui mémorisé dans `parametres`, avec une petite course possible entre isolats) — developpeur-donnees puis developpeur-services.
 - [ ] P2. `ServiceTelechargement.chargerSuppressionsPrevues()` (tous titres) pour lister les chapitres en rouge dans l'onglet Téléchargements, et un repère visuel « gardé » — developpeur-services puis developpeur-interface.
 - [ ] P3. Réglage avancé des langues d'un site : accepter les variantes régionales (`pt-br`).
+
+## Étape 6 — retours du client après le premier test (2026-11-15)
+
+Décisions de l'orchestrateur (autonomie accordée par le client jusqu'au vendredi 20/11 17h) :
+- « Planifié de lecture » et « En attente » sont des **listes système** (comme Favoris / Suivis),
+  non supprimables. « Planifié » : le titre est vérifié mais n'apparaît jamais dans les bilans /
+  notifications de mises à jour. « En attente » : liste **automatique** — un titre suivi, favori
+  ou planifié qui n'a **aucun chapitre dans les langues du client** y est ajouté, et en est retiré
+  dès qu'un chapitre paraît ; ses titres sont vérifiés à **chaque heure pleine** (surveillance
+  accrue, réglable dans Paramètres, entre 1 h et l'intervalle normal).
+- Niveau de contenu MangaDex (`safe`, `suggestive`, `erotica`, `pornographic`) enregistré par
+  titre ; filtre dans la bibliothèque (par défaut : tout afficher sauf `pornographic`, réglable).
+- Couverture : enregistrée sur l'appareil (lisible hors-ligne) par `StockageTelechargements` ;
+  le client peut choisir une autre couverture du site (MangaDex : une par volume) ou une image
+  de l'appareil.
+
+### developpeur-donnees
+- [ ] D5. Migration 5 : `chapitres.est_garde INTEGER NOT NULL DEFAULT 0` (bouton « Garder », remplace le stockage dans `parametres` — prévoir la reprise des identifiants déjà gardés côté service) ; `titres.niveau_contenu TEXT NULL` ; `titres.couverture_choisie TEXT NULL` (URL du site ou chemin d'une image locale) ; listes système « Planifié » et « En attente » (`est_systeme = 1`, ordres 2 et 3). Modèles, dépôts, tests (migration 4→5 sur base fichier avec données).
+- [ ] D6. Requête « dernière parution dans des langues données » par titre (`DepotChapitres.chargerDernieresParutions(List<String> langues)` → idTitre → date) pour l'onglet Mises à jour ; `DepotTitres.chargerTitres(niveauxContenu: …)` ; `DepotChapitres.repousserSuppressionPrevue(id, date)` (UPDATE … WHERE date_suppression_prevue IS NOT NULL).
+- [ ] D7. Couvertures sur l'appareil : `StockageTelechargements.enregistrerCouverture(titre, octets, extension)`, `chargerCouverture(titre)`, suppression avec le titre ; dossier `<type>/<titre>/couverture.<ext>`.
+
+### developpeur-sources
+- [ ] SO1. `SourceMangaDex` : niveau de contenu (`contentRating`) dans la fiche ; liste des couvertures d'un titre (`GET /cover` — vérifier la doc) pour le choix du client ; recherche avec filtre de niveau de contenu.
+- [ ] SO2. Rapport d'erreur exportable : quand l'ajout d'un site ou la lecture d'un titre échoue, `ErreurSource` garde ce qu'il faut pour un rapport (URL, code HTTP, type détecté, extrait du début de la réponse sans données personnelles) ; fonction qui produit le texte du rapport.
+
+### developpeur-services
+- [ ] SE1. Listes « Planifié » / « En attente » : classement automatique « En attente », exclusion de « Planifié » des bilans, vérification horaire des titres en attente (`PlanificationMisesAJour` ou équivalent), réglage de l'intervalle.
+- [ ] SE2. Service de l'onglet Mises à jour : titres suivis / favoris / en attente triés par dernière parution dans leurs langues (`languesPourTitre`), avec le dernier chapitre paru.
+- [ ] SE3. Couvertures : téléchargement et enregistrement sur l'appareil à l'ajout et à l'actualisation ; choix d'une couverture (liste du site, image locale) ; `est_garde` utilisé à la place de `parametres` (reprise des anciens) ; `chargerSuppressionsPrevues()` (P2) ; `repousserSuppressionPrevue` dans `protegerChapitre`.
+- [ ] SE4. Niveau de contenu : enregistré à l'ajout / actualisation ; réglage du filtre (par défaut tout sauf `pornographic`).
+- [ ] SE5. Export du rapport d'erreur dans un fichier texte (`Documents/bibliotheque_perso/rapports/`), chemin renvoyé à l'interface.
+
+### developpeur-interface
+- [ ] IN1. Onglet « Mises à jour » (liste triée par dernière parution, badge des nouveautés).
+- [ ] IN2. Bibliothèque : filtre par catégories pensé pour beaucoup de tags (panneau / feuille avec recherche, sélection multiple, regroupement), filtre par niveau de contenu, listes Planifié / En attente.
+- [ ] IN3. Couvertures : affichage depuis l'appareil ; choix de la couverture sur la fiche d'un titre.
+- [ ] IN4. Bouton « Exporter le rapport d'erreur » quand l'ajout d'un site ou d'un titre échoue.
+- [ ] IN5. Onglet Téléchargements : section des suppressions prévues (rouge, compte à rebours) ; repère « gardé ». Réglage avancé des langues d'un site : accepter `pt-br` (P3). Bouton central « Ajouter un titre » en double avec le bouton flottant sur la bibliothèque vide : n'en garder qu'un.
