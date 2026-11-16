@@ -323,6 +323,14 @@ Chaque adaptateur est testé avec des **pages HTML enregistrées** dans
 L'application est destinée à un **usage personnel**. Elle respecte la charge des sites grâce aux
 délais de `ClientHttpPoli` et ne contourne aucune protection d'accès (connexion, paywall, DRM).
 
+
+**Sites à contenu protégé (décision du 2026-11-16)** : certains éditeurs chiffrent volontairement
+les pages de leurs chapitres (par exemple **MANGA Plus** de Shueisha). L'application ne lit ni
+ne télécharge jamais ces pages : elle **liste** les chapitres (via un site qui les référence,
+comme MangaDex, ou plus tard via la source elle-même si une liste publique existe), les
+compte dans les mises à jour, permet de les marquer lus, et propose un bouton « Lire sur
+<site> » qui ouvre la page officielle dans le navigateur ou l'application de l'éditeur. Aucun
+agent ne doit écrire de déchiffrement d'images.
 ---
 
 ## 11. Feuille de route
