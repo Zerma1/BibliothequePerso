@@ -361,10 +361,13 @@ Demandées par le client le 2026-11-15. Le code actuel ne doit pas les fermer :
 | Branche | Rôle |
 |---------|------|
 | `dev` | **Tout le développement se fait ici.** On y code, on y teste en local (`flutter analyze`, `flutter test`, lancement de l'application). |
+| `test` | **Versions de test** à essayer par le client avant publication (`X.Y.Z-test.N`). On n'y code jamais : `dev` y est avancé quand il a passé les vérifications. |
 | `main` | **Réservée au déploiement des versions.** On n'y code jamais directement. |
 
 - Aucun agent ne commite sur `main`.
-- Une version passe de `dev` à `main` seulement quand le client l'a validée et que
+- Chemin d'une version : `dev` → `test` → `main` (procédure détaillée dans
+  `docs/DEPLOIEMENT.md`).
+- Une version passe de `test` à `main` seulement quand le client l'a validée et que
   `flutter analyze` et `flutter test` ne signalent aucun problème.
 - La fusion vers `main` est suivie d'une étiquette Git `vX.Y.Z` (exemple : `v1.4.2`).
 

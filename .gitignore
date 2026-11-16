@@ -47,3 +47,6 @@ desktop.ini
 
 # IntelliJ : bibliothèques générées avec des chemins propres à la machine
 .idea/libraries/Dart_Packages.xml
+
+# Fichiers à installer (exe, apk) préparés pour une version : jamais dans Git
+livraisons/
