@@ -65,8 +65,8 @@ Décisions de l'orchestrateur (autonomie accordée par le client jusqu'au vendre
 - [x] D7. Couvertures sur l'appareil : `StockageTelechargements.enregistrerCouverture(titre, octets, extension)`, `chargerCouverture(titre)`, suppression avec le titre ; dossier `<type>/<titre>/couverture.<ext>`.
 
 ### developpeur-sources
-- [ ] SO1. `SourceMangaDex` : niveau de contenu (`contentRating`) dans la fiche ; liste des couvertures d'un titre (`GET /cover` — vérifier la doc) pour le choix du client ; recherche avec filtre de niveau de contenu.
-- [ ] SO2. Rapport d'erreur exportable : quand l'ajout d'un site ou la lecture d'un titre échoue, `ErreurSource` garde ce qu'il faut pour un rapport (URL, code HTTP, type détecté, extrait du début de la réponse sans données personnelles) ; fonction qui produit le texte du rapport.
+- [x] SO1. `SourceMangaDex` : niveau de contenu (`contentRating`) dans la fiche ; liste des couvertures d'un titre (`GET /cover` — vérifier la doc) pour le choix du client ; recherche avec filtre de niveau de contenu.
+- [x] SO2. Rapport d'erreur exportable : quand l'ajout d'un site ou la lecture d'un titre échoue, `ErreurSource` garde ce qu'il faut pour un rapport (URL, code HTTP, type détecté, extrait du début de la réponse sans données personnelles) ; fonction qui produit le texte du rapport.
 
 ### developpeur-services
 - [ ] SE1. Listes « Planifié » / « En attente » : classement automatique « En attente », exclusion de « Planifié » des bilans, vérification horaire des titres en attente (`PlanificationMisesAJour` ou équivalent), réglage de l'intervalle.
