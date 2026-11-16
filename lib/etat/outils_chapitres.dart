@@ -44,6 +44,37 @@ class GroupeChapitres {
   /// Version à ouvrir dans le lecteur : une version téléchargée si possible,
   /// sinon la version retenue.
   Chapitre get versionALire => versionTelechargee ?? retenu;
+
+  /// `true` si toutes les versions sont hébergées sur un site externe :
+  /// ce numéro ne se lit pas dans l'application (PLAYBOOK.md section 10).
+  bool get estExterne => versions.every((chapitre) => chapitre.estExterne);
+
+  /// Version que le lecteur peut ouvrir : une version téléchargée, sinon la
+  /// retenue si elle est hébergée par le site source, sinon une autre
+  /// version hébergée ; `null` si toutes sont externes.
+  Chapitre? get versionLisible {
+    final telechargee = versionTelechargee;
+    if (telechargee != null && !telechargee.estExterne) return telechargee;
+    for (final chapitre in versions) {
+      if (!chapitre.estExterne) return chapitre;
+    }
+    return null;
+  }
+}
+
+/// Nom du site d'un chapitre externe, pour « Lire sur `site` » : nom de
+/// domaine de [urlExterne] sans `www.` (`mangaplus.shueisha.co.jp`), ou le
+/// texte reçu s'il ne contient pas d'hôte.
+///
+/// LIMITE : `SourceMangaDex.nomSiteExterne` donne un nom commercial
+/// (« MANGA Plus »), mais la couche état ne peut pas importer
+/// `lib/sources/` (PLAYBOOK.md section 4). Il faudra qu'un service
+/// l'expose ; en attendant, le nom de domaine est affiché.
+String nomSiteExterne(String urlExterne) {
+  final texte = urlExterne.trim();
+  final hote = Uri.tryParse(texte)?.host.toLowerCase() ?? '';
+  if (hote.isEmpty) return texte;
+  return hote.startsWith('www.') ? hote.substring(4) : hote;
 }
 
 /// Regroupe [chapitres] par numéro, du plus petit au plus grand.
@@ -85,6 +116,10 @@ enum StatutHorsLigne {
 
   /// Seulement listé : rien sur l'appareil.
   nonTelecharge,
+
+  /// Hébergé sur un site externe (site de l'éditeur) : jamais téléchargé,
+  /// il se lit sur ce site.
+  externe,
 }
 
 /// État hors-ligne d'un chapitre et progression éventuelle.
@@ -102,6 +137,9 @@ class EtatHorsLigne {
   static const EtatHorsLigne nonTelecharge = EtatHorsLigne(
     StatutHorsLigne.nonTelecharge,
   );
+
+  /// Chapitre hébergé sur un site externe.
+  static const EtatHorsLigne externe = EtatHorsLigne(StatutHorsLigne.externe);
 
   /// Statut affiché.
   final StatutHorsLigne statut;
@@ -141,6 +179,9 @@ class EtatHorsLigne {
     Telechargement? telechargement, {
     bool estDoublon = false,
   }) {
+    // Un chapitre externe n'a ni archive ni file : il passe avant tout le
+    // reste pour que l'interface ne propose jamais de le télécharger.
+    if (chapitre.estExterne) return externe;
     if (chapitre.estTelecharge) {
       return EtatHorsLigne(
         StatutHorsLigne.telecharge,

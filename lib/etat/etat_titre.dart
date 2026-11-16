@@ -187,6 +187,11 @@ class EtatTitre extends EtatNotifiant {
   int get nombreNumerosNonLus =>
       _groupes.where((groupe) => !groupe.estLu).length;
 
+  /// Nom du site où se lit [chapitre] s'il est externe (« Lire sur … »),
+  /// ou `null` pour un chapitre hébergé par le site source.
+  String? nomSiteExterneDe(Chapitre chapitre) =>
+      chapitre.estExterne ? nomSiteExterne(chapitre.urlExterne!) : null;
+
   /// État hors-ligne d'un chapitre (téléchargé, en file, en cours…).
   EtatHorsLigne etatHorsLigne(Chapitre chapitre) {
     final id = chapitre.id;
@@ -247,6 +252,12 @@ class EtatTitre extends EtatNotifiant {
       final donnees = await _lireBase();
       if (numero == _numeroLecture) {
         _appliquer(donnees);
+      }
+      // E11 : les nouveaux chapitres d'un titre favori ou suivi entrent dans
+      // la file tout de suite, sans attendre la prochaine recherche de mises
+      // à jour (erreur journalisée par `_appliquerRegles`).
+      if (resultat.nombreNouveauxChapitres > 0) {
+        await _appliquerRegles();
       }
       return ResultatAction<int>.reussite(resultat.nombreNouveauxChapitres);
     } on _TitreIntrouvable {
@@ -477,10 +488,12 @@ class EtatTitre extends EtatNotifiant {
   // ------------------------------------------------------- Téléchargements
 
   /// Ajoute [chapitre] à la file de téléchargement (ou relance un échec).
+  ///
+  /// Refusé pour un chapitre externe (jamais téléchargé).
   Future<ResultatAction<bool>> telecharger(Chapitre chapitre) async {
     final service = _serviceTelechargement;
     final id = chapitre.id;
-    if (service == null || id == null) {
+    if (service == null || id == null || chapitre.estExterne) {
       return const ResultatAction<bool>.echec(
         DescriptionErreur(NatureErreur.introuvable),
       );
@@ -605,16 +618,23 @@ class EtatTitre extends EtatNotifiant {
     if (!resultat.estReussi) {
       return const ResultatAction<int?>.reussite(null);
     }
-    await _appliquerRegles();
+    // `actualiser` applique déjà les règles quand il trouve des chapitres :
+    // inutile de relancer le calcul une seconde fois.
+    if ((resultat.donnee ?? 0) == 0) {
+      await _appliquerRegles();
+    }
     return ResultatAction<int?>.reussite(resultat.donnee);
   }
 
   /// Crée l'état du lecteur ouvert sur [chapitre], ou `null` si les
   /// téléchargements ne sont pas disponibles.
+  ///
+  /// Toujours `null` pour un chapitre externe : il ne se lit que sur le site
+  /// de l'éditeur (PLAYBOOK.md section 10).
   EtatLecteur? creerEtatLecteur(Chapitre chapitre) {
     final service = _serviceTelechargement;
     final id = chapitre.id;
-    if (service == null || id == null) return null;
+    if (service == null || id == null || chapitre.estExterne) return null;
     return EtatLecteur(
       serviceBibliotheque: _service,
       serviceTelechargement: service,

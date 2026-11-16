@@ -850,6 +850,7 @@ class _LigneChapitre extends StatelessWidget {
     BuildContext context,
     EtatHorsLigne horsLigne,
   ) async {
+    final nomSite = etat.nomSiteExterneDe(chapitre);
     final action = await showModalBottomSheet<_ActionChapitre>(
       context: context,
       showDragHandle: true,
@@ -877,12 +878,23 @@ class _LigneChapitre extends StatelessWidget {
                 onTap: () =>
                     Navigator.of(contexteMenu).pop(_ActionChapitre.telecharger),
               ),
-            ListTile(
-              leading: const Icon(Icons.open_in_new),
-              title: const Text(Textes.ouvrirSurLeSite),
-              onTap: () =>
-                  Navigator.of(contexteMenu).pop(_ActionChapitre.ouvrirSite),
-            ),
+            // Chapitre externe : seul le site de l'éditeur permet de le lire,
+            // la page MangaDex n'y ferait que renvoyer.
+            if (nomSite != null)
+              ListTile(
+                leading: const Icon(iconeLienExterne),
+                title: Text(Textes.lireSur(nomSite)),
+                onTap: () =>
+                    Navigator.of(contexteMenu)
+                        .pop(_ActionChapitre.lireSurSiteExterne),
+              )
+            else
+              ListTile(
+                leading: const Icon(Icons.open_in_new),
+                title: const Text(Textes.ouvrirSurLeSite),
+                onTap: () =>
+                    Navigator.of(contexteMenu).pop(_ActionChapitre.ouvrirSite),
+              ),
             ListTile(
               leading: Icon(estLu ? Icons.remove_done : Icons.done),
               title: Text(estLu ? Textes.marquerNonLu : Textes.marquerLu),
@@ -906,10 +918,20 @@ class _LigneChapitre extends StatelessWidget {
         }
       case _ActionChapitre.ouvrirSite:
         await ouvrirLienExterne(context, chapitre.urlChapitre);
+      case _ActionChapitre.lireSurSiteExterne:
+        await _lireSurSiteExterne(context);
       case _ActionChapitre.basculerLu:
         final resultat = await surBasculerLu();
         if (context.mounted) afficherResultat(context, resultat);
     }
+  }
+
+  /// Ouvre un chapitre externe sur le site de l'éditeur (son application si
+  /// elle est installée, sinon le navigateur).
+  Future<void> _lireSurSiteExterne(BuildContext context) async {
+    final url = chapitre.urlExterne;
+    if (url == null) return;
+    await ouvrirLienExterne(context, url);
   }
 
   /// Bouton de la colonne hors-ligne : l'action dépend de l'état.
@@ -918,6 +940,8 @@ class _LigneChapitre extends StatelessWidget {
     EtatHorsLigne horsLigne,
   ) async {
     switch (horsLigne.statut) {
+      case StatutHorsLigne.externe:
+        await _lireSurSiteExterne(context);
       case StatutHorsLigne.telecharge:
         final nom = Textes.nomChapitre(chapitre.nom, chapitre.numero);
         final confirme = await confirmerSuppressionTelechargement(context, nom);
@@ -968,6 +992,7 @@ class _LigneChapitre extends StatelessWidget {
       color: couleurTexte,
     );
     final reste = horsLigne.tempsAvantSuppression(etat.maintenant);
+    final nomSite = etat.nomSiteExterneDe(chapitre);
     return InkWell(
       onTap: () => _surAppui(context),
       child: Ink(
@@ -1001,6 +1026,31 @@ class _LigneChapitre extends StatelessWidget {
                     fontWeight: estLu || estSecondaire ? null : FontWeight.w600,
                   ),
                 ),
+                // Mention sous le nom, visible même sans la colonne
+                // hors-ligne : le client sait d'emblée où se lit ce chapitre.
+                if (nomSite != null)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Icon(
+                        iconeLienExterne,
+                        size: theme.textTheme.bodySmall?.fontSize,
+                        color: couleurHorsLigne(
+                          StatutHorsLigne.externe,
+                          couleurs,
+                        ),
+                      ),
+                      const SizedBox(width: espacementPetit / 2),
+                      Flexible(
+                        child: Text(
+                          Textes.publieSur(nomSite),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: styleDetail,
+                        ),
+                      ),
+                    ],
+                  ),
                 if (autresVersions > 0)
                   InkWell(
                     onTap: surDeplier,
@@ -1216,7 +1266,7 @@ class _ActionsArchive extends StatelessWidget {
 }
 
 /// Actions du menu d'un chapitre non téléchargé.
-enum _ActionChapitre { telecharger, ouvrirSite, basculerLu }
+enum _ActionChapitre { telecharger, ouvrirSite, lireSurSiteExterne, basculerLu }
 
 /// Ligne « Libellé : valeur ».
 class _LigneInfo extends StatelessWidget {

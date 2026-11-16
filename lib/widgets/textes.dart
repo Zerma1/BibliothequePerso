@@ -468,7 +468,8 @@ abstract final class Textes {
   /// Explication des appuis sur une ligne de chapitre.
   static const String aideAppuiChapitre =
       'Touchez un chapitre téléchargé pour le lire. Un chapitre non '
-      'téléchargé propose de le télécharger ou de l\'ouvrir sur le site.';
+      'téléchargé propose de le télécharger ou de l\'ouvrir sur le site. '
+      'Un chapitre publié sur un site externe se lit sur ce site.';
 
   /// Nom d'un état hors-ligne (légende, info-bulle).
   static String libelleStatutHorsLigne(StatutHorsLigne statut) {
@@ -483,6 +484,8 @@ abstract final class Textes {
         return 'Échec du téléchargement';
       case StatutHorsLigne.nonTelecharge:
         return 'Non téléchargé (en ligne seulement)';
+      case StatutHorsLigne.externe:
+        return 'Sur un site externe (à lire sur ce site)';
     }
   }
 
@@ -508,8 +511,31 @@ abstract final class Textes {
             '— appuyer pour réessayer';
       case StatutHorsLigne.nonTelecharge:
         return 'Non téléchargé — appuyer pour télécharger';
+      case StatutHorsLigne.externe:
+        return "Sur un site externe — appuyer pour l'ouvrir sur ce site";
     }
   }
+
+  // ------------------------------------- Chapitres sur un site externe (R4)
+
+  /// Action : lire un chapitre externe sur le site de l'éditeur.
+  static String lireSur(String site) => 'Lire sur $site';
+
+  /// Mention sous le nom d'un chapitre externe.
+  static String publieSur(String site) =>
+      'Publié sur $site (non téléchargeable)';
+
+  /// Lecteur ouvert sur un chapitre externe.
+  static String lecteurChapitreExterne(String site) =>
+      "Ce chapitre est publié sur $site : il se lit uniquement sur ce site, "
+      "il n'est jamais téléchargé.";
+
+  /// Fin d'un chapitre : le ou les chapitres suivants sont sur un site
+  /// externe (le bouton « Chapitre suivant » les saute).
+  static String chapitresExternesSuivants(int nombre, String site) =>
+      nombre <= 1
+      ? 'Le chapitre suivant est publié sur $site.'
+      : 'Les $nombre chapitres suivants sont publiés sur $site.';
 
   /// Progression en pourcentage (« 45 % », « … » si inconnue).
   static String pourcentage(double? progression) =>

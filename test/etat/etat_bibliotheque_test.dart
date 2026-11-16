@@ -190,6 +190,66 @@ void main() {
     etatFaux.dispose();
   });
 
+  group('E11 : règles de téléchargement après un ajout', () {
+    test('un ajout réussi applique les règles au titre ajouté', () async {
+      final faux = FauxServiceBibliotheque();
+      final telechargement = FauxServiceTelechargement(faux);
+      final etatFaux = EtatBibliotheque(
+        faux,
+        serviceTelechargement: telechargement,
+      );
+      await etatFaux.charger();
+
+      final resultat = await etatFaux.ajouterTitre(
+        'https://mangadex.org/title/nouveau',
+        etatFaux.idsListesParDefaut,
+      );
+
+      expect(resultat.estReussi, isTrue);
+      expect(telechargement.reglesAppliquees, <int>[
+        resultat.donnee!.titre.id!,
+      ]);
+      etatFaux.dispose();
+    });
+
+    test('une erreur des règles ne fait pas échouer l\'ajout', () async {
+      final faux = FauxServiceBibliotheque();
+      final telechargement = FauxServiceTelechargement(faux)
+        ..erreurRegles = const ErreurService('file indisponible');
+      final etatFaux = EtatBibliotheque(
+        faux,
+        serviceTelechargement: telechargement,
+      );
+      await etatFaux.charger();
+
+      final resultat = await etatFaux.ajouterTitre(
+        'https://mangadex.org/title/nouveau',
+        <int>{},
+      );
+
+      expect(resultat.estReussi, isTrue);
+      expect(telechargement.reglesAppliquees, hasLength(1));
+      expect(etatFaux.titres, hasLength(1));
+      etatFaux.dispose();
+    });
+
+    test('un ajout échoué n\'applique aucune règle', () async {
+      final faux = FauxServiceBibliotheque()
+        ..erreurAjout = const ErreurSource('https://x.test', 'panne');
+      final telechargement = FauxServiceTelechargement(faux);
+      final etatFaux = EtatBibliotheque(
+        faux,
+        serviceTelechargement: telechargement,
+      );
+      await etatFaux.charger();
+
+      await etatFaux.ajouterTitre('https://x.test/t', <int>{});
+
+      expect(telechargement.reglesAppliquees, isEmpty);
+      etatFaux.dispose();
+    });
+  });
+
   test('la recherche attend la fin de la frappe', () async {
     await etat.ajouterTitre(urlTitreReference, <int>{});
     final chargements = <bool>[];

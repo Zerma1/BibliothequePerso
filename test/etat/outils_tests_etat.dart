@@ -746,10 +746,15 @@ class FauxServiceTelechargement implements ServiceTelechargement {
     journal.add('reglesATous');
   }
 
+  /// Erreur levée par [appliquerRegles] (après l'avoir noté), si définie.
+  Object? erreurRegles;
+
   @override
   Future<PlanTelechargement> appliquerRegles(int idTitre) async {
     reglesAppliquees.add(idTitre);
     journal.add('regles:$idTitre');
+    final erreur = erreurRegles;
+    if (erreur != null) throw erreur;
     return PlanTelechargement.vide;
   }
 

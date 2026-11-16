@@ -4,6 +4,8 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../modeles/categorie.dart';
 import '../modeles/constantes.dart';
 import '../modeles/liste_lecture.dart';
@@ -440,12 +442,14 @@ class EtatBibliotheque extends EtatNotifiant {
     notifier();
     ResultatAction<ResultatAjoutTitre> resultat;
     try {
-      resultat = ResultatAction<ResultatAjoutTitre>.reussite(
-        await _service.ajouterTitreDepuisUrl(
-          url.trim(),
-          idsListes: idsListes.toList(),
-        ),
+      final ajout = await _service.ajouterTitreDepuisUrl(
+        url.trim(),
+        idsListes: idsListes.toList(),
       );
+      resultat = ResultatAction<ResultatAjoutTitre>.reussite(ajout);
+      // E11 : sans cet appel, un titre ajouté en Favoris / Suivis n'avait
+      // aucun chapitre en file avant le redémarrage suivant.
+      await _appliquerRegles(ajout.titre.id);
     } catch (erreur, pile) {
       resultat = ResultatAction<ResultatAjoutTitre>.echec(
         DescriptionErreur.depuis(erreur, pile),
@@ -454,6 +458,22 @@ class EtatBibliotheque extends EtatNotifiant {
     _estEnAjout = false;
     await charger();
     return resultat;
+  }
+
+  /// Demande au service d'appliquer les règles de téléchargement au titre
+  /// [idTitre] (le service ne fait rien hors de Favoris et Suivis).
+  ///
+  /// Une erreur ici ne fait pas échouer l'ajout, déjà enregistré : elle est
+  /// journalisée, et les règles seront réappliquées plus tard (démarrage,
+  /// mises à jour, réglages).
+  Future<void> _appliquerRegles(int? idTitre) async {
+    final service = _serviceTelechargement;
+    if (service == null || idTitre == null) return;
+    try {
+      await service.appliquerRegles(idTitre);
+    } catch (erreur, pile) {
+      debugPrint('Règles de téléchargement non appliquées : $erreur\n$pile');
+    }
   }
 
   /// Supprime un titre, ses chapitres et leurs archives hors-ligne, puis
