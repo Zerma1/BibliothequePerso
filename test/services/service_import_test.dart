@@ -10,6 +10,7 @@ import 'package:bibliotheque_perso/donnees/depot_parametres.dart';
 import 'package:bibliotheque_perso/donnees/depot_sources.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres_sources.dart';
+import 'package:bibliotheque_perso/donnees/gestionnaire_transactions.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
@@ -53,7 +54,20 @@ class _Bibliotheque {
     depotTitresSources: liens,
   );
 
+  /// Import « tout ou rien » (V2), assemblé comme dans l'application.
   ServiceImport get import => ServiceImport(
+    depotSources: sources,
+    depotTitres: titres,
+    depotTitresSources: liens,
+    depotListes: listes,
+    depotCategories: DepotCategories(base),
+    serviceParametres: parametres,
+    depotParametres: DepotParametres(base),
+    gestionnaireTransactions: GestionnaireTransactions(base),
+  );
+
+  /// Import sans transaction commune (ancien assemblage).
+  ServiceImport get importSansTransaction => ServiceImport(
     depotSources: sources,
     depotTitres: titres,
     depotTitresSources: liens,
@@ -665,5 +679,106 @@ void main() {
     expect(identical(a, b), isTrue);
     expect((await a).titresAjoutes, 3);
     expect(await cible.titres.chargerTitres(), hasLength(3));
+  });
+
+  group('tout ou rien (V2)', () {
+    /// Fait refuser par SQLite l'insertion du titre nommé « Un *livre* »
+    /// (deuxième titre du fichier, par ordre alphabétique) : erreur de base
+    /// inattendue au milieu de l'import.
+    Future<void> pieger() => cible.base.execute(
+      'CREATE TRIGGER piege BEFORE INSERT ON titres '
+      "WHEN NEW.nom = 'Un *livre*' "
+      "BEGIN SELECT RAISE(ABORT, 'disque plein simulé'); END",
+    );
+
+    test('une erreur de base au milieu annule tout : sites, listes, titres '
+        'et réglages', () async {
+      await remplirOrigine();
+      final json = await origine.json();
+      await pieger();
+
+      await expectLater(
+        cible.import.importerTexte(json),
+        throwsA(
+          isA<ErreurService>().having(
+            (e) => e.message,
+            'message',
+            contains('entièrement annulé'),
+          ),
+        ),
+      );
+
+      expect(await cible.sources.chargerSources(), isEmpty);
+      expect(await cible.titres.chargerTitres(), isEmpty);
+      expect(
+        (await cible.listes.chargerListes()).where((l) => !l.estSysteme),
+        isEmpty,
+      );
+      expect(
+        await cible.parametres.chargerLangues(),
+        ServiceParametres.languesParDefaut,
+      );
+      // Le service reste utilisable : le piège retiré, l'import réussit.
+      await cible.base.execute('DROP TRIGGER piege');
+      expect((await cible.import.importerTexte(json)).titresAjoutes, 3);
+    });
+
+    test('sans gestionnaire de transactions, la même erreur reste notée sur '
+        'sa ligne (ancien comportement)', () async {
+      await remplirOrigine();
+      final json = await origine.json();
+      await pieger();
+
+      final resultat = await cible.importSansTransaction.importerTexte(json);
+
+      expect(resultat.titresAjoutes, 2);
+      expect(resultat.erreurs.single.nom, 'Un *livre*');
+    });
+
+    test('les refus par ligne (site non configuré) n\'annulent rien', () async {
+      final json = jsonEncode(<String, Object?>{
+        'format': 'bibliotheque_perso-export',
+        'version': 2,
+        'sources': <Object?>[
+          <String, Object?>{
+            'nom': 'MangaDex',
+            'urlBase': 'https://mangadex.org',
+            'type': 'mangaDex',
+          },
+        ],
+        'titres': <Object?>[
+          <String, Object?>{
+            'nom': 'Inconnu',
+            'url': 'https://inconnu.example/t/1',
+          },
+          <String, Object?>{
+            'nom': 'Connu',
+            'url': 'https://mangadex.org/title/connu',
+          },
+        ],
+      });
+
+      final resultat = await cible.import.importerTexte(json);
+
+      expect(resultat.titresAjoutes, 1);
+      expect(resultat.erreurs.single.nom, 'Inconnu');
+      expect(await cible.titres.chargerTitres(), hasLength(1));
+    });
+
+    test('un import transactionnel avec ServiceParametres mais sans '
+        'DepotParametres est refusé à la construction', () {
+      expect(
+        () => ServiceImport(
+          depotSources: cible.sources,
+          depotTitres: cible.titres,
+          depotTitresSources: cible.liens,
+          depotListes: cible.listes,
+          depotCategories: DepotCategories(cible.base),
+          serviceParametres: cible.parametres,
+          gestionnaireTransactions: GestionnaireTransactions(cible.base),
+        ),
+        throwsArgumentError,
+      );
+    });
   });
 }

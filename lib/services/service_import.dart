@@ -14,11 +14,17 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+// Seul le type de l'exécuteur (la transaction de GestionnaireTransactions)
+// est utilisé : aucune requête SQL n'est écrite dans ce service.
+import 'package:sqflite/sqflite.dart' show DatabaseExecutor;
+
 import '../donnees/depot_categories.dart';
 import '../donnees/depot_listes.dart';
+import '../donnees/depot_parametres.dart';
 import '../donnees/depot_sources.dart';
 import '../donnees/depot_titres.dart';
 import '../donnees/depot_titres_sources.dart';
+import '../donnees/gestionnaire_transactions.dart';
 import '../modeles/categorie.dart';
 import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/lien_titre_source.dart';
@@ -365,22 +371,38 @@ class ResultatImport {
 ///   manquants ;
 /// - aucune requête réseau ; les chapitres arrivent à la prochaine
 ///   vérification ;
-/// - une ligne illisible ou impossible à importer est notée dans le
+/// - une ligne illisible ou impossible à importer (site non configuré,
+///   adresse déjà prise par un autre titre…) est notée dans le
 ///   [ResultatImport] sans arrêter les autres ; seul un fichier qui n'est
 ///   pas un export lève une [ErreurService], **avant** toute écriture.
 ///
-/// LIMITE : l'import n'est pas une seule transaction SQLite. Les dépôts
-/// ouvrent chacun leur propre transaction sur la base et n'acceptent pas
-/// une transaction extérieure (en ouvrir une ici les bloquerait). Pour
-/// limiter le risque d'import à moitié fait : tout le fichier est vérifié
-/// avant la première écriture, chaque écriture est elle-même atomique, et
-/// l'import est **idempotent** : relancer le même fichier après une panne
-/// termine le travail sans rien dupliquer. Une vraie transaction demande
-/// des dépôts capables d'écrire dans une transaction donnée (besoin signalé
-/// à l'orchestrateur).
+/// **Tout ou rien (V2)** : avec un [GestionnaireTransactions], tout l'import
+/// (sites, listes, réglages, titres, lectures comprises) se fait dans une
+/// seule transaction SQLite. Une erreur de base inattendue (écriture
+/// refusée, disque plein…) annule **tout** et lève une [ErreurService] :
+/// rien n'est importé. Les erreurs « par ligne » ci-dessus sont des refus
+/// décidés avant l'écriture concernée : elles n'annulent rien.
+///
+/// LIMITE : sans [GestionnaireTransactions] (anciens appelants, tests),
+/// chaque écriture garde sa propre transaction et une erreur de base est
+/// notée sur sa ligne ; un import interrompu peut alors être à moitié fait,
+/// mais il est **idempotent** : le relancer termine le travail sans rien
+/// dupliquer.
 class ServiceImport {
-  /// Crée le service. Sans [serviceParametres], les réglages généraux du
-  /// fichier ne sont jamais appliqués.
+  /// Crée le service.
+  ///
+  /// - [gestionnaireTransactions] rend l'import « tout ou rien » (à fournir
+  ///   dans l'application).
+  /// - Réglages généraux du fichier (langues, niveaux de contenu) : écrits
+  ///   par [depotParametres] (dans la transaction de l'import), sinon par
+  ///   [serviceParametres] (sans transaction seulement) ; sans l'un ni
+  ///   l'autre, ils ne sont jamais appliqués. Les noms des clés et le
+  ///   nettoyage des valeurs restent ceux de [ServiceParametres].
+  ///
+  /// Lève une [ArgumentError] si [gestionnaireTransactions] et
+  /// [serviceParametres] sont fournis sans [depotParametres] :
+  /// `ServiceParametres` écrit hors de la transaction, ce qui bloquerait
+  /// l'import (verrou de sqflite).
   ServiceImport({
     required DepotSources depotSources,
     required DepotTitres depotTitres,
@@ -388,12 +410,25 @@ class ServiceImport {
     required DepotListes depotListes,
     required DepotCategories depotCategories,
     ServiceParametres? serviceParametres,
+    DepotParametres? depotParametres,
+    GestionnaireTransactions? gestionnaireTransactions,
   }) : _depotSources = depotSources,
        _depotTitres = depotTitres,
        _depotTitresSources = depotTitresSources,
        _depotListes = depotListes,
        _depotCategories = depotCategories,
-       _serviceParametres = serviceParametres;
+       _serviceParametres = serviceParametres,
+       _depotParametres = depotParametres,
+       _gestionnaireTransactions = gestionnaireTransactions {
+    if (gestionnaireTransactions != null &&
+        serviceParametres != null &&
+        depotParametres == null) {
+      throw ArgumentError(
+        "Import « tout ou rien » : passer depotParametres pour écrire les "
+        'réglages dans la transaction.',
+      );
+    }
+  }
 
   final DepotSources _depotSources;
   final DepotTitres _depotTitres;
@@ -401,6 +436,8 @@ class ServiceImport {
   final DepotListes _depotListes;
   final DepotCategories _depotCategories;
   final ServiceParametres? _serviceParametres;
+  final DepotParametres? _depotParametres;
+  final GestionnaireTransactions? _gestionnaireTransactions;
 
   /// Import en cours : un second appel (double clic) reçoit le même
   /// résultat au lieu de lancer un second import en parallèle, dont les
@@ -777,10 +814,52 @@ class ServiceImport {
     ContenuImport contenu, {
     bool? appliquerReglagesGeneraux,
   }) async {
-    final ecriture = _Ecriture(this, contenu);
+    final gestionnaire = _gestionnaireTransactions;
+    if (gestionnaire == null) {
+      return _importerAvec(
+        contenu,
+        null,
+        appliquerReglagesGeneraux: appliquerReglagesGeneraux,
+      );
+    }
+    try {
+      return await gestionnaire.executerEnTransaction(
+        (transaction) => _importerAvec(
+          contenu,
+          transaction,
+          appliquerReglagesGeneraux: appliquerReglagesGeneraux,
+        ),
+      );
+    } on ErreurService {
+      rethrow;
+    } on Exception catch (erreur) {
+      // La transaction est déjà annulée : rien n'a été écrit.
+      final detail = erreur is ErreurBaseDeDonnees
+          ? ' (${erreur.message})'
+          : '';
+      throw ErreurService(
+        "L'import a échoué et a été entièrement annulé : rien n'a été "
+        'ajouté à la bibliothèque$detail.',
+        cause: erreur,
+      );
+    }
+  }
+
+  /// Import proprement dit. [executeur] : transaction de l'import « tout ou
+  /// rien », passée à **chaque** appel des dépôts (lectures comprises : un
+  /// appel sans elle attendrait la fin de la transaction et bloquerait
+  /// l'import) ; `null` sans gestionnaire de transactions.
+  Future<ResultatImport> _importerAvec(
+    ContenuImport contenu,
+    DatabaseExecutor? executeur, {
+    bool? appliquerReglagesGeneraux,
+  }) async {
+    final ecriture = _Ecriture(this, contenu, executeur);
     // Lu avant toute écriture : « bibliothèque vide » décrit l'appareil tel
     // que le client l'avait avant l'import.
-    final bibliothequeVide = (await _depotTitres.chargerTitres()).isEmpty;
+    final bibliothequeVide = (await _depotTitres.chargerTitres(
+      executeur: executeur,
+    )).isEmpty;
     await ecriture.chargerEtat();
     await ecriture.importerSources();
     await ecriture.importerListes();
@@ -808,10 +887,19 @@ class ServiceImport {
 /// État d'un import en cours d'écriture : sites et listes connus, compteurs
 /// et erreurs. Une instance par import.
 class _Ecriture {
-  _Ecriture(this._service, this._contenu);
+  _Ecriture(this._service, this._contenu, this._executeur);
 
   final ServiceImport _service;
   final ContenuImport _contenu;
+
+  /// Transaction de l'import « tout ou rien », ou `null`. Passée à tous les
+  /// appels des dépôts.
+  final DatabaseExecutor? _executeur;
+
+  /// `true` dans une transaction : une erreur de base n'est plus notée sur
+  /// sa ligne mais relancée, pour que toute la transaction soit annulée
+  /// (une écriture rattrapée resterait sinon à moitié faite).
+  bool get _toutOuRien => _executeur != null;
 
   /// Sites connus par adresse de base exacte, puis par hôte (sans `www.` ni
   /// `m.`) : un site `https://www.exemple.com` de la base reconnaît
@@ -830,10 +918,14 @@ class _Ecriture {
   final List<ErreurLigneImport> erreurs = <ErreurLigneImport>[];
 
   Future<void> chargerEtat() async {
-    for (final source in await _service._depotSources.chargerSources()) {
+    for (final source in await _service._depotSources.chargerSources(
+      executeur: _executeur,
+    )) {
       _retenirSource(source);
     }
-    for (final liste in await _service._depotListes.chargerListes()) {
+    for (final liste in await _service._depotListes.chargerListes(
+      executeur: _executeur,
+    )) {
       _listesParNom[liste.nom.toLowerCase()] = liste;
     }
   }
@@ -907,10 +999,12 @@ class _Ecriture {
             configurationSelecteurs: importee.configurationSelecteurs,
             estActive: importee.estActive,
           ),
+          executeur: _executeur,
         );
         _retenirSource(source);
         sitesAjoutes++;
       } on ErreurBaseDeDonnees catch (erreur) {
+        if (_toutOuRien) rethrow;
         erreurs.add(
           ErreurLigneImport(
             partie: PartieImport.site,
@@ -942,11 +1036,15 @@ class _Ecriture {
       // Les listes système (Favoris…) sont créées par les migrations : elles
       // sont toujours déjà connues ici. Seules les listes du client peuvent
       // manquer.
-      final creee = await _service._depotListes.creerListe(nom);
+      final creee = await _service._depotListes.creerListe(
+        nom,
+        executeur: _executeur,
+      );
       _listesParNom[creee.nom.toLowerCase()] = creee;
       listesAjoutees++;
       return creee;
     } on ErreurBaseDeDonnees catch (erreur) {
+      if (_toutOuRien) rethrow;
       erreurs.add(
         ErreurLigneImport(
           partie: PartieImport.liste,
@@ -963,20 +1061,43 @@ class _Ecriture {
   /// Enregistre les langues et niveaux de contenu du fichier. Renvoie
   /// `true` si au moins l'un des deux a été écrit.
   Future<bool> importerReglages() async {
+    final depot = _service._depotParametres;
     final parametres = _service._serviceParametres;
-    if (parametres == null) return false;
+    // ServiceParametres écrit sans exécuteur : interdit dans la transaction
+    // (le constructeur l'empêche déjà, ceci est un filet de sécurité).
+    if (depot == null && (parametres == null || _toutOuRien)) return false;
+    // Valeurs déjà nettoyées à la lecture par ServiceParametres.nettoyer… :
+    // mêmes règles que l'écran Paramètres.
+    final langues = _contenu.languesGenerales;
+    final niveaux = _contenu.niveauxContenu;
     var applique = false;
     try {
-      if (_contenu.languesGenerales.isNotEmpty) {
-        await parametres.enregistrerLangues(_contenu.languesGenerales);
+      if (langues.isNotEmpty) {
+        if (depot != null) {
+          await depot.enregistrerTexte(
+            ServiceParametres.cleLangues,
+            langues.join(','),
+            executeur: _executeur,
+          );
+        } else {
+          await parametres!.enregistrerLangues(langues);
+        }
         applique = true;
       }
-      final niveaux = _contenu.niveauxContenu;
       if (niveaux != null) {
-        await parametres.enregistrerNiveauxContenu(niveaux);
+        if (depot != null) {
+          await depot.enregistrerTexte(
+            ServiceParametres.cleNiveauxContenu,
+            niveaux.join(','),
+            executeur: _executeur,
+          );
+        } else {
+          await parametres!.enregistrerNiveauxContenu(niveaux);
+        }
         applique = true;
       }
     } on Exception catch (erreur) {
+      if (_toutOuRien) rethrow;
       erreurs.add(
         ErreurLigneImport(
           partie: PartieImport.reglages,
@@ -992,8 +1113,9 @@ class _Ecriture {
   /// Ajoute ou complète un titre. Une erreur est notée sans arrêter les
   /// titres suivants.
   ///
-  /// LIMITE : le titre, puis ses sites, puis ses listes sont écrits l'un
-  /// après l'autre (chaque dépôt ouvre sa propre transaction). Un échec au
+  /// Dans une transaction ([_toutOuRien]), une erreur de base est relancée :
+  /// tout l'import est annulé. Sans transaction (LIMITE), le titre, puis
+  /// ses sites, puis ses listes sont écrits l'un après l'autre ; un échec au
   /// milieu laisse un titre incomplet, que le même import relancé complète.
   Future<void> importerTitre(TitreImporte importe) async {
     try {
@@ -1006,8 +1128,10 @@ class _Ecriture {
         titresIgnores++;
       }
     } on Exception catch (erreur) {
+      if (_toutOuRien) rethrow;
       _noterErreurTitre(importe, _messageDe(erreur));
     } on ArgumentError catch (erreur) {
+      if (_toutOuRien) rethrow;
       // Valeur refusée par un dépôt (code de langue…) : propre à cette
       // ligne, elle ne doit pas arrêter l'import des suivantes.
       _noterErreurTitre(importe, '${erreur.message}');
@@ -1032,6 +1156,7 @@ class _Ecriture {
     for (final site in importe.sites) {
       final titre = await _service._depotTitresSources.chargerTitreParUrl(
         site.url,
+        executeur: _executeur,
       );
       if (titre != null) return titre;
     }
@@ -1084,10 +1209,14 @@ class _Ecriture {
         // traite ce titre comme jamais vérifié et récupère ses chapitres.
       ),
       categories: importe.categories,
+      executeur: _executeur,
     );
     titresAjoutes++;
     final idTitre = enregistre.id!;
-    final liens = await _service._depotTitresSources.chargerLiensTitre(idTitre);
+    final liens = await _service._depotTitresSources.chargerLiensTitre(
+      idTitre,
+      executeur: _executeur,
+    );
     await _ajouterSitesManquants(importe, idTitre, liens);
     await _ajouterListesManquantes(importe, idTitre);
   }
@@ -1099,14 +1228,20 @@ class _Ecriture {
     final idTitre = existant.id!;
     var complete = false;
 
-    final liens = await _service._depotTitresSources.chargerLiensTitre(idTitre);
+    final liens = await _service._depotTitresSources.chargerLiensTitre(
+      idTitre,
+      executeur: _executeur,
+    );
     if (await _ajouterSitesManquants(importe, idTitre, liens)) complete = true;
     if (await _ajouterListesManquantes(importe, idTitre)) complete = true;
 
     // Catégories et noms : union de l'existant et du fichier.
     final categoriesActuelles = <String>[
       for (final categorie
-          in await _service._depotCategories.chargerCategoriesDuTitre(idTitre))
+          in await _service._depotCategories.chargerCategoriesDuTitre(
+            idTitre,
+            executeur: _executeur,
+          ))
         categorie.nom,
     ];
     final categoriesManquantes = <String>{
@@ -1141,6 +1276,7 @@ class _Ecriture {
         categories: categoriesManquantes.isEmpty
             ? null
             : <String>[...categoriesActuelles, ...categoriesManquantes],
+        executeur: _executeur,
       );
       complete = true;
     }
@@ -1151,6 +1287,7 @@ class _Ecriture {
       await _service._depotTitres.enregistrerLanguesPreferees(
         idTitre,
         importe.langues.join(','),
+        executeur: _executeur,
       );
       complete = true;
     }
@@ -1159,6 +1296,7 @@ class _Ecriture {
       await _service._depotTitres.enregistrerCouvertureChoisie(
         idTitre,
         couverture,
+        executeur: _executeur,
       );
       complete = true;
     }
@@ -1201,6 +1339,7 @@ class _Ecriture {
       }
       final autre = await _service._depotTitresSources.chargerTitreParUrl(
         site.url,
+        executeur: _executeur,
       );
       if (autre != null) {
         _noterErreurTitre(
@@ -1215,11 +1354,13 @@ class _Ecriture {
           idSource,
           site.url,
           lienSeul: site.estLienSeul,
+          executeur: _executeur,
         );
         adresses.add(site.url);
         sourcesLiees.add(idSource);
         ajoute = true;
       } on ErreurBaseDeDonnees catch (erreur) {
+        if (_toutOuRien) rethrow;
         _noterErreurTitre(importe, erreur.message);
       }
     }
@@ -1240,6 +1381,7 @@ class _Ecriture {
     final actuelles = <int>{
       for (final liste in await _service._depotListes.chargerListesDuTitre(
         idTitre,
+        executeur: _executeur,
       ))
         ?liste.id,
     };
@@ -1248,7 +1390,11 @@ class _Ecriture {
       final liste = await _liste(nom);
       final idListe = liste?.id;
       if (idListe == null || actuelles.contains(idListe)) continue;
-      await _service._depotListes.ajouterTitre(idListe, idTitre);
+      await _service._depotListes.ajouterTitre(
+        idListe,
+        idTitre,
+        executeur: _executeur,
+      );
       actuelles.add(idListe);
       ajoute = true;
     }

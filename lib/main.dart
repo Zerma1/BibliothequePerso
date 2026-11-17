@@ -25,6 +25,7 @@ import 'donnees/depot_sources.dart';
 import 'donnees/depot_telechargements.dart';
 import 'donnees/depot_titres.dart';
 import 'donnees/depot_titres_sources.dart';
+import 'donnees/gestionnaire_transactions.dart';
 import 'donnees/stockage_telechargements.dart';
 import 'ecrans/ecran_accueil.dart';
 import 'ecrans/ecran_erreur_demarrage.dart';
@@ -240,6 +241,9 @@ ServicesApplication assemblerServices(
       depotListes: depotListes,
       depotCategories: DepotCategories(base),
       serviceParametres: serviceParametres,
+      // Tout ou rien : l'import entier passe par une seule transaction.
+      depotParametres: DepotParametres(base),
+      gestionnaireTransactions: GestionnaireTransactions(base),
     ),
   );
 }
