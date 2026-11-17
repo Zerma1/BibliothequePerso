@@ -162,3 +162,5 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
 - [ ] U5. Badge « Nouveau » : titres marqués nouveaux depuis le 30/10/2023 (bug)
 - [ ] U6. Plan de tests 0.2.1-test : expliquer la section B (non comprise) et les tests A3–A7 (à faire avec un site illisible)
 - Décidé : ouvrir un chapitre depuis la fiche ne marque pas les précédents comme lus (laisser ainsi).
+- [ ] U7. Première vérification d'un titre importé : le bilan compte tous ses chapitres comme nouveaux (nombreNouveauxChapitres, notifications) — à corriger dans la 0.2.2
+- [x] U1–U6 faits (0.2.1-test)
