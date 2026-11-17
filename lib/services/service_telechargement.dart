@@ -7,13 +7,14 @@ library;
 // ignore_for_file: prefer_initializing_formals
 
 import 'dart:async';
-import 'dart:io' show Directory;
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as chemins;
 
 import '../donnees/depot_chapitres.dart';
 import '../donnees/depot_listes.dart';
+import '../donnees/depot_parametres.dart';
 import '../donnees/depot_sources.dart';
 import '../donnees/depot_telechargements.dart';
 import '../donnees/depot_titres.dart';
@@ -33,12 +34,19 @@ import '../sources/fabrique_sources.dart';
 import '../sources/signalement_mangadex.dart';
 import '../sources/source_mangadex.dart';
 import '../sources/source_site.dart';
+import 'constantes_services.dart';
+import 'dossier_chapitres.dart';
 import 'erreur_service.dart';
 import 'politique_telechargement.dart';
-import 'constantes_services.dart';
 import 'service_bibliotheque.dart';
 import 'service_parametres.dart';
 import 'verrou_telechargement.dart';
+
+// Le changement du dossier des chapitres a besoin de la pause et du verrou
+// de la file, qui restent privés : `ServiceDossierChapitres` est donc dans
+// la même bibliothèque. Sans nouveau membre public ici, les faux
+// `ServiceTelechargement` des tests de l'interface restent valables.
+part 'service_dossier_chapitres.dart';
 
 /// Chapitre avec son titre et sa source, tels qu'il faut les passer au
 /// stockage (la langue vide est remplacée par la langue de la source pour que
@@ -86,7 +94,13 @@ class ServiceTelechargement {
     Duration dureeVerrou = dureeVerrouParDefaut,
     DateTime Function()? horloge,
     DepotTitresSources? depotTitresSources,
+    DepotParametres? depotParametres,
   }) : _depotTitresSources = depotTitresSources,
+       _depotParametres = depotParametres,
+       _accesDossier = AccesDossierChapitres.accessible(
+         stockage.dossierRacine,
+         estPersonnalise: stockage.estPersonnalise,
+       ),
        _identifiantVerrou = identifiantVerrou ?? _genererIdentifiant(),
        _dureeVerrou = dureeVerrou,
        _horloge = horloge ?? DateTime.now,
@@ -116,6 +130,33 @@ class ServiceTelechargement {
   /// appelants existants : sans lui, tous les chapitres sont considérés
   /// comme venant d'un site lié, et seul le site principal est connu.
   final DepotTitresSources? _depotTitresSources;
+
+  /// Paramètres bruts, pour savoir si un déplacement des archives est resté
+  /// inachevé ([ServiceParametres.cleDeplacementDossierEnCours]).
+  /// Facultatif pour ne pas casser les appelants existants : sans lui, ce
+  /// contrôle n'est pas fait.
+  final DepotParametres? _depotParametres;
+
+  /// Dernier état connu du dossier des chapitres (bandeau de l'interface,
+  /// via `ServiceDossierChapitres.accesDossier`).
+  AccesDossierChapitres _accesDossier;
+
+  /// File en pause : aucun chapitre n'est commencé (celui en cours se
+  /// termine). Posée par le changement du dossier des chapitres.
+  // LIMITE : en mémoire, propre à cet isolat ; la tâche de fond Android est
+  // tenue à l'écart pendant un déplacement par le verrou de la file.
+  bool _enPause = false;
+
+  /// `true` une fois le dossier des chapitres changé pendant cette session :
+  /// le nouveau dossier ne s'applique qu'au prochain démarrage, et d'ici là
+  /// la file reste en pause et le contrôle des archives manquantes ne fait
+  /// rien (il comparerait la base à l'ancien dossier).
+  bool _dossierChange = false;
+
+  /// `true` si, en plus, les archives ont été déplacées : l'ancien dossier
+  /// ne les contient plus, lecture et suppression sont refusées jusqu'au
+  /// redémarrage (elles chercheraient au mauvais endroit).
+  bool _archivesDeplacees = false;
 
   final String _identifiantVerrou;
   final Duration _dureeVerrou;
@@ -215,18 +256,33 @@ class ServiceTelechargement {
 
   /// Remet à « non téléchargé » les chapitres marqués téléchargés dont
   /// l'archive n'est plus sur le disque (fichier effacé à la main, chemin
-  /// enregistré invalide) et renvoie leur nombre. Si le dossier racine
-  /// lui-même est absent (support démonté), rien n'est modifié.
+  /// enregistré invalide) et renvoie leur nombre.
+  ///
+  /// Rien n'est modifié si le dossier des chapitres est inaccessible (NAS
+  /// éteint, lecteur réseau déconnecté, support démonté), s'il le devient
+  /// pendant le contrôle, si le dossier a été changé pendant cette session
+  /// ou si un déplacement des archives est resté inachevé : un dossier
+  /// injoignable n'est pas une archive manquante.
   ///
   /// Sans cela, le lecteur proposerait une lecture hors-ligne impossible et
   /// les règles ne retéléchargeraient jamais ces chapitres. Aucun réseau :
   /// une vérification d'existence de fichier par chapitre.
   Future<int> reparerArchivesManquantes() async {
-    // Dossier racine absent : support amovible démonté, carte SD retirée,
-    // dossier réglé momentanément inaccessible. Toutes les archives
-    // sembleraient perdues alors qu'elles reviendront avec le support : on
-    // ne touche à rien (sinon tous les chapitres seraient retéléchargés).
-    if (!await Directory(_stockage.dossierRacine).exists()) {
+    // Dossier changé pendant cette session : la base serait comparée à
+    // l'ancien dossier, qui ne contient plus (ou plus pour longtemps) les
+    // archives.
+    if (_dossierChange) return 0;
+    // Déplacement inachevé : une partie des archives est dans le nouveau
+    // dossier ; elles seraient vues comme perdues ici.
+    if (await _deplacementInacheve()) return 0;
+    // Dossier racine injoignable : support amovible démonté, NAS éteint,
+    // partage réseau déconnecté. Toutes les archives sembleraient perdues
+    // alors qu'elles reviendront avec le support : on ne touche à rien
+    // (sinon tous les chapitres seraient retéléchargés). Pour un dossier
+    // choisi par le client, le fichier repère doit aussi être présent (un
+    // point de montage vide n'est pas le NAS).
+    if (!await _stockage.estDossierRacineAccessible()) {
+      await _actualiserAcces();
       return 0;
     }
     final telecharges = await _depotChapitres.chargerChapitresTelecharges();
@@ -243,9 +299,22 @@ class ServiceTelechargement {
             contexte.titre,
             contexte.chapitre,
           );
-        } on ErreurStockage {
+        } on ErreurStockage catch (erreur) {
+          // Le dossier a disparu pendant le contrôle (NAS éteint entre deux
+          // chapitres) : on arrête tout, sans rien modifier de plus.
+          if (erreur.estDossierInaccessible) {
+            await _actualiserAcces(nature: erreur.nature);
+            break;
+          }
           // Chemin enregistré invalide : l'archive est introuvable.
           existe = false;
+        }
+        // Nouveau contrôle juste avant d'écrire : pour le dossier par défaut,
+        // `estTelecharge` ne distingue pas un fichier absent d'un support
+        // retiré à l'instant.
+        if (!existe && !await _stockage.estDossierRacineAccessible()) {
+          await _actualiserAcces();
+          break;
         }
         if (!existe) {
           await _depotChapitres.enregistrerArchive(id, null);
@@ -267,6 +336,107 @@ class ServiceTelechargement {
     }
     if (nombre > 0) _signaler();
     return nombre;
+  }
+
+  /// `true` si un déplacement des archives vers un autre dossier a commencé
+  /// sans se terminer ([ServiceParametres.cleDeplacementDossierEnCours]).
+  /// En cas de doute (base illisible), répond `true` : mieux vaut sauter un
+  /// contrôle que remettre à tort des chapitres à « non téléchargé ».
+  Future<bool> _deplacementInacheve() async {
+    final depot = _depotParametres;
+    if (depot == null) return false;
+    try {
+      final cible = await depot.chargerTexte(
+        ServiceParametres.cleDeplacementDossierEnCours,
+      );
+      return cible != null && cible.trim().isNotEmpty;
+    } catch (erreur) {
+      debugPrint('Déplacement des archives inachevé ? $erreur');
+      return true;
+    }
+  }
+
+  // --------------------------------------------- Accès au dossier des chapitres
+
+  /// `true` si le dossier des chapitres, **choisi par le client**, est
+  /// injoignable en ce moment. Le dossier par défaut n'est jamais considéré
+  /// comme injoignable : il est créé à la première écriture.
+  Future<bool> _dossierInjoignable() async =>
+      _stockage.estPersonnalise &&
+      !await _stockage.estDossierRacineAccessible();
+
+  /// Contrôle le dossier des chapitres, met à jour [_accesDossier] et
+  /// prévient l'interface s'il a changé. Quand le dossier redevient
+  /// accessible, la file est relancée (reprise normale des téléchargements).
+  ///
+  /// [nature] : nature connue du problème (erreur d'une écriture), sinon
+  /// déduite du chemin. Ne lève jamais.
+  Future<AccesDossierChapitres> _actualiserAcces({
+    NatureErreurStockage? nature,
+  }) async {
+    bool injoignable;
+    try {
+      injoignable = await _dossierInjoignable();
+    } catch (erreur) {
+      debugPrint('Contrôle du dossier des chapitres impossible : $erreur');
+      injoignable = _stockage.estPersonnalise;
+    }
+    final ancien = _accesDossier;
+    final nouveau = injoignable
+        ? AccesDossierChapitres.inaccessible(
+            _stockage.dossierRacine,
+            estPersonnalise: _stockage.estPersonnalise,
+            nature: _natureInaccessible(nature ?? ancien.nature),
+          )
+        : AccesDossierChapitres.accessible(
+            _stockage.dossierRacine,
+            estPersonnalise: _stockage.estPersonnalise,
+          );
+    _accesDossier = nouveau;
+    if (nouveau != ancien) {
+      _signaler();
+      // Retour du NAS : les téléchargements en attente repartent sans
+      // attendre la prochaine action du client.
+      if (nouveau.estAccessible && !_changements.isClosed) {
+        unawaited(lancerTraitement());
+      }
+    }
+    return nouveau;
+  }
+
+  /// Nature à afficher pour un dossier injoignable : celle de l'erreur si
+  /// elle décrit une absence du dossier, sinon « partage réseau » pour un
+  /// chemin réseau (`\\nas\…`) et « dossier introuvable » pour le reste.
+  NatureErreurStockage _natureInaccessible(NatureErreurStockage? connue) {
+    if (connue == NatureErreurStockage.dossierInaccessible ||
+        connue == NatureErreurStockage.reseauIndisponible) {
+      return connue!;
+    }
+    final chemin = _stockage.dossierRacine;
+    return chemin.startsWith(r'\\') || chemin.startsWith('//')
+        ? NatureErreurStockage.reseauIndisponible
+        : NatureErreurStockage.dossierInaccessible;
+  }
+
+  /// Avant de commencer un chapitre : `false` si le dossier des chapitres
+  /// est injoignable. La file s'arrête alors sans toucher aux
+  /// téléchargements en attente (ni échec, ni compteur) et un seul nouvel
+  /// essai est prévu ([attenteNouvelEssaiDossierInaccessible]) : un simple
+  /// contrôle du disque, sans requête vers les sites.
+  Future<bool> _dossierPretPourLaFile() async {
+    final acces = await _actualiserAcces();
+    if (acces.estAccessible) return true;
+    _planifierNouvelEssai(attenteNouvelEssaiDossierInaccessible);
+    return false;
+  }
+
+  /// Refuse la lecture et la suppression d'archives quand elles ont été
+  /// déplacées vers un autre dossier pendant cette session : les services
+  /// pointent encore sur l'ancien dossier jusqu'au redémarrage.
+  void _verifierArchivesSurPlace() {
+    if (_archivesDeplacees) {
+      throw const ErreurService(_messageRedemarrage);
+    }
   }
 
   /// Reprise des chapitres gardés mémorisés avant la migration 5 (faite une
@@ -602,6 +772,11 @@ class ServiceTelechargement {
     // cette méthode passe avant `appliquerReglesATous` (tâche de fond,
     // appel de l'interface au retour au premier plan).
     await _reprendreAnciensGardes();
+    // Dossier changé pendant cette session (les archives sont ou seront
+    // ailleurs) ou injoignable : effacer échouerait, ou effacerait au mauvais
+    // endroit en marquant le chapitre « non téléchargé ». Les échéances
+    // restent en base et seront traitées plus tard.
+    if (_dossierChange || await _dossierInjoignable()) return 0;
     final echues = await _depotChapitres.chargerSuppressionsEchues(
       _maintenant(),
     );
@@ -784,6 +959,7 @@ class ServiceTelechargement {
   /// pour ce titre s'arrête à la page suivante (sa ligne de file disparaît
   /// avec le titre).
   Future<void> supprimerTitre(int idTitre) async {
+    _verifierArchivesSurPlace();
     final chapitres = await _depotChapitres.chargerChapitres(idTitre);
     for (final chapitre in chapitres) {
       final id = chapitre.id;
@@ -810,6 +986,7 @@ class ServiceTelechargement {
     int idChapitre, {
     bool signalerChangement = true,
   }) async {
+    _verifierArchivesSurPlace();
     // Ligne de file d'abord : un téléchargement qui se termine pendant cette
     // suppression ne peut plus s'enregistrer « terminé » (sa ligne a
     // disparu) et efface lui-même son archive. Dans l'ordre inverse, il
@@ -882,6 +1059,9 @@ class ServiceTelechargement {
   }
 
   Future<_ContexteChapitre> _exigerContexte(int idChapitre) async {
+    // Lecture d'une archive : refusée si les archives viennent d'être
+    // déplacées (message clair plutôt que « pas téléchargé »).
+    _verifierArchivesSurPlace();
     final contexte = await _chargerContexte(idChapitre);
     if (contexte == null) {
       throw const ErreurService('Ce chapitre n\'existe plus.');
@@ -928,10 +1108,15 @@ class ServiceTelechargement {
   /// l'expiration de ce verrou, et tout appel suivant réessaie aussi. Ne lève
   /// jamais d'erreur (elles sont journalisées) : l'appel peut être lancé sans
   /// être attendu.
+  ///
+  /// File en pause (changement du dossier des chapitres) : rien n'est lancé.
   Future<void> lancerTraitement() {
     final enCours = _traitement;
     if (enCours != null) {
       return enCours;
+    }
+    if (_enPause) {
+      return Future<void>.value();
     }
     _relance?.cancel();
     _relance = null;
@@ -947,7 +1132,11 @@ class ServiceTelechargement {
     // Rend la main avant de commencer : `_traitement` est affecté avant
     // qu'une fin immédiate ne le remette à null.
     await Future<void>.value();
+    if (_enPause) return;
     try {
+      // Dossier des chapitres injoignable (NAS éteint) : la file attend, sans
+      // rien demander aux sites ni compter d'échec.
+      if (!await _dossierPretPourLaFile()) return;
       final verrou = await _prendreVerrou();
       if (verrou != null) {
         _planifierRelance(verrou);
@@ -956,12 +1145,18 @@ class ServiceTelechargement {
       try {
         await _reprendreApresInterruption();
         while (!_changements.isClosed) {
+          // Pause demandée pendant le traitement (changement du dossier) :
+          // le chapitre en cours s'est terminé, on n'en commence pas d'autre.
+          if (_enPause) return;
           // Renouvelé avant chaque chapitre ; si un autre isolat a repris le
           // verrou entre-temps (le nôtre avait expiré), on lui laisse la file
           // plutôt que d'écrire les mêmes archives que lui.
           if (!await _renouvelerVerrou(verifier: true)) {
             return;
           }
+          // Le NAS peut s'éteindre au milieu d'une longue file : contrôle
+          // avant chaque chapitre, avant toute requête vers le site.
+          if (!await _dossierPretPourLaFile()) return;
           // Réservation atomique (en attente → en cours) : même si les deux
           // isolats se croient propriétaires du verrou (voir la LIMITE
           // ci-dessous), un chapitre n'est jamais pris par les deux.
@@ -973,7 +1168,12 @@ class ServiceTelechargement {
             await _planifierRepriseSiNecessaire();
             return;
           }
-          await _telecharger(suivant);
+          if (!await _telecharger(suivant)) {
+            // Dossier devenu injoignable pendant le chapitre : la file
+            // attend son retour (un seul nouvel essai prévu).
+            _planifierNouvelEssai(attenteNouvelEssaiDossierInaccessible);
+            return;
+          }
         }
       } finally {
         await _libererVerrou();
@@ -1156,7 +1356,12 @@ class ServiceTelechargement {
 
   /// Télécharge un chapitre de la file. Ne lève jamais : toute erreur met le
   /// téléchargement en échec (ou est journalisée si même cela échoue).
-  Future<void> _telecharger(Telechargement telechargement) async {
+  ///
+  /// Exception : si le dossier des chapitres (choisi par le client) est
+  /// injoignable, le téléchargement est remis en attente, sans échec ni
+  /// compteur d'échecs, et la méthode renvoie `false` pour que la file
+  /// s'arrête. Renvoie `true` dans tous les autres cas.
+  Future<bool> _telecharger(Telechargement telechargement) async {
     final id = telechargement.id!;
     final idChapitre = telechargement.idChapitre;
     EcritureChapitre? ecriture;
@@ -1173,7 +1378,7 @@ class ServiceTelechargement {
       // la ligne est retirée sans rien demander au site.
       if (contexte == null || contexte.chapitre.estExterne) {
         await _depotTelechargements.supprimerTelechargement(id);
-        return;
+        return true;
       }
       final adaptateur = _fabriqueSources.creer(contexte.source);
       var contenu = await adaptateur.recupererContenu(
@@ -1245,7 +1450,7 @@ class ServiceTelechargement {
         // plus voulue et ne serait suivie par aucune ligne en base.
         archiveOrpheline = null;
         await _stockage.supprimerArchive(nomArchive);
-        return;
+        return true;
       }
       archiveOrpheline = null;
       _echecs.remove(idChapitre);
@@ -1258,9 +1463,33 @@ class ServiceTelechargement {
       debugPrint('Téléchargement n°$id abandonné : verrou repris ailleurs');
       await _abandonner(ecriture);
     } catch (erreur, pile) {
-      debugPrint('Téléchargement n°$id en échec : $erreur\n$pile');
       await _abandonner(ecriture);
       await _supprimerArchiveOrpheline(archiveOrpheline);
+      if (await _estDossierDevenuInjoignable()) {
+        // NAS éteint, partage déconnecté : le site n'y est pour rien. Le
+        // chapitre retourne en attente (sans échec ni compteur) et la file
+        // s'arrête jusqu'au retour du dossier.
+        debugPrint(
+          'Téléchargement n°$id suspendu : dossier des chapitres '
+          'inaccessible ($erreur)',
+        );
+        try {
+          await _depotTelechargements.enregistrerStatut(
+            id,
+            StatutTelechargement.enAttente,
+          );
+        } catch (erreurStatut) {
+          // La ligne restera « en cours » et sera reprise comme interrompue.
+          debugPrint(
+            'Téléchargement n°$id non remis en attente : $erreurStatut',
+          );
+        }
+        await _actualiserAcces(
+          nature: erreur is ErreurStockage ? erreur.nature : null,
+        );
+        return false;
+      }
+      debugPrint('Téléchargement n°$id en échec : $erreur\n$pile');
       _echecs.update(idChapitre, (n) => n + 1, ifAbsent: () => 1);
       try {
         await _depotTelechargements.enregistrerStatut(
@@ -1277,6 +1506,25 @@ class ServiceTelechargement {
       }
     } finally {
       _signaler();
+    }
+    return true;
+  }
+
+  /// `true` si l'échec d'un chapitre vient du dossier des chapitres choisi
+  /// par le client, devenu injoignable.
+  ///
+  /// Le dossier est contrôlé **après** l'erreur, quelle qu'elle soit : une
+  /// écriture coupée par la perte du partage remonte souvent comme une
+  /// simple erreur d'écriture. À l'inverse, une erreur qui se dit « dossier
+  /// introuvable » alors que le dossier racine répond (dossier du titre
+  /// effacé à cet instant) reste un échec ordinaire : la remettre en attente
+  /// relancerait le même chapitre sans fin. Toujours `false` pour le dossier
+  /// par défaut, qui n'est jamais injoignable.
+  Future<bool> _estDossierDevenuInjoignable() async {
+    try {
+      return await _dossierInjoignable();
+    } catch (_) {
+      return false;
     }
   }
 

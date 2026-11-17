@@ -52,6 +52,26 @@ class ServiceParametres {
   /// aux deux isolats.
   static const String cleVerrouTelechargement = 'telechargement.verrou';
 
+  /// Clé : dossier des chapitres téléchargés choisi par le client (chemin
+  /// complet : disque local, lecteur réseau, chemin UNC, dossier monté).
+  /// Absente (valeur par défaut) : dossier par défaut de l'application.
+  ///
+  /// Lue au démarrage seulement (`ServiceDossierChapitres.creerStockage`) :
+  /// un changement s'applique au prochain démarrage. Écrite par
+  /// `ServiceDossierChapitres.changerDossierChapitres`.
+  // Pas de méthode d'instance ici : `ServiceParametres` est implémenté par de
+  // faux services dans les tests de l'interface, qui devraient tous suivre ;
+  // la lecture et l'écriture passent par `ServiceDossierChapitres`.
+  static const String cleDossierChapitres = 'telechargement.dossier';
+
+  /// Clé : dossier vers lequel un déplacement des archives a commencé sans
+  /// se terminer (erreur, application fermée). Tant qu'elle existe, le
+  /// contrôle des archives manquantes au démarrage est suspendu : les
+  /// archives déjà déplacées ne sont pas perdues, elles sont dans ce
+  /// dossier.
+  static const String cleDeplacementDossierEnCours =
+      'telechargement.dossier.deplacement_en_cours';
+
   /// Valeur maximale acceptée pour une limite, pour éviter qu'une faute de
   /// frappe (1000 au lieu de 10) ne lance des centaines de téléchargements.
   static const int limiteMaximale = 500;

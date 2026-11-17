@@ -75,6 +75,14 @@ const Duration margeNouvelEssaiVerrou = Duration(seconds: 1);
 /// base en boucle si le verrou de l'autre isolat expire tout de suite.
 const Duration attenteMinimaleNouvelEssai = Duration(seconds: 5);
 
+/// Attente avant de réessayer la file quand le dossier des chapitres est
+/// inaccessible (NAS éteint, lecteur réseau déconnecté) : un seul essai
+/// prévu à la fois, qui ne fait qu'un contrôle sur le disque (aucune
+/// requête vers les sites). Assez court pour reprendre vite quand le NAS
+/// revient, assez long pour ne pas attendre sans cesse un partage réseau
+/// qui met plusieurs secondes à répondre.
+const Duration attenteNouvelEssaiDossierInaccessible = Duration(minutes: 2);
+
 /// Titres « En attente » : vérifiés toutes les N heures pleines, par défaut
 /// à chaque heure (décision de l'étape 6 : surveillance accrue des titres
 /// qui n'ont encore aucun chapitre dans les langues du client).
