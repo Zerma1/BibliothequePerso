@@ -308,12 +308,13 @@ class EtatMisesAJour extends EtatNotifiant {
       erreur = DescriptionErreur.depuis(exception, pile);
     }
     final telechargement = _serviceTelechargement;
-    if (telechargement != null &&
-        rapport != null &&
-        rapport.nombreNouveauxChapitres > 0) {
+    if (telechargement != null && rapport != null) {
       try {
-        // Les nouveaux chapitres des favoris et suivis entrent dans la file
-        // (le traitement part en arrière-plan, sans être attendu ici).
+        // Après chaque vérification, même sans nouveau chapitre (demande du
+        // client, 2026-11-17) : les chapitres voulus par les règles entrent
+        // dans la file, et ceux en échec sont retentés (un site qui bloquait
+        // peut de nouveau répondre). Le traitement part en arrière-plan,
+        // sans être attendu ici, et respecte toujours les limites réglées.
         await telechargement.appliquerReglesATous();
       } catch (exception, pile) {
         debugPrint(
