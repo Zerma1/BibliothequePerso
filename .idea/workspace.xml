@@ -5,45 +5,11 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="3f0cf813-16a8-467c-bcb4-be77744a1ce9" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/libraries/Flutter_Plugins.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/libraries/Flutter_Plugins.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/bibliotheque_perso.iml" beforeDir="false" afterPath="$PROJECT_DIR$/bibliotheque_perso.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/donnees/constantes_donnees.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/donnees/constantes_donnees.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/donnees/depot_chapitres.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/donnees/depot_chapitres.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/donnees/depot_telechargements.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/donnees/depot_telechargements.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/donnees/depot_titres.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/donnees/depot_titres.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/donnees/migrations.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/donnees/migrations.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/donnees/stockage_telechargements.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/donnees/stockage_telechargements.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/ecrans/ecran_accueil.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/ecrans/ecran_accueil.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/ecrans/ecran_lecteur.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/ecrans/ecran_lecteur.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/ecrans/ecran_telechargements.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/ecrans/ecran_telechargements.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/ecrans/ecran_titre.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/ecrans/ecran_titre.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/etat/constantes_etat.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/etat/constantes_etat.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/etat/description_erreur.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/etat/description_erreur.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/etat/etat_bibliotheque.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/etat/etat_bibliotheque.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/etat/etat_lecteur.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/etat/etat_lecteur.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/etat/etat_mises_a_jour.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/etat/etat_mises_a_jour.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/etat/etat_titre.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/etat/etat_titre.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/modeles/chapitre.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/modeles/chapitre.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/modeles/titre.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/modeles/titre.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/services/politique_telechargement.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/services/politique_telechargement.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/services/service_bibliotheque.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/services/service_bibliotheque.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/services/service_parametres.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/services/service_parametres.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/services/service_telechargement.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/services/service_telechargement.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/widgets/messages.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/widgets/messages.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lib/widgets/textes.dart" beforeDir="false" afterPath="$PROJECT_DIR$/lib/widgets/textes.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/donnees/depot_chapitres_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/donnees/depot_chapitres_test.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/donnees/depot_telechargements_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/donnees/depot_telechargements_test.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/donnees/migrations_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/donnees/migrations_test.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/donnees/stockage_telechargements_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/donnees/stockage_telechargements_test.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/ecrans/ecran_telechargements_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/ecrans/ecran_telechargements_test.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/etat/etat_bibliotheque_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/etat/etat_bibliotheque_test.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/etat/etat_lecteur_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/etat/etat_lecteur_test.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/etat/etat_mises_a_jour_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/etat/etat_mises_a_jour_test.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/etat/etat_titre_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/etat/etat_titre_test.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/etat/outils_tests_etat.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/etat/outils_tests_etat.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/services/politique_telechargement_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/services/politique_telechargement_test.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/services/service_bibliotheque_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/services/service_bibliotheque_test.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/services/service_telechargement_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/test/services/service_telechargement_test.dart" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/testUtilisateur/retour/v0.1.0-test.4/notesUtilisateur.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/testUtilisateur/retour/v0.1.0-test.4/rapport_20261117_081649.txt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/testUtilisateur/retour/v0.1.0-test.4/rapport_20261117_082051.txt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/testUtilisateur/retour/v0.1.0-test.4/rapport_20261117_083616.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -71,11 +37,73 @@
     &quot;accountId&quot;: &quot;0061fd49-b9fc-4d00-9558-98b22760fa18&quot;
   }
 }</component>
+  <component name="NextEditCompletionFeaturesState">
+    <decayedCancelled>
+      <entry key="MS100" value="1.0000209891538296" />
+      <entry key="MS500" value="1.1249290560867198" />
+      <entry key="S2" value="2.225118543868887" />
+      <entry key="S5" value="4.914995437423569" />
+      <entry key="S10" value="8.613681520997346" />
+      <entry key="S30" value="19.051116629457248" />
+      <entry key="S60" value="29.335867749904303" />
+      <entry key="M2" value="42.711388826922814" />
+      <entry key="M5" value="67.75318034547885" />
+      <entry key="M10" value="102.0568386480587" />
+      <entry key="M15" value="130.31139358127515" />
+      <entry key="M30" value="181.31569343361673" />
+      <entry key="H1" value="221.76731847412117" />
+      <entry key="H2" value="247.54236197811042" />
+      <entry key="H4" value="262.1319218669219" />
+      <entry key="D1" value="275.26153452173907" />
+      <entry key="W1" value="277.6064255959552" />
+    </decayedCancelled>
+    <decayedSelected>
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="0.0" />
+      <entry key="S5" value="0.0" />
+      <entry key="S10" value="0.0" />
+      <entry key="S30" value="0.0" />
+      <entry key="S60" value="0.0" />
+      <entry key="M2" value="0.0" />
+      <entry key="M5" value="0.0" />
+      <entry key="M10" value="0.0" />
+      <entry key="M15" value="0.0" />
+      <entry key="M30" value="0.0" />
+      <entry key="H1" value="0.0" />
+      <entry key="H2" value="0.0" />
+      <entry key="H4" value="0.0" />
+      <entry key="D1" value="0.0" />
+      <entry key="W1" value="0.0" />
+    </decayedSelected>
+    <decayedShown>
+      <entry key="MS100" value="0.9659564630673523" />
+      <entry key="MS500" value="1.1169990340081601" />
+      <entry key="S2" value="2.221036702208487" />
+      <entry key="S5" value="4.911347161204942" />
+      <entry key="S10" value="8.610441848737391" />
+      <entry key="S30" value="19.048628887139863" />
+      <entry key="S60" value="29.333896736115992" />
+      <entry key="M2" value="42.70991429532449" />
+      <entry key="M5" value="67.7522156471389" />
+      <entry key="M10" value="102.05607616036107" />
+      <entry key="M15" value="130.31071802245563" />
+      <entry key="M30" value="181.31519505080541" />
+      <entry key="H1" value="221.76700251959173" />
+      <entry key="H2" value="247.54218218966096" />
+      <entry key="H4" value="262.13182571930975" />
+      <entry key="D1" value="275.2615175515916" />
+      <entry key="W1" value="277.6064231474205" />
+    </decayedShown>
+  </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 0,
   &quot;fromUser&quot;: false
 }</component>
   <component name="ProjectId" id="3M8jrYYPkbhLFTejLvNU4AlC2MZ" />
+  <component name="ProjectLevelVcsManager">
+    <ConfirmationsSetting value="2" id="Add" />
+  </component>
   <component name="ProjectSessionTemplates">
     <option name="panelTemplate">
       <template>
@@ -108,13 +136,16 @@
     "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
     "copilot.chat.legacySessionMetadata.migrated": "true",
     "dart.analysis.tool.window.visible": "false",
-    "git-widget-placeholder": "dev",
+    "git-widget-placeholder": "test",
+    "git.auto.fetch.suggestion.counter": "1",
     "junie.onboarding.icon.badge.shown": "true",
     "kotlin-language-version-configured": "true",
-    "last_opened_file_path": "D:/Projet/Bibliotheque perso",
+    "last_opened_file_path": "D:/Projet/BibliothequePerso/Retour/v0.1.0-test.4",
     "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.jshint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.jshint": "",
     "node.js.selected.package.tslint": "(autodetect)",
     "nodejs_package_manager_path": "npm",
     "python.packages.toolwindow.project.migrated.to.right.top.v2": "true",
@@ -123,6 +154,14 @@
     "to.speed.mode.migration.done": "true"
   }
 }]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="D:\Projet\BibliothequePerso\Retour\v0.1.0-test.4" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="D:\Projet\BibliothequePerso\testeUtilisateur" />
+    </key>
+  </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
