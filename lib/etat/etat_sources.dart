@@ -1,11 +1,17 @@
 /// État de l'écran Sources : sites configurés et ajout d'un site.
 library;
 
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 
 import '../modeles/source.dart';
 import '../services/service_ajout_site.dart';
 import '../services/service_bibliotheque.dart';
+
+// Type du diagnostic rendu à l'écran d'ajout de site, sans que l'interface
+// importe les services.
+export '../services/service_bibliotheque.dart' show DiagnosticLisibilite;
 import '../services/service_parametres.dart';
 import '../services/service_telechargement.dart';
 import 'description_erreur.dart';
@@ -115,15 +121,67 @@ class EtatSources extends EtatNotifiant {
     return ServiceAjoutSite.proposerNom(uri);
   }
 
+  /// Clés des réglages avancés d'un site générique (sélecteurs CSS), dans
+  /// l'ordre du formulaire.
+  ///
+  /// LIMITE : recopie de `ConfigurationGenerique.cles` (couche sources, que
+  /// les états n'importent pas) ; un test vérifie que les deux listes
+  /// restent identiques. À remplacer par une liste exposée par les services.
+  static const List<String> clesReglagesGeneriques = <String>[
+    'selecteurTitre',
+    'selecteurCouverture',
+    'selecteurResume',
+    'selecteurAuteur',
+    'selecteurCategories',
+    'selecteurLiensChapitres',
+    'selecteurImagesChapitre',
+    'selecteurLienListeChapitres',
+    'motifNumeroChapitre',
+  ];
+
+  /// Clé du réglage qui est une expression régulière (et non un sélecteur
+  /// CSS).
+  static const String cleMotifNumero = 'motifNumeroChapitre';
+
+  /// `true` si [motif] est vide ou une expression régulière valide (même
+  /// contrôle que le site générique, fait ici pour prévenir le client avant
+  /// l'enregistrement).
+  static bool motifValide(String motif) {
+    if (motif.trim().isEmpty) return true;
+    try {
+      RegExp(motif.trim());
+      return true;
+    } on FormatException {
+      return false;
+    }
+  }
+
+  /// JSON des réglages avancés [reglages] (valeurs vides retirées), ou
+  /// `null` si aucun n'est renseigné.
+  static String? reglagesVersJson(Map<String, String> reglages) {
+    final remplis = <String, String>{
+      for (final cle in clesReglagesGeneriques)
+        if ((reglages[cle] ?? '').trim().isNotEmpty) cle: reglages[cle]!.trim(),
+    };
+    return remplis.isEmpty ? null : jsonEncode(remplis);
+  }
+
   /// Ajoute le site désigné par [url].
   ///
   /// [nom] et [langueParDefaut] sont facultatifs ; [typeForce] remplace la
   /// détection automatique quand le client corrige le type.
+  ///
+  /// [reglagesGeneriques] : réglages avancés (sélecteurs CSS, par clé de
+  /// [clesReglagesGeneriques]). Enregistrés dans
+  /// `Source.configurationSelecteurs` seulement si le site retenu est de
+  /// type générique et qu'au moins un réglage est rempli ; ils remplacent
+  /// alors ceux d'un site déjà configuré.
   Future<ResultatAction<SiteAjoute>> ajouterSite(
     String url, {
     String? nom,
     String langueParDefaut = '',
     TypeSource? typeForce,
+    Map<String, String> reglagesGeneriques = const <String, String>{},
   }) async {
     if (url.trim().isEmpty) {
       return const ResultatAction<SiteAjoute>.echec(
@@ -133,12 +191,20 @@ class EtatSources extends EtatNotifiant {
     _estEnAjout = true;
     notifier();
     try {
-      final source = await _serviceAjoutSite.ajouterSite(
+      var source = await _serviceAjoutSite.ajouterSite(
         url.trim(),
         nom: nom,
         langueParDefaut: langueParDefaut,
         typeForce: typeForce,
       );
+      final json = reglagesVersJson(reglagesGeneriques);
+      if (json != null && source.typeSource == TypeSource.generique) {
+        // Méthode existante de modification : elle garde le champ
+        // `configurationSelecteurs` reçu.
+        source = await _serviceAjoutSite.modifierSource(
+          source.copierAvec(configurationSelecteurs: json),
+        );
+      }
       // Le service renvoie la source existante si le site est déjà connu :
       // on le signale au client plutôt que de laisser croire à un ajout.
       final dejaConnu = _sources.any((existante) => existante.id == source.id);
@@ -151,6 +217,22 @@ class EtatSources extends EtatNotifiant {
       _estEnAjout = false;
       notifier();
       return ResultatAction<SiteAjoute>.echec(
+        DescriptionErreur.depuis(erreur, pile),
+      );
+    }
+  }
+
+  /// Diagnostic de lisibilité de [url] (tâche T3, « Pourquoi ce site n'est
+  /// pas lisible ? ») : une requête au plus, faite par le service.
+  Future<ResultatAction<DiagnosticLisibilite>> diagnostiquerSite(
+    String url,
+  ) async {
+    try {
+      return ResultatAction<DiagnosticLisibilite>.reussite(
+        await _serviceBibliotheque.diagnostiquerSite(url.trim()),
+      );
+    } catch (erreur, pile) {
+      return ResultatAction<DiagnosticLisibilite>.echec(
         DescriptionErreur.depuis(erreur, pile),
       );
     }

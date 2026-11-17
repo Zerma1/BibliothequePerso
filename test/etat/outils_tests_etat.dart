@@ -487,10 +487,13 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
   @override
   Future<ResultatAjoutTitre> ajouterSiteAuTitre(
     int idTitre,
-    String urlTitre,
-  ) async {
-    journalSites.add('ajouter:$idTitre:$urlTitre');
-    final erreur = erreurSites;
+    String urlTitre, {
+    bool lienSeul = false,
+  }) async {
+    journalSites.add('${lienSeul ? 'lienSeul' : 'ajouter'}:$idTitre:$urlTitre');
+    // Un lien seul ne lit pas le site : l'erreur de lecture ne le concerne
+    // pas (comme le vrai service).
+    final erreur = lienSeul ? null : erreurSites;
     if (erreur != null) throw erreur;
     final titre = _titreParId(idTitre);
     if (titre == null) throw const ErreurService("Ce titre n'existe plus.");
@@ -504,6 +507,17 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
         typeSource: TypeSource.generique,
       );
       sources.add(source);
+    }
+    if (lienSeul) {
+      (sitesSecondaires[idTitre] ??= <LienTitreSource>[]).add(
+        LienTitreSource(
+          idTitre: idTitre,
+          idSource: source.id!,
+          urlTitre: urlTitre.trim(),
+          estLienSeul: true,
+        ),
+      );
+      return ResultatAjoutTitre(titre, 0);
     }
     ajouterSiteDeTest(idTitre, source.id!, urlTitre.trim());
     final ajoutes = <Chapitre>[
@@ -568,10 +582,61 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
   }
 
   @override
+  Future<int> marquerLienSeul(int idTitre, int idSource, bool lienSeul) async {
+    journalSites.add('marquerLienSeul:$idTitre:$idSource:$lienSeul');
+    final erreur = erreurSites;
+    if (erreur != null) throw erreur;
+    final titre = _titreParId(idTitre);
+    if (titre == null) throw const ErreurService("Ce titre n'existe plus.");
+    if (titre.idSource == idSource) {
+      throw const ErreurService(
+        "Le site principal d'un titre ne peut pas être un simple lien.",
+      );
+    }
+    final secondaires = sitesSecondaires[idTitre] ?? <LienTitreSource>[];
+    final index = secondaires.indexWhere((l) => l.idSource == idSource);
+    if (index < 0) {
+      throw const ErreurService("Ce site n'est pas lié à ce titre.");
+    }
+    secondaires[index] = secondaires[index].copierAvec(estLienSeul: lienSeul);
+    if (!lienSeul) return 0;
+    final chapitres = chapitresParTitre[idTitre];
+    if (chapitres == null) return 0;
+    final avant = chapitres.length;
+    chapitres.removeWhere(
+      (c) => c.idSource == idSource && !c.estLu && !c.estTelecharge,
+    );
+    return avant - chapitres.length;
+  }
+
+  /// Diagnostic renvoyé par [diagnostiquerSite] (lisible par défaut).
+  DiagnosticLisibilite diagnosticSite = const DiagnosticLisibilite(
+    raisons: <String>[],
+  );
+
+  /// Adresses reçues par [diagnostiquerSite].
+  final List<String> sitesDiagnostiques = <String>[];
+
+  @override
+  Future<DiagnosticLisibilite> diagnostiquerSite(String url) async {
+    await _lire();
+    sitesDiagnostiques.add(url);
+    return diagnosticSite;
+  }
+
+  /// Erreur levée par [actualiserSiteDuTitre], si définie.
+  Object? erreurActualisationSite;
+
+  @override
   Future<ResultatAjoutTitre> actualiserSiteDuTitre(
     Titre titre,
     int idSource,
-  ) async => ResultatAjoutTitre(titre, 0);
+  ) async {
+    journalSites.add('actualiserSite:${titre.id}:$idSource');
+    final erreur = erreurActualisationSite;
+    if (erreur != null) throw erreur;
+    return ResultatAjoutTitre(titre, 0);
+  }
 
   /// Langues du réglage général renvoyées par [chargerLanguesGenerales].
   List<String> languesGenerales = <String>['fr', 'en'];
