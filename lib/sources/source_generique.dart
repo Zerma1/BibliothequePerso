@@ -127,8 +127,10 @@ class ConfigurationGenerique {
   ///
   /// Les valeurs vides sont ignorées, les clés inconnues aussi. Lève une
   /// [ErreurSource] (adresse [url], type générique) si le JSON est illisible,
-  /// si une valeur n'est pas un texte ou si [motifNumeroChapitre] n'est pas
-  /// une expression régulière valide.
+  /// si une valeur n'est pas un texte, si un sélecteur CSS est refusé par
+  /// [erreurSelecteur] (message qui nomme le réglage par son libellé et le
+  /// sélecteur) ou si [motifNumeroChapitre] n'est pas une expression
+  /// régulière valide.
   factory ConfigurationGenerique.depuisJson(String? json, {String url = ''}) {
     final texte = json?.trim() ?? '';
     if (texte.isEmpty) {
@@ -169,6 +171,24 @@ class ConfigurationGenerique {
       return propre.isEmpty ? null : propre;
     }
 
+    String? lireSelecteur(String cle) {
+      final selecteur = lire(cle);
+      if (selecteur == null) {
+        return null;
+      }
+      final refus = _refusSelecteur(selecteur);
+      if (refus != null) {
+        throw ErreurSource(
+          url,
+          'Réglage « ${libelleReglage(cle)} » du site générique : '
+          'sélecteur CSS « $selecteur » refusé (${refus.motif})',
+          cause: refus.cause,
+          typeDetecte: TypeSource.generique,
+        );
+      }
+      return selecteur;
+    }
+
     final motif = lire('motifNumeroChapitre');
     if (motif != null) {
       try {
@@ -184,16 +204,100 @@ class ConfigurationGenerique {
       }
     }
     return ConfigurationGenerique(
-      selecteurTitre: lire('selecteurTitre'),
-      selecteurCouverture: lire('selecteurCouverture'),
-      selecteurResume: lire('selecteurResume'),
-      selecteurAuteur: lire('selecteurAuteur'),
-      selecteurCategories: lire('selecteurCategories'),
-      selecteurLiensChapitres: lire('selecteurLiensChapitres'),
-      selecteurImagesChapitre: lire('selecteurImagesChapitre'),
-      selecteurLienListeChapitres: lire('selecteurLienListeChapitres'),
+      selecteurTitre: lireSelecteur('selecteurTitre'),
+      selecteurCouverture: lireSelecteur('selecteurCouverture'),
+      selecteurResume: lireSelecteur('selecteurResume'),
+      selecteurAuteur: lireSelecteur('selecteurAuteur'),
+      selecteurCategories: lireSelecteur('selecteurCategories'),
+      selecteurLiensChapitres: lireSelecteur('selecteurLiensChapitres'),
+      selecteurImagesChapitre: lireSelecteur('selecteurImagesChapitre'),
+      selecteurLienListeChapitres: lireSelecteur('selecteurLienListeChapitres'),
       motifNumeroChapitre: motif,
     );
+  }
+
+  /// Libellé français lisible de chaque réglage, par clé (messages
+  /// d'erreur). Mêmes textes que le formulaire d'ajout d'un site.
+  static const Map<String, String> libelles = <String, String>{
+    'selecteurTitre': 'Nom du titre',
+    'selecteurCouverture': 'Image de couverture',
+    'selecteurResume': 'Résumé',
+    'selecteurAuteur': 'Auteur',
+    'selecteurCategories': 'Catégories (une par élément)',
+    'selecteurLiensChapitres': 'Liens des chapitres',
+    'selecteurImagesChapitre': "Images d'un chapitre",
+    'selecteurLienListeChapitres':
+        'Lien vers la liste des chapitres (depuis un chapitre)',
+    'motifNumeroChapitre': 'Numéro de chapitre (expression régulière)',
+  };
+
+  /// Libellé français du réglage [cle] (la clé elle-même si elle est
+  /// inconnue).
+  static String libelleReglage(String cle) => libelles[cle] ?? cle;
+
+  /// Page d'essai sur laquelle [erreurSelecteur] applique un sélecteur.
+  ///
+  /// `package:html` analyse la syntaxe d'un sélecteur avant tout parcours
+  /// (FormatException même sur une page vide), mais ne signale les
+  /// pseudo-classes non prises en charge (`:hover`, `:nth-child(2n)`…)
+  /// qu'en les évaluant sur un élément. La page contient donc les balises
+  /// courantes des réglages (liens, images, listes, titres, méta) pour que
+  /// la partie droite du sélecteur, évaluée en premier, rencontre au moins
+  /// un élément.
+  static final Document _pageEssai = parse(
+    '<html lang="fr"><head><title>t</title>'
+    '<meta property="og:image" content="c.jpg">'
+    '<link rel="canonical" href="/"></head>'
+    '<body><header><nav><ul><li><a href="/">a</a></li></ul></nav></header>'
+    '<main><article><h1>t</h1><h2>t</h2><h3>t</h3>'
+    '<div class="c" id="c"><p><span><b>t</b><strong>t</strong>'
+    '<i>t</i><em>t</em></span></p><figure><img src="i.jpg"></figure>'
+    '<ol><li><a href="/c-1">c</a></li></ol>'
+    '<table><tbody><tr><td><a href="/c-2">c</a></td></tr></tbody></table>'
+    '<dl><dt>t</dt><dd>t</dd></dl><section><picture><source>'
+    '<img src="j.jpg"></picture></section><button>b</button>'
+    '<label>l</label><input type="text"><select><option>o</option>'
+    '</select><noscript>n</noscript><canvas></canvas></div>'
+    '</article></main><aside></aside><footer></footer></body></html>',
+  );
+
+  /// Motif du refus du sélecteur CSS [selecteur] (en français), ou `null`
+  /// s'il est accepté.
+  ///
+  /// Même parseur que la lecture des pages (`querySelectorAll` de
+  /// `package:html`) : refus d'une syntaxe invalide (FormatException) ou
+  /// d'un sélecteur non pris en charge (UnimplementedError). Un texte vide
+  /// est refusé.
+  ///
+  /// LIMITE : une pseudo-classe non prise en charge placée à gauche d'une
+  /// partie qui ne trouve aucun élément de la page d'essai (`:hover
+  /// .classe-inconnue`) n'est pas évaluée, donc pas refusée ici ; elle
+  /// reste signalée à la lecture du site (ErreurSource qui nomme le
+  /// réglage).
+  ///
+  /// LIMITE : le parseur de `package:html` (csslib) est tolérant : il
+  /// accepte sans erreur des textes comme `h1 >`, `h1..nom`, `.`, `h1,` ou
+  /// `div)`. Ils sont donc acceptés ici comme à la lecture (où ils ne lèvent
+  /// rien non plus) : seul ce que la lecture refuserait est refusé.
+  static String? erreurSelecteur(String selecteur) =>
+      _refusSelecteur(selecteur)?.motif;
+
+  /// Refus du sélecteur [selecteur] (motif et exception d'origine), ou
+  /// `null` : voir [erreurSelecteur].
+  static ({String motif, Object? cause})? _refusSelecteur(String selecteur) {
+    if (selecteur.trim().isEmpty) {
+      return (motif: 'sélecteur vide', cause: null);
+    }
+    try {
+      _pageEssai.querySelectorAll(selecteur);
+      return null;
+    } on FormatException catch (erreur) {
+      return (motif: 'syntaxe CSS invalide', cause: erreur);
+    } on UnimplementedError catch (erreur) {
+      // `package:html` ne gère pas tous les sélecteurs (pseudo-classes
+      // avancées) et lève alors une UnimplementedError.
+      return (motif: "non pris en charge par l'application", cause: erreur);
+    }
   }
 }
 

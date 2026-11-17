@@ -379,10 +379,66 @@ void main() {
       expect(ConfigurationGenerique.depuisJson('  ').estVide, isTrue);
     });
 
-    test('sélecteur CSS invalide : ErreurSource claire', () {
-      final mauvais = ConfigurationGenerique.depuisJson(
-        '{"selecteurLiensChapitres": "a[["}',
+    test('sélecteur CSS invalide refusé par depuisJson : libellé et '
+        'sélecteur nommés', () {
+      for (final (cle, selecteur, libelle) in <(String, String, String)>[
+        ('selecteurLiensChapitres', 'a[[', 'Liens des chapitres'),
+        ('selecteurTitre', 'h1[class=', 'Nom du titre'),
+        ('selecteurImagesChapitre', 'img:hover', "Images d'un chapitre"),
+        ('selecteurCategories', '.tags li:nth-child(2n)', 'Catégories'),
+      ]) {
+        expect(
+          () => ConfigurationGenerique.depuisJson(
+            jsonEncode(<String, String>{cle: selecteur}),
+            url: 'https://exemple.org/',
+          ),
+          throwsA(
+            isA<ErreurSource>()
+                .having((e) => e.typeDetecte, 'type', TypeSource.generique)
+                .having((e) => e.url, 'url', 'https://exemple.org/')
+                .having((e) => e.message, 'message', contains(libelle))
+                .having(
+                  (e) => e.message,
+                  'message',
+                  contains('« $selecteur »'),
+                ),
+          ),
+          reason: selecteur,
+        );
+      }
+    });
+
+    test('erreurSelecteur : motif du refus, ou null si accepté', () {
+      for (final valide in <String>[
+        'h1',
+        '.liste a',
+        'div.pages > img',
+        'a[href*="chapter"]',
+        'ul li:first-child a',
+        'h2.nom, h1',
+        'img:not(.pub)',
+      ]) {
+        expect(
+          ConfigurationGenerique.erreurSelecteur(valide),
+          isNull,
+          reason: valide,
+        );
+      }
+      expect(
+        ConfigurationGenerique.erreurSelecteur('a[['),
+        contains('syntaxe'),
       );
+      expect(
+        ConfigurationGenerique.erreurSelecteur('a:hover'),
+        contains('non pris en charge'),
+      );
+      expect(ConfigurationGenerique.erreurSelecteur('  '), isNotNull);
+    });
+
+    test('sélecteur CSS invalide à la lecture : ErreurSource claire', () {
+      // Réglages construits sans depuisJson (qui les refuserait) : la
+      // lecture garde sa propre vérification.
+      const mauvais = ConfigurationGenerique(selecteurLiensChapitres: 'a[[');
       expect(
         () => SourceGenerique.analyserChapitres(
           html,
