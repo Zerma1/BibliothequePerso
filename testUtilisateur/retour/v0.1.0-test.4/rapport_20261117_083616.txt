@@ -1,0 +1,12 @@
+Rapport d'erreur — Bibliothèque perso
+Date (UTC) : 2026-11-17T08:36:16.136149Z
+Action : Ajout d'un autre site à un titre
+Version : 0.1.0
+Système : windows
+Type de site détecté : generique
+Adresse : https://ruri-dragon.online
+Domaine : ruri-dragon.online
+Message : Aucun adaptateur disponible pour le type « generique » (sélecteurs CSS : prévu à l'étape 7)
+Début de la réponse :
+(aucune réponse reçue)
+Message de l'application : Le site « ruri-dragon.online » n'est pas encore lisible par l'application.
