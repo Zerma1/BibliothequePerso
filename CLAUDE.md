@@ -74,10 +74,10 @@ limité à son scope :
 ## État actuel (2026-11-17)
 
 - `main` : version **0.1.0** (validée par le client).
-- `test` : **0.1.0-test.3** (étapes 6 et 8, Scan-Manga, sources par défaut), en attente de
-  l'essai du client.
-- Reste : étape 7 (Madara, MangaThemesia, générique CSS, webtoons.com), étape 9 (intégration
-  continue Android / Windows / Linux) ; suivi dans `docs/TACHES_EN_COURS.md`.
+- `test` : **0.2.0-test** (sites en simple lien, diagnostic de lisibilité, User-Agent honnête,
+  générique à liens explicites), en attente des retours du client
+  (`testUtilisateur/retour/v0.2.0-test/`). La prochaine version de test sera la 0.2.1-test.
+- Suivi des tâches dans `docs/TACHES_EN_COURS.md`.
 
 ## Pièges connus
 

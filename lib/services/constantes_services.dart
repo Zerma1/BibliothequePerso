@@ -106,10 +106,42 @@ const String prefixeFichierExport = 'bibliotheque_perso-export-';
 /// reconnaître un fichier de l'application avant de le lire.
 const String identifiantFormatExport = 'bibliotheque_perso-export';
 
-/// Version du format JSON exporté. À augmenter seulement si un champ change
-/// de sens ou disparaît (un champ ajouté reste compatible) : l'import (R8)
-/// s'en sert pour lire les anciens fichiers.
-const int versionFormatExport = 1;
+/// Version du format JSON exporté : l'import (R8) s'en sert pour lire les
+/// anciens fichiers et refuser ceux d'une version plus récente.
+///
+/// - 1 : format de la tâche R7.
+/// - 2 : ajout compatible de `sources[].configurationSelecteurs` et
+///   `titres[].resume`, nécessaires pour recréer un site générique et une
+///   fiche complète sans requête réseau. Augmentée malgré la compatibilité
+///   pour que l'import sache si un champ absent est vide ou seulement
+///   inconnu de l'ancien format.
+const int versionFormatExport = 2;
+
+/// Durée pendant laquelle un chapitre non lu porte le badge « Nouveau »
+/// dans l'onglet Mises à jour (retour du client sur la 0.2.0-test), comptée
+/// depuis sa publication, sinon depuis sa découverte (voir
+/// `ParutionTitre.estNouveaute`).
+const Duration dureeNouveaute = Duration(days: 7);
+
+/// Marge après l'ajout d'un site à un titre pendant laquelle les chapitres
+/// découverts sont ceux reçus **lors de l'ajout** (lecture du site, puis
+/// enregistrement), donc jamais des nouveautés. Une heure couvre largement
+/// un ajout lent, et une vérification planifiée a rarement lieu dans
+/// l'heure qui suit un ajout.
+const Duration margeDecouverteApresAjout = Duration(hours: 1);
+
+/// Plus ancienne version du format JSON que l'import sait lire.
+const int versionFormatImportMinimale = 1;
+
+/// Nombre maximal de titres lus dans un fichier d'import : borne la durée de
+/// l'import (une bibliothèque personnelle compte quelques centaines de
+/// titres) et protège d'un fichier corrompu démesuré.
+const int nombreMaximalTitresImport = 20000;
+
+/// Taille maximale (en octets) d'un fichier d'import : bien au-delà d'un
+/// export réel (quelques centaines de Ko), pour refuser clairement un
+/// fichier qui n'en est pas un au lieu de le charger en mémoire.
+const int tailleMaximaleFichierImport = 50 * 1024 * 1024;
 
 /// Suffixe de la vignette 512 px d'une couverture MangaDex (documentation
 /// MangaDex, « covers ») : environ 160 Ko au lieu de 1,5 Mo.

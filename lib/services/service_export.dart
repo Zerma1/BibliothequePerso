@@ -216,6 +216,33 @@ class ServiceExport {
 
   // ---------------------------------------------------------------- Export
 
+  /// Chemins des exports JSON présents dans [dossierExports], le plus récent
+  /// d'abord (pour le dialogue d'import). Liste vide si le dossier n'existe
+  /// pas encore ou ne peut pas être parcouru. Ne lève jamais.
+  Future<List<String>> listerExportsJson() async {
+    final dossier = Directory(dossierExports);
+    final dates = <String, DateTime>{};
+    try {
+      if (!await dossier.exists()) return <String>[];
+      await for (final entree in dossier.list(followLinks: false)) {
+        if (entree is! File ||
+            chemins.extension(entree.path).toLowerCase() != '.json') {
+          continue;
+        }
+        try {
+          dates[entree.path] = await entree.lastModified();
+        } on FileSystemException {
+          // Fichier effacé ou renommé entre la liste et la lecture de sa
+          // date : il n'est simplement pas proposé.
+        }
+      }
+    } on FileSystemException {
+      // Dossier devenu illisible pendant la lecture : on propose ce qui a
+      // déjà été trouvé plutôt que de faire échouer le dialogue d'import.
+    }
+    return dates.keys.toList()..sort((a, b) => dates[b]!.compareTo(dates[a]!));
+  }
+
   /// Lit la bibliothèque et écrit deux fichiers dans [dossierExports] :
   /// `bibliotheque_perso-export-AAAA-MM-JJ_HHMM.json` et `.md` ([date] :
   /// maintenant par défaut, heure locale). Si ces noms sont déjà pris (deux
@@ -443,13 +470,18 @@ class ServiceExport {
   /// Contenu du fichier JSON (indenté, UTF-8 sans échappement des accents).
   /// Fonction pure.
   ///
-  /// Format `versionFormatExport` (1) : `format`, `version`, `dateExport`
+  /// Format `versionFormatExport` (2) : `format`, `version`, `dateExport`
   /// (UTC, ISO 8601), `versionApplication`, `reglages` (`langues`,
   /// `niveauxContenu`), `listes`, `sources`, `titres`. Les titres désignent
   /// leur site par son nom **et** son `urlBase` (unique), pour que l'import
   /// retrouve le bon site même si deux sites portent le même nom. Champ
   /// `sites` (étape 8, ajout compatible) : tous les sites du titre (`url`,
-  /// `source`, `urlSource`, `principal`), le principal d'abord.
+  /// `source`, `urlSource`, `principal`, `lienSeul`), le principal d'abord.
+  ///
+  /// Format 2 (import R8, compatible) : `sources[].configurationSelecteurs`
+  /// (sélecteurs CSS d'un site générique) et `titres[].resume`. Un fichier
+  /// de format 1 reste lisible par l'import : ces champs y sont seulement
+  /// absents.
   static String produireJson(ContenuExport contenu) {
     Map<String, Object?> versSource(Source source) => <String, Object?>{
       'nom': source.nom,
@@ -459,6 +491,9 @@ class ServiceExport {
         source.langueParDefaut,
       ),
       'active': source.estActive,
+      // Format 2 (import R8) : sans ses sélecteurs CSS, un site générique
+      // recréé par l'import serait illisible.
+      'configurationSelecteurs': source.configurationSelecteurs,
     };
 
     Map<String, Object?>? versChapitre(Chapitre? chapitre) => chapitre == null
@@ -518,6 +553,9 @@ class ServiceExport {
         'couvertureChoisie': couvertureExportee(titre.couvertureChoisie),
         'auteur': titre.auteur,
         'statut': titre.statut,
+        // Format 2 (import R8) : la fiche importée est complète sans
+        // relire le site.
+        'resume': titre.resume,
         'dernierChapitreLu': versChapitre(exporte.dernierChapitreLu),
         'nombreChapitres': exporte.nombreChapitres,
       };

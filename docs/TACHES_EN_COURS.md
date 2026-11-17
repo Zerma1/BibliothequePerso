@@ -152,3 +152,15 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
 - [x] T6. Plan de tests pour le client sur la branche `test` (fait par l'orchestrateur).
 
 - [ ] T7. Prochaine version de test : **0.2.0-test** (règle du client : X.Y.Z-test, Z+1 à chaque itération de corrections ; `version: 0.2.0+5`) avec son plan de tests `testUtilisateur/plan_de_tests_v0.2.0-test.md`, `versionApplication = '0.2.0'` (erreur de numérotation des test.2 à test.4, voir docs/VERSIONS.md).
+
+## Retours 0.2.0-test (2026-11-17) → 0.2.1-test
+
+- [ ] U1. Réimporter les exports (JSON) : fusion sans doublon, sans réseau (services + bouton Paramètres)
+- [ ] U2. Numéro de version en bas de la colonne de navigation
+- [ ] U3. Paramètres en sections pliables
+- [ ] U4. Section « Sites » d'un titre pliable
+- [ ] U5. Badge « Nouveau » : titres marqués nouveaux depuis le 30/10/2023 (bug)
+- [ ] U6. Plan de tests 0.2.1-test : expliquer la section B (non comprise) et les tests A3–A7 (à faire avec un site illisible)
+- Décidé : ouvrir un chapitre depuis la fiche ne marque pas les précédents comme lus (laisser ainsi).
+- [ ] U7. Première vérification d'un titre importé : le bilan compte tous ses chapitres comme nouveaux (nombreNouveauxChapitres, notifications) — à corriger dans la 0.2.2
+- [x] U1–U6 faits (0.2.1-test)

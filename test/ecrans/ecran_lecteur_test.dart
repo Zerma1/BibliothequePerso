@@ -3,6 +3,7 @@ import 'package:bibliotheque_perso/ecrans/ecran_lecteur.dart';
 import 'package:bibliotheque_perso/etat/etat_lecteur.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
+import 'package:bibliotheque_perso/widgets/constantes_interface.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -171,5 +172,45 @@ void main() {
     await afficher(tester, 2);
 
     expect(find.text('Il était une fois.'), findsOneWidget);
+  });
+
+  testWidgets('en remontant, une page déjà vue garde sa hauteur réelle dès '
+      'sa reconstruction (retour 0.2.0-test : sauts vers le bas)', (
+    tester,
+  ) async {
+    telechargement.ajouterChapitreTelecharge(3, nombrePages: 20);
+    await afficher(tester, 3);
+    // Hauteur provisoire d'une page jamais décodée (écran de 1200 px).
+    final hauteurProvisoire = 1200 * fractionHauteurPageProvisoire;
+    final pagesProvisoires = find.byWidgetPredicate(
+      (widget) => widget is SizedBox && widget.height == hauteurProvisoire,
+    );
+
+    /// Laisse le moteur décoder les images (hors temps simulé).
+    Future<void> decoder() async {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+    }
+
+    // Descente jusqu'en bas : chaque page est décodée une fois.
+    for (var i = 0; i < 60; i++) {
+      await decoder();
+      if (find.text(Textes.finDuChapitre).evaluate().isNotEmpty) break;
+      await tester.drag(find.byType(ListView), const Offset(0, -500));
+      await decoder();
+    }
+    expect(find.text(Textes.finDuChapitre), findsOneWidget);
+
+    // Remontée sans laisser décoder : les pages reconstruites (parfois
+    // relues dans l'archive) réservent déjà leur hauteur réelle, aucune
+    // n'est provisoire.
+    for (var i = 0; i < 60; i++) {
+      await tester.drag(find.byType(ListView), const Offset(0, 500));
+      await tester.pump();
+      expect(pagesProvisoires, findsNothing);
+    }
+    expect(find.text(Textes.pageSurTotal(1, 20)), findsOneWidget);
   });
 }

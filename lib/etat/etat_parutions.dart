@@ -45,10 +45,22 @@ class EtatParutions extends EtatNotifiant {
   List<ParutionTitre> get sansParution =>
       _parutions.where((ligne) => ligne.derniereParution == null).toList();
 
-  /// Nombre de titres dont le dernier chapitre paru n'est pas lu (badge de
-  /// l'onglet).
-  int get nombreNouveautes =>
-      _parutions.where((ligne) => ligne.aNouveaute).length;
+  /// Nombre de titres marqués « Nouveau » ([estNouveau]) : badge de
+  /// l'onglet.
+  int get nombreNouveautes => _parutions.where(estNouveau).length;
+
+  /// `true` si [ligne] porte le badge « Nouveau » à l'heure de l'état
+  /// (fixée par les tests) : voir [estNouveaute].
+  bool estNouveau(ParutionTitre ligne) => estNouveaute(ligne, _maintenant());
+
+  /// Critère du badge « Nouveau », défini par le service
+  /// (`ParutionTitre.estNouveaute`) : dernier chapitre non lu, publié depuis
+  /// moins d'une semaine, ou, sans date de publication, découvert après
+  /// l'ajout de son site et depuis moins d'une semaine. Un chapitre publié
+  /// il y a des années n'est jamais « Nouveau » (retour du client sur la
+  /// 0.2.0-test).
+  static bool estNouveaute(ParutionTitre ligne, DateTime maintenant) =>
+      ligne.estNouveaute(maintenant);
 
   /// Heure actuelle (dates relatives « aujourd'hui », « hier »…).
   DateTime get maintenant => _maintenant();

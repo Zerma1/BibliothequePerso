@@ -192,12 +192,41 @@ void main() {
     });
   });
 
+  group('listerExportsJson', () {
+    test('dossier absent : liste vide, sans erreur', () async {
+      expect(await service.listerExportsJson(), isEmpty);
+    });
+
+    test('ne garde que les .json, le plus récent d\'abord', () async {
+      final exports = Directory(
+        ServiceExport.cheminDossierExports(dossier.path),
+      )..createSync(recursive: true);
+      File creer(String nom, DateTime date) =>
+          File(chemins.join(exports.path, nom))
+            ..writeAsStringSync('{}')
+            ..setLastModifiedSync(date);
+      final ancien = creer('ancien.json', DateTime(2026, 1, 1));
+      final recent = creer('recent.JSON', DateTime(2026, 11, 1));
+      final moyen = creer('moyen.json', DateTime(2026, 6, 1));
+      creer('notes.md', DateTime(2026, 12, 1));
+      creer('export.json.part', DateTime(2026, 12, 1));
+      Directory(chemins.join(exports.path, 'dossier.json')).createSync();
+
+      expect(await service.listerExportsJson(), <String>[
+        recent.path,
+        moyen.path,
+        ancien.path,
+      ]);
+    });
+  });
+
   group('contenu JSON', () {
     test('contient la version de format, les réglages et les listes', () async {
       await remplir();
       final json = lireJson((await service.exporter()).cheminJson);
       expect(json['format'], 'bibliotheque_perso-export');
-      expect(json['version'], 1);
+      // Format 2 : sélecteurs CSS des sites et résumé des titres (import).
+      expect(json['version'], 2);
       expect(json['dateExport'], dateExport.toUtc().toIso8601String());
       expect(json['versionApplication'], '0.1.0');
       final reglages = json['reglages']! as Map<String, Object?>;
@@ -229,6 +258,7 @@ void main() {
         'type': 'mangaDex',
         'langues': <String>['fr', 'en'],
         'active': true,
+        'configurationSelecteurs': null,
       });
       final autre = sources.firstWhere((s) => s['nom'] == "L'Étagère");
       expect(autre['active'], isFalse);

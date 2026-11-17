@@ -10,6 +10,7 @@ import 'package:bibliotheque_perso/donnees/depot_listes.dart';
 import 'package:bibliotheque_perso/donnees/depot_parametres.dart';
 import 'package:bibliotheque_perso/donnees/depot_sources.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres.dart';
+import 'package:bibliotheque_perso/donnees/depot_titres_sources.dart';
 import 'package:bibliotheque_perso/donnees/stockage_telechargements.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
@@ -20,6 +21,7 @@ import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/services/service_ajout_site.dart';
 import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
+import 'package:bibliotheque_perso/sources/client_http_poli.dart';
 import 'package:bibliotheque_perso/sources/constantes_sources.dart';
 import 'package:bibliotheque_perso/sources/detecteur_type_site.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
@@ -55,6 +57,9 @@ void main() {
   // Le serveur n'a pas de vignette 512 px (404).
   late bool vignetteAbsente;
 
+  // Client factice, gardé pour construire un second service.
+  late ClientHttpPoli client;
+
   // Taille des images servies (`null` : trois octets).
   int? tailleImage;
 
@@ -71,7 +76,7 @@ void main() {
     final couvertures = lireExemple('exemples_json/couvertures_liste.json');
     final recherche = lireExemple('exemples_json/manga_recherche_filtre.json');
     final flux = _fluxUnePage();
-    final client = creerClientTest((http.Request requete) async {
+    client = creerClientTest((http.Request requete) async {
       requetes.add(requete.url);
       if (siteEnPanne) return http.Response('panne', 503);
       final chemin = requete.url.path;
@@ -263,7 +268,9 @@ void main() {
       ]);
       expect(lignes.first.derniereParution, DateTime.utc(2026, 3, 1));
       expect(lignes.first.dernierChapitre!.numero, 1);
-      expect(lignes.first.aNouveaute, isTrue);
+      // Non lu, publié depuis moins de 7 jours au moment donné : nouveau.
+      expect(lignes.first.estNouveaute(DateTime.utc(2026, 3, 5)), isTrue);
+      expect(lignes.first.estNouveaute(DateTime.utc(2026, 3, 9)), isFalse);
       expect(lignes.last.dernierChapitre, isNull);
     });
 
@@ -304,6 +311,184 @@ void main() {
       final lignes = await service.chargerDernieresParutions();
       expect(lignes.single.langues, <String>['ru']);
       expect(lignes.single.derniereParution, DateTime.utc(2026, 10, 1));
+    });
+
+    group('badge « Nouveau » et date d\'ajout du site (retour 0.2.0-test)', () {
+      late ServiceBibliotheque avecSites;
+      late DateTime ajout;
+      late Titre titre;
+
+      setUp(() async {
+        avecSites = ServiceBibliotheque(
+          depotSources: depotSources,
+          depotTitres: depotTitres,
+          depotChapitres: depotChapitres,
+          depotListes: depotListes,
+          depotCategories: DepotCategories(base),
+          fabriqueSources: FabriqueSources(client),
+          serviceAjoutSite: ServiceAjoutSite(
+            depotSources,
+            DetecteurTypeSite(client),
+          ),
+          client: client,
+          serviceParametres: parametres,
+          depotTitresSources: DepotTitresSources(base),
+        );
+        titre = await depotTitres.enregistrerTitre(
+          Titre(
+            idSource: idSource,
+            urlTitre: 'https://mangadex.org/title/sans-date',
+            nom: 'Sans date',
+          ),
+        );
+        ajout = (await DepotTitresSources(
+          base,
+        ).chargerLienPrincipal(titre.id!))!.dateAjout!;
+        await depotListes.ajouterTitre(
+          await idListe(nomListeSuivis),
+          titre.id!,
+        );
+      });
+
+      Chapitre chapitre(int numero, {int? source}) => Chapitre(
+        idTitre: titre.id,
+        idSource: source,
+        urlChapitre: 'https://exemple.org/sans-date/$numero',
+        nom: 'Chapitre $numero',
+        numero: numero.toDouble(),
+        langue: 'fr',
+      );
+
+      test("un chapitre sans date reçu à l'ajout du titre n'est pas "
+          'nouveau', () async {
+        // Reçu pendant l'ajout : détecté quelques secondes après le lien.
+        await depotChapitres.enregistrerChapitres(<Chapitre>[
+          chapitre(1),
+        ], dateDetection: ajout.add(const Duration(seconds: 5)));
+
+        final ligne = (await avecSites.chargerDernieresParutions()).single;
+
+        expect(ligne.dateAjoutSite, ajout);
+        expect(ligne.estDecouvertApresAjout, isFalse);
+        expect(ligne.estNouveaute(ajout.add(const Duration(days: 1))), isFalse);
+      });
+
+      test('un chapitre découvert par une vérification ultérieure est '
+          'nouveau pendant 7 jours', () async {
+        await depotChapitres.enregistrerChapitres(<Chapitre>[
+          chapitre(1),
+        ], dateDetection: ajout);
+        final decouverte = ajout.add(const Duration(days: 2));
+        await depotChapitres.enregistrerChapitres(<Chapitre>[
+          chapitre(2),
+        ], dateDetection: decouverte);
+
+        final ligne = (await avecSites.chargerDernieresParutions()).single;
+
+        expect(ligne.dernierChapitre!.numero, 2);
+        expect(ligne.estDecouvertApresAjout, isTrue);
+        expect(
+          ligne.estNouveaute(decouverte.add(const Duration(days: 6))),
+          isTrue,
+        );
+        expect(
+          ligne.estNouveaute(decouverte.add(const Duration(days: 8))),
+          isFalse,
+        );
+      });
+
+      test("les chapitres reçus à l'ajout d'un second site ne sont pas "
+          'nouveaux', () async {
+        await depotChapitres.enregistrerChapitres(<Chapitre>[
+          chapitre(1),
+        ], dateDetection: ajout);
+        final autre = await depotSources.enregistrerSource(
+          const Source(
+            nom: 'Autre',
+            urlBase: 'https://autre.example',
+            typeSource: TypeSource.madara,
+          ),
+        );
+        final ajoutSecond = ajout.add(const Duration(days: 3));
+        await DepotTitresSources(base).ajouterSourceSecondaire(
+          titre.id!,
+          autre.id!,
+          'https://autre.example/manga/sans-date',
+          dateAjout: ajoutSecond,
+        );
+        await depotChapitres.enregistrerChapitres(<Chapitre>[
+          chapitre(2, source: autre.id),
+        ], dateDetection: ajoutSecond.add(const Duration(minutes: 2)));
+
+        final ligne = (await avecSites.chargerDernieresParutions()).single;
+
+        expect(ligne.dernierChapitre!.idSource, autre.id);
+        expect(ligne.dateAjoutSite, ajoutSecond);
+        expect(
+          ligne.estNouveaute(ajoutSecond.add(const Duration(hours: 3))),
+          isFalse,
+        );
+      });
+
+      test("un chapitre publié récemment reste nouveau même reçu à l'ajout "
+          'du titre', () async {
+        final publication = ajout.subtract(const Duration(days: 2));
+        await depotChapitres.enregistrerChapitres(<Chapitre>[
+          chapitre(1).copierAvec(datePublication: publication),
+        ], dateDetection: ajout.add(const Duration(seconds: 5)));
+
+        final ligne = (await avecSites.chargerDernieresParutions()).single;
+
+        expect(ligne.estDecouvertApresAjout, isFalse);
+        expect(ligne.estNouveaute(ajout.add(const Duration(days: 1))), isTrue);
+        expect(
+          ligne.estNouveaute(publication.add(const Duration(days: 8))),
+          isFalse,
+        );
+      });
+
+      test('un chapitre publié il y a longtemps n\'est jamais nouveau, et '
+          'un chapitre lu non plus', () {
+        final maintenant = DateTime.utc(2026, 11, 17);
+        ParutionTitre ligne({DateTime? publication, bool estLu = false}) =>
+            ParutionTitre(
+              titre: titre,
+              langues: const <String>['fr'],
+              derniereParution: publication ?? maintenant,
+              dernierChapitre: chapitre(1).copierAvec(
+                datePublication: publication,
+                dateDetection: maintenant,
+                estLu: estLu,
+              ),
+              dateAjoutSite: DateTime.utc(2026, 1, 1),
+            );
+        expect(
+          ligne(publication: DateTime.utc(2023, 10, 30))
+              .estNouveaute(maintenant),
+          isFalse,
+        );
+        expect(
+          ligne(publication: DateTime.utc(2026, 11, 15))
+              .estNouveaute(maintenant),
+          isTrue,
+        );
+        expect(
+          ligne(
+            publication: DateTime.utc(2026, 11, 15),
+            estLu: true,
+          ).estNouveaute(maintenant),
+          isFalse,
+        );
+        // Date d'ajout inconnue : dans le doute, la nouveauté est gardée.
+        expect(
+          ParutionTitre(
+            titre: titre,
+            langues: const <String>['fr'],
+            dernierChapitre: chapitre(1).copierAvec(dateDetection: maintenant),
+          ).estDecouvertApresAjout,
+          isTrue,
+        );
+      });
     });
   });
 

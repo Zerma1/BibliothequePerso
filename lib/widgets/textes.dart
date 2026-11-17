@@ -885,10 +885,27 @@ abstract final class Textes {
   // ------------------------------------------------------------- Paramètres
 
   /// Section des réglages de téléchargement.
-  static const String sectionTelechargements = 'Téléchargements';
+  static const String sectionTelechargements =
+      'Téléchargements et conservation';
+
+  /// Résumé de la section des téléchargements quand des valeurs ont été
+  /// changées sans être enregistrées.
+  static const String modificationsNonEnregistrees =
+      'Modifications non enregistrées';
+
+  /// Résumé de la section des téléchargements, visible section repliée.
+  static const String resumeTelechargements =
+      "Chapitres téléchargés d'avance et chapitres gardés après lecture";
 
   /// Section des sites.
   static const String sectionSites = 'Sites';
+
+  /// Nombre de sites configurés (résumé de la section Sites).
+  static String nombreSites(int nombre) => switch (nombre) {
+    0 => 'Aucun site configuré',
+    1 => '1 site configuré',
+    _ => '$nombre sites configurés',
+  };
 
   /// Section « À propos ».
   static const String sectionAPropos = 'À propos';
@@ -896,11 +913,16 @@ abstract final class Textes {
   /// Section « Sauvegarde et export ».
   static const String sectionSauvegardeExport = 'Sauvegarde et export';
 
+  /// Résumé de la section « Sauvegarde et export ».
+  static const String resumeSauvegardeExport =
+      'Exporter ou réimporter vos titres et vos sites';
+
   /// Explication de l'export.
   static const String explicationExport =
       "Enregistre la liste de vos titres et de vos sites dans deux fichiers : "
-      "un fichier JSON complet (pour une future réimportation) et un fichier "
-      "Markdown lisible, avec des liens cliquables.";
+      "un fichier JSON complet (que « Importer un export » sait relire, par "
+      "exemple sur un autre appareil) et un fichier Markdown lisible, avec "
+      "des liens cliquables.";
 
   /// Bouton de l'export.
   static const String exporterTitresEtSites =
@@ -908,6 +930,44 @@ abstract final class Textes {
 
   /// Titre de la boîte affichée après un export réussi.
   static const String exportEnregistre = 'Export enregistré';
+
+  /// Bouton et titre du dialogue d'import d'un export.
+  static const String importerUnExport = 'Importer un export';
+
+  /// Explication en tête du dialogue d'import.
+  static const String explicationImport =
+      "Choisissez un export (fichier JSON) : ses titres, sites et listes sont "
+      "ajoutés à votre bibliothèque. Rien n'est supprimé ni remplacé, et un "
+      "titre déjà présent n'est pas ajouté deux fois.";
+
+  /// Intertitre de la liste des exports trouvés.
+  static const String exportsTrouves = 'Exports trouvés';
+
+  /// Aucun export trouvé dans le dossier des exports.
+  static const String aucunExportTrouve =
+      "Aucun export trouvé dans le dossier des exports. Collez le chemin "
+      "d'un fichier ci-dessous.";
+
+  /// Champ du chemin d'un fichier à importer.
+  static const String champCheminImport = 'Chemin du fichier JSON';
+
+  /// Aide du champ du chemin.
+  static const String aideCheminImport =
+      r'Par exemple : C:\Users\moi\Documents\export.json';
+
+  /// Bouton qui lance l'import.
+  static const String importer = 'Importer';
+
+  /// Message pendant l'import.
+  static const String importEnCours = 'Import en cours…';
+
+  /// Titre de la boîte affichée après un import.
+  static const String importTermine = 'Import terminé';
+
+  /// Intertitre des lignes non importées.
+  static String erreursImport(int nombre) => nombre <= 1
+      ? '$nombre ligne non importée :'
+      : '$nombre lignes non importées :';
 
   /// Contenu d'un export réussi.
   static String resumeExport(int titres, int sites) =>
@@ -981,8 +1041,13 @@ abstract final class Textes {
   static const String reglagesEnregistres =
       'Réglages enregistrés : les téléchargements sont mis à jour.';
 
-  /// Section des recherches de mises à jour.
-  static const String sectionMisesAJour = 'Mises à jour';
+  /// Section des recherches de mises à jour (Paramètres).
+  static const String sectionMisesAJour = 'Recherche des nouveaux chapitres';
+
+  /// Résumé de la section des recherches, visible section repliée.
+  static String resumeRecherches(int nombre) => nombre <= 1
+      ? '$nombre recherche par jour'
+      : '$nombre recherches par jour';
 
   /// Libellé du nombre de recherches par jour.
   static const String verificationsParJour =
@@ -1118,7 +1183,8 @@ abstract final class Textes {
   /// Explication en haut de l'onglet Mises à jour.
   static const String explicationMisesAJour =
       'Titres favoris, suivis et en attente, du plus récemment paru au plus '
-      'ancien, dans les langues de chaque titre.';
+      'ancien, dans les langues de chaque titre. « Nouveau » : dernier '
+      "chapitre non lu, paru depuis moins d'une semaine.";
 
   /// Onglet Mises à jour vide.
   static const String misesAJourVide =
@@ -1409,6 +1475,13 @@ abstract final class Textes {
 
   /// Intertitre de la section « Sites » de la fiche.
   static const String sitesDuTitre = 'Sites';
+
+  /// En-tête de la section « Sites » repliable, avec le nombre de sites.
+  static String sitesDuTitreAvecNombre(int nombre) => '$sitesDuTitre ($nombre)';
+
+  /// Résumé de la section « Sites » : le site principal.
+  static String resumeSitesDuTitre(String sitePrincipal) =>
+      'Site principal : $sitePrincipal';
 
   /// Explication de la section « Sites ».
   static const String explicationSitesDuTitre =

@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../etat/outils_tests_etat.dart';
+import '../widgets/outils_sections_pliables.dart';
 
 void main() {
   late FauxServiceBibliotheque bibliotheque;
@@ -32,6 +33,7 @@ void main() {
     );
     await tester.pump();
     await tester.pump();
+    await deplierParametres(tester);
   }
 
   testWidgets('sans service d\'export, la section est masquée', (tester) async {

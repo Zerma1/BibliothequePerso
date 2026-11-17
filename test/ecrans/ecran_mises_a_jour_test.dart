@@ -225,11 +225,141 @@ void main() {
     expect(Textes.aucuneParution(const <String>['fr']), endsWith('français'));
   });
 
+  group('critère « Nouveau » (retour 0.2.0-test : titres « nouveaux » depuis '
+      'le 30/10/2023)', () {
+    /// Ligne dont le dernier chapitre a les dates données.
+    ParutionTitre ligneDatee({
+      DateTime? publication,
+      DateTime? detection,
+      DateTime? ajoutSite,
+      bool estLu = false,
+    }) => ParutionTitre(
+      dateAjoutSite: ajoutSite,
+      titre: Titre(id: 1, urlTitre: 'u', nom: 'n'),
+      langues: const <String>['fr'],
+      derniereParution: publication ?? detection,
+      dernierChapitre: Chapitre(
+        id: 1,
+        idTitre: 1,
+        urlChapitre: 'c',
+        nom: '',
+        numero: 1,
+        langue: 'fr',
+        estLu: estLu,
+        datePublication: publication,
+        dateDetection: detection,
+      ),
+    );
+
+    test('un chapitre publié il y a des années n\'est jamais « Nouveau », '
+        'même découvert aujourd\'hui (ajout du titre)', () {
+      final ligne = ligneDatee(
+        publication: DateTime.utc(2023, 10, 30),
+        detection: _maintenant.toUtc(),
+      );
+      expect(EtatParutions.estNouveaute(ligne, _maintenant), isFalse);
+    });
+
+    test(
+      'un chapitre non lu paru depuis moins d\'une semaine est « Nouveau »',
+      () {
+        final ligne = ligneDatee(
+          publication: _maintenant.subtract(const Duration(days: 6)).toUtc(),
+          detection: _maintenant.toUtc(),
+        );
+        expect(EtatParutions.estNouveaute(ligne, _maintenant), isTrue);
+        expect(
+          EtatParutions.estNouveaute(
+            ligneDatee(
+              publication: _maintenant
+                  .subtract(const Duration(days: 8))
+                  .toUtc(),
+            ),
+            _maintenant,
+          ),
+          isFalse,
+        );
+      },
+    );
+
+    test('sans date de publication, la date de découverte compte', () {
+      expect(
+        EtatParutions.estNouveaute(
+          ligneDatee(
+            detection: _maintenant.subtract(const Duration(days: 1)).toUtc(),
+          ),
+          _maintenant,
+        ),
+        isTrue,
+      );
+      expect(
+        EtatParutions.estNouveaute(
+          ligneDatee(
+            detection: _maintenant.subtract(const Duration(days: 30)).toUtc(),
+          ),
+          _maintenant,
+        ),
+        isFalse,
+      );
+    });
+
+    test("sans date de publication : un chapitre reçu à l'ajout du site "
+        "n'est pas « Nouveau », un chapitre découvert ensuite l'est", () {
+      final ajout = _maintenant.subtract(const Duration(days: 2)).toUtc();
+      expect(
+        EtatParutions.estNouveaute(
+          ligneDatee(detection: ajout, ajoutSite: ajout),
+          _maintenant,
+        ),
+        isFalse,
+      );
+      expect(
+        EtatParutions.estNouveaute(
+          ligneDatee(
+            detection: _maintenant.subtract(const Duration(hours: 3)).toUtc(),
+            ajoutSite: ajout,
+          ),
+          _maintenant,
+        ),
+        isTrue,
+      );
+    });
+
+    test('un chapitre lu n\'est jamais « Nouveau »', () {
+      final ligne = ligneDatee(publication: _maintenant.toUtc(), estLu: true);
+      expect(EtatParutions.estNouveaute(ligne, _maintenant), isFalse);
+    });
+
+    testWidgets('ni badge ni compte pour un dernier chapitre ancien non lu', (
+      tester,
+    ) async {
+      service.parutions = <ParutionTitre>[
+        _ligne(service, 'Abandonné', ilYA: const Duration(days: 750)),
+        _ligne(service, 'Récent', ilYA: const Duration(hours: 5)),
+      ];
+      await afficher(tester, const EcranAccueil());
+      await tester.tap(find.text(Textes.ongletMisesAJour));
+      await tester.pumpAndSettle();
+
+      expect(find.text(Textes.nouveau), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(NavigationRail),
+          matching: find.descendant(
+            of: find.byType(Badge),
+            matching: find.text('1'),
+          ),
+        ),
+        findsOneWidget,
+      );
+    });
+  });
+
   test('titre de test sans identifiant : aucun badge', () {
     final ligne = ParutionTitre(
       titre: Titre(urlTitre: 'u', nom: 'n'),
       langues: const <String>['fr'],
     );
-    expect(ligne.aNouveaute, isFalse);
+    expect(EtatParutions.estNouveaute(ligne, _maintenant), isFalse);
   });
 }

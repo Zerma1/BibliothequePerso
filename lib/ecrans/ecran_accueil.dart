@@ -21,7 +21,8 @@ import 'ecran_telechargements.dart';
 /// Sous [largeurMinNavigationLaterale], une barre de navigation en bas (pouce
 /// sur téléphone) ; au-delà, un `NavigationRail` sur le côté, qui laisse
 /// toute la hauteur au contenu (PLAYBOOK.md section 8). Le numéro de version
-/// est rappelé en petit sous le rail ou au-dessus de la barre.
+/// est rappelé en petit tout en bas : au pied du rail, ou juste au-dessus de
+/// la barre du bas.
 class EcranAccueil extends StatefulWidget {
   /// Crée l'écran.
   const EcranAccueil({super.key});
@@ -149,8 +150,14 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
                   selectedIndex: _indexOnglet,
                   onDestinationSelected: _choisirOnglet,
                   labelType: NavigationRailLabelType.all,
+                  // Version épinglée en bas de la colonne (retour du client
+                  // sur la 0.2.0-test) : elle ne se confond plus avec les
+                  // onglets. Les onglets défilent si la fenêtre est très
+                  // basse, la version reste visible.
+                  trailingAtBottom: true,
+                  scrollable: true,
                   trailing: Padding(
-                    padding: const EdgeInsets.only(top: espacementMoyen),
+                    padding: const EdgeInsets.only(bottom: espacementMoyen),
                     child: version,
                   ),
                   destinations: <NavigationRailDestination>[

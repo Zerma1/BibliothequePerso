@@ -10,9 +10,11 @@ import 'bouton_rapport_erreur.dart';
 import 'constantes_interface.dart';
 import 'messages.dart';
 import 'section_diagnostic_site.dart';
+import 'section_pliable.dart';
 import 'textes.dart';
 
-/// Sites du titre : le principal (marqué) puis les secondaires, avec pour
+/// Section repliable (en-tête « Sites (n) » et site principal) ; une fois
+/// dépliée, sites du titre : le principal (marqué) puis les secondaires, avec pour
 /// chacun son nom, son nombre de chapitres et ses actions (ouvrir, définir
 /// comme principal, garder comme simple lien, retirer), puis le bouton
 /// « Ajouter un autre site ». Un lien seul (T4) est marqué comme tel et
@@ -168,11 +170,19 @@ class SectionSitesTitre extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final occupe = etat.estEnModificationSites || etat.estEnActualisation;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        Text(Textes.sitesDuTitre, style: theme.textTheme.titleMedium),
-        const SizedBox(height: espacementPetit),
+    final principal = etat.sites
+        .where((site) => site.estPrincipal)
+        .map((site) => site.nomSite)
+        .firstOrNull;
+    // Repliée au départ (retour du client sur la 0.2.0-test) : la liste des
+    // sites, avec ses boutons, éloignait les chapitres du haut de la fiche.
+    // L'en-tête garde l'essentiel : nombre de sites et site principal.
+    return SectionPliable(
+      identifiant: 'titre.sites',
+      titre: Textes.sitesDuTitreAvecNombre(etat.sites.length),
+      icone: Icons.link,
+      resume: principal == null ? null : Textes.resumeSitesDuTitre(principal),
+      enfants: <Widget>[
         Text(Textes.explicationSitesDuTitre, style: theme.textTheme.bodySmall),
         const SizedBox(height: espacementPetit),
         for (final site in etat.sites)

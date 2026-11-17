@@ -145,8 +145,27 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    // Version en petit sous le rail.
-    expect(find.text(Textes.versionCourte(versionApplication)), findsOneWidget);
+    // Version en petit tout en bas du rail (retour 0.2.0-test), sous la
+    // dernière destination.
+    final version = find.text(Textes.versionCourte(versionApplication));
+    expect(version, findsOneWidget);
+    expect(
+      tester.getBottomLeft(version).dy,
+      greaterThan(tester.getSize(find.byType(NavigationRail)).height - 60),
+    );
+    expect(
+      tester.getTopLeft(version).dy,
+      greaterThan(
+        tester
+            .getBottomLeft(
+              find.descendant(
+                of: find.byType(NavigationRail),
+                matching: find.text(Textes.ongletParametres),
+              ),
+            )
+            .dy,
+      ),
+    );
     // Badge : un chapitre en attente.
     expect(
       find.descendant(
@@ -165,9 +184,11 @@ void main() {
 
     await tester.tap(find.text(Textes.ongletParametres).first);
     await tester.pumpAndSettle();
-    // Section de l'écran Paramètres (le même mot nomme aussi l'onglet
-    // « Mises à jour » du rail).
-    expect(find.text(Textes.sectionMisesAJour), findsNWidgets(2));
+    // Section de l'écran Paramètres, repliée au départ.
+    expect(find.text(Textes.sectionMisesAJour), findsOneWidget);
+    expect(find.text(Textes.heuresEnAttente), findsNothing);
+    await tester.tap(find.text(Textes.sectionMisesAJour));
+    await tester.pumpAndSettle();
     expect(find.text(Textes.heuresEnAttente), findsOneWidget);
   });
 

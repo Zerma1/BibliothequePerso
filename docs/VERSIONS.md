@@ -6,6 +6,25 @@
 > restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
 > chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
 
+## 0.2.1-test — version de test (2026-11-17)
+
+Suite aux retours sur la 0.2.0-test.
+
+Nouveau :
+- **Importer un export** (Paramètres → Sauvegarde et export) : relit un fichier JSON exporté et
+  ajoute à la bibliothèque les sites, titres, listes et catégories manquants, sans doublon et
+  sans rien supprimer. Les chapitres arrivent à la vérification suivante ; l'avancement de
+  lecture n'est pas repris. L'export passe au format 2 (sélecteurs CSS des sites, résumés) ;
+  les exports de la 0.2.0 restent importables.
+- **Paramètres en sections pliables** ; la section « Sites » d'un titre est pliable.
+
+Corrigé :
+- Badge « Nouveau » : seulement pour un chapitre non lu sorti depuis moins de 7 jours (avant :
+  tout dernier chapitre non lu, même de 2023). Les chapitres sans date reçus à l'ajout d'un
+  titre ou d'un site ne sont plus des nouveautés.
+- Lecteur : plus de sauts vers le bas en remontant dans un chapitre.
+- Le numéro de version est en bas de la colonne de navigation.
+
 ## 0.2.0-test — version de test (2026-11-17)
 
 Reprend tout ce qu'apportaient les versions 0.1.0-test.2 à 0.1.0-test.4, plus :

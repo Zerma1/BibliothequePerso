@@ -1,0 +1,1264 @@
+/// Import d'un export JSON de la bibliothèque (tâche R8, retour du client
+/// sur la 0.2.0-test) : les sites, titres, listes et réglages du fichier
+/// sont **fusionnés** dans la base, sans jamais rien supprimer.
+///
+/// Aucune requête réseau : l'export contient tout ce qu'il faut pour créer
+/// les lignes (format 2, voir `versionFormatExport`). Les chapitres des
+/// titres ajoutés arrivent à la prochaine vérification des mises à jour.
+library;
+
+// Les paramètres nommés ne peuvent pas être privés en Dart : on garde des
+// champs privés initialisés dans la liste d'initialisation.
+// ignore_for_file: prefer_initializing_formals
+
+import 'dart:convert';
+import 'dart:io';
+
+import '../donnees/depot_categories.dart';
+import '../donnees/depot_listes.dart';
+import '../donnees/depot_sources.dart';
+import '../donnees/depot_titres.dart';
+import '../donnees/depot_titres_sources.dart';
+import '../modeles/categorie.dart';
+import '../modeles/erreur_base_de_donnees.dart';
+import '../modeles/lien_titre_source.dart';
+import '../modeles/liste_lecture.dart';
+import '../modeles/source.dart';
+import '../modeles/titre.dart';
+import '../modeles/titre_alternatif.dart';
+import 'constantes_services.dart';
+import 'erreur_service.dart';
+import 'service_ajout_site.dart';
+import 'service_bibliotheque.dart';
+import 'service_parametres.dart';
+
+// ------------------------------------------------------------ Contenu lu
+
+/// Un site tel qu'il est décrit dans le fichier d'import.
+class SourceImportee {
+  /// Crée la ligne.
+  const SourceImportee({
+    required this.numero,
+    required this.nom,
+    required this.urlBase,
+    required this.typeBrut,
+    this.langues = const <String>[],
+    this.estActive = true,
+    this.configurationSelecteurs,
+  });
+
+  /// Position du site dans le fichier (1 pour le premier).
+  final int numero;
+
+  /// Nom affiché du site.
+  final String nom;
+
+  /// Adresse de base du site.
+  final String urlBase;
+
+  /// Type tel qu'écrit dans le fichier (`mangaDex`, `madara`…).
+  final String typeBrut;
+
+  /// Type reconnu, ou `null` si [typeBrut] est inconnu de cette version.
+  TypeSource? get type {
+    for (final type in TypeSource.values) {
+      if (type.name == typeBrut) return type;
+    }
+    return null;
+  }
+
+  /// Langues du site (codes ISO 639-1), dans l'ordre de préférence.
+  final List<String> langues;
+
+  /// `false` si le site était désactivé.
+  final bool estActive;
+
+  /// Sélecteurs CSS d'un site générique (format 2), sinon `null`.
+  final String? configurationSelecteurs;
+}
+
+/// Un site d'un titre tel qu'il est décrit dans le fichier d'import.
+class SiteImporte {
+  /// Crée la ligne.
+  const SiteImporte({
+    required this.url,
+    this.nomSource,
+    this.urlSource,
+    this.estPrincipal = false,
+    this.estLienSeul = false,
+  });
+
+  /// Adresse du titre sur ce site.
+  final String url;
+
+  /// Nom du site, si connu.
+  final String? nomSource;
+
+  /// Adresse de base du site, si connue.
+  final String? urlSource;
+
+  /// `true` pour le site principal du titre.
+  final bool estPrincipal;
+
+  /// `true` pour un lien seul (site seulement ouvert dans le navigateur).
+  final bool estLienSeul;
+}
+
+/// Un titre tel qu'il est décrit dans le fichier d'import.
+class TitreImporte {
+  /// Crée la ligne.
+  const TitreImporte({
+    required this.numero,
+    required this.nom,
+    required this.sites,
+    this.typeTitre = TypeTitre.autre,
+    this.titresAlternatifs = const <TitreAlternatif>[],
+    this.listes = const <String>[],
+    this.categories = const <String>[],
+    this.langues = const <String>[],
+    this.niveauContenu,
+    this.urlCouverture,
+    this.couvertureChoisie,
+    this.resume,
+    this.auteur,
+    this.statut,
+  });
+
+  /// Position du titre dans le fichier (1 pour le premier).
+  final int numero;
+
+  /// Nom principal du titre.
+  final String nom;
+
+  /// Sites du titre, le principal d'abord (jamais vide).
+  final List<SiteImporte> sites;
+
+  /// Nature du titre (`autre` si le type est inconnu).
+  final TypeTitre typeTitre;
+
+  /// Autres noms du titre.
+  final List<TitreAlternatif> titresAlternatifs;
+
+  /// Noms des listes qui contiennent le titre.
+  final List<String> listes;
+
+  /// Noms des catégories du titre.
+  final List<String> categories;
+
+  /// Langues propres au titre (vide : réglage général).
+  final List<String> langues;
+
+  /// Niveau de contenu indiqué par le site, si connu.
+  final String? niveauContenu;
+
+  /// Couverture du site, si connue.
+  final String? urlCouverture;
+
+  /// Couverture choisie par le client : seule une adresse du site est
+  /// gardée (une image de l'appareil n'est exportée que par son nom de
+  /// fichier, inutilisable ailleurs).
+  final String? couvertureChoisie;
+
+  /// Résumé (format 2), si connu.
+  final String? resume;
+
+  /// Auteur, si connu.
+  final String? auteur;
+
+  /// Statut affiché par le site, si connu.
+  final String? statut;
+}
+
+/// Une liste telle qu'elle est décrite dans le fichier d'import.
+class ListeImportee {
+  /// Crée la ligne.
+  const ListeImportee({required this.nom, this.estSysteme = false});
+
+  /// Nom de la liste.
+  final String nom;
+
+  /// `true` pour une liste système (Favoris, Suivis, Planifié, En attente).
+  final bool estSysteme;
+}
+
+/// Tout ce qu'un fichier d'import contient, déjà vérifié. Produit par
+/// [ServiceImport.lireJson] (fonction pure, testable sans base).
+class ContenuImport {
+  /// Crée le contenu.
+  const ContenuImport({
+    required this.versionFormat,
+    this.versionApplication,
+    this.languesGenerales = const <String>[],
+    this.niveauxContenu,
+    this.listes = const <ListeImportee>[],
+    this.sources = const <SourceImportee>[],
+    this.titres = const <TitreImporte>[],
+    this.erreursLecture = const <ErreurLigneImport>[],
+  });
+
+  /// Version du format du fichier (1 ou 2).
+  final int versionFormat;
+
+  /// Version de l'application qui a produit le fichier, si connue.
+  final String? versionApplication;
+
+  /// Langues de lecture générales (vide si absentes du fichier).
+  final List<String> languesGenerales;
+
+  /// Niveaux de contenu affichés, ou `null` s'ils sont absents du fichier.
+  final List<String>? niveauxContenu;
+
+  /// Listes, dans l'ordre d'affichage.
+  final List<ListeImportee> listes;
+
+  /// Sites configurés.
+  final List<SourceImportee> sources;
+
+  /// Titres lisibles.
+  final List<TitreImporte> titres;
+
+  /// Lignes illisibles (titre sans nom, site sans adresse…), écartées.
+  final List<ErreurLigneImport> erreursLecture;
+}
+
+// ------------------------------------------------------------- Résultat
+
+/// Partie du fichier concernée par une erreur d'import.
+enum PartieImport {
+  /// Un site de la section `sources`.
+  site,
+
+  /// Une liste de la section `listes`.
+  liste,
+
+  /// Un titre de la section `titres`.
+  titre,
+
+  /// Les réglages généraux.
+  reglages,
+}
+
+/// Une ligne du fichier qui n'a pas pu être importée (en tout ou partie).
+class ErreurLigneImport {
+  /// Crée l'erreur.
+  const ErreurLigneImport({
+    required this.partie,
+    required this.message,
+    this.numero,
+    this.nom,
+  });
+
+  /// Partie du fichier concernée.
+  final PartieImport partie;
+
+  /// Position de la ligne dans sa partie (1 pour la première), si connue.
+  final int? numero;
+
+  /// Nom du site, de la liste ou du titre, si connu.
+  final String? nom;
+
+  /// Explication en français, affichable telle quelle.
+  final String message;
+
+  /// Description complète : « Titre n°3 « Nom » : message ».
+  String get description {
+    final libelle = switch (partie) {
+      PartieImport.site => 'Site',
+      PartieImport.liste => 'Liste',
+      PartieImport.titre => 'Titre',
+      PartieImport.reglages => 'Réglages',
+    };
+    final position = numero == null ? '' : ' n°$numero';
+    final nomLisible = nom == null ? '' : ' « $nom »';
+    return '$libelle$position$nomLisible : $message';
+  }
+
+  @override
+  String toString() => description;
+}
+
+/// Bilan d'un import.
+class ResultatImport {
+  /// Crée le bilan.
+  const ResultatImport({
+    required this.versionFormat,
+    this.titresAjoutes = 0,
+    this.titresCompletes = 0,
+    this.titresIgnores = 0,
+    this.sitesAjoutes = 0,
+    this.listesAjoutees = 0,
+    this.reglagesGenerauxAppliques = false,
+    this.erreurs = const <ErreurLigneImport>[],
+  });
+
+  /// Version du format du fichier importé.
+  final int versionFormat;
+
+  /// Titres absents de la base, créés par l'import.
+  final int titresAjoutes;
+
+  /// Titres déjà présents auxquels l'import a ajouté au moins un site, une
+  /// liste, une catégorie, un nom ou un réglage.
+  final int titresCompletes;
+
+  /// Titres déjà présents et déjà complets : rien n'a été modifié.
+  final int titresIgnores;
+
+  /// Sites (sources) créés dans « Sources ».
+  final int sitesAjoutes;
+
+  /// Listes du client créées.
+  final int listesAjoutees;
+
+  /// `true` si les langues et niveaux de contenu généraux du fichier ont
+  /// été enregistrés.
+  final bool reglagesGenerauxAppliques;
+
+  /// Lignes non importées (ou importées en partie), dans l'ordre du fichier.
+  final List<ErreurLigneImport> erreurs;
+
+  /// `true` si des titres ont été ajoutés : leurs chapitres ne sont pas dans
+  /// le fichier et arriveront à la prochaine vérification des mises à jour.
+  bool get chapitresALaProchaineVerification => titresAjoutes > 0;
+
+  /// Bilan lisible en français, par exemple « 3 titres ajoutés, 1 titre
+  /// complété, 2 titres déjà présents, 1 erreur. Les chapitres des titres
+  /// ajoutés arriveront à la prochaine vérification des mises à jour. »
+  String get resume {
+    String pluriel(int n, String un, String plusieurs) =>
+        '$n ${n > 1 ? plusieurs : un}';
+    final parties = <String>[
+      pluriel(titresAjoutes, 'titre ajouté', 'titres ajoutés'),
+      pluriel(titresCompletes, 'titre complété', 'titres complétés'),
+      pluriel(titresIgnores, 'titre déjà présent', 'titres déjà présents'),
+      if (sitesAjoutes > 0)
+        pluriel(sitesAjoutes, 'site ajouté', 'sites ajoutés'),
+      if (listesAjoutees > 0)
+        pluriel(listesAjoutees, 'liste créée', 'listes créées'),
+      if (erreurs.isNotEmpty) pluriel(erreurs.length, 'erreur', 'erreurs'),
+    ];
+    final tampon = StringBuffer('${parties.join(', ')}.');
+    if (reglagesGenerauxAppliques) {
+      tampon.write(' Langues et niveaux de contenu repris du fichier.');
+    }
+    if (chapitresALaProchaineVerification) {
+      tampon.write(
+        ' Les chapitres des titres ajoutés arriveront à la prochaine '
+        'vérification des mises à jour ; les chapitres déjà lus ne sont pas '
+        'repris.',
+      );
+    }
+    return tampon.toString();
+  }
+}
+
+// -------------------------------------------------------------- Service
+
+/// Lit un export JSON (`ServiceExport`) et le fusionne dans la base.
+///
+/// Règles du client (retour 0.2.0-test) :
+/// - rien n'est jamais supprimé ni remplacé : un site, une liste ou un
+///   réglage déjà présent est gardé tel quel ;
+/// - un titre déjà présent (une de ses adresses est déjà celle d'un site,
+///   principal ou secondaire, d'un titre de la base) n'est pas dupliqué : on
+///   complète seulement ses sites, listes, catégories, noms et réglages
+///   manquants ;
+/// - aucune requête réseau ; les chapitres arrivent à la prochaine
+///   vérification ;
+/// - une ligne illisible ou impossible à importer est notée dans le
+///   [ResultatImport] sans arrêter les autres ; seul un fichier qui n'est
+///   pas un export lève une [ErreurService], **avant** toute écriture.
+///
+/// LIMITE : l'import n'est pas une seule transaction SQLite. Les dépôts
+/// ouvrent chacun leur propre transaction sur la base et n'acceptent pas
+/// une transaction extérieure (en ouvrir une ici les bloquerait). Pour
+/// limiter le risque d'import à moitié fait : tout le fichier est vérifié
+/// avant la première écriture, chaque écriture est elle-même atomique, et
+/// l'import est **idempotent** : relancer le même fichier après une panne
+/// termine le travail sans rien dupliquer. Une vraie transaction demande
+/// des dépôts capables d'écrire dans une transaction donnée (besoin signalé
+/// à l'orchestrateur).
+class ServiceImport {
+  /// Crée le service. Sans [serviceParametres], les réglages généraux du
+  /// fichier ne sont jamais appliqués.
+  ServiceImport({
+    required DepotSources depotSources,
+    required DepotTitres depotTitres,
+    required DepotTitresSources depotTitresSources,
+    required DepotListes depotListes,
+    required DepotCategories depotCategories,
+    ServiceParametres? serviceParametres,
+  }) : _depotSources = depotSources,
+       _depotTitres = depotTitres,
+       _depotTitresSources = depotTitresSources,
+       _depotListes = depotListes,
+       _depotCategories = depotCategories,
+       _serviceParametres = serviceParametres;
+
+  final DepotSources _depotSources;
+  final DepotTitres _depotTitres;
+  final DepotTitresSources _depotTitresSources;
+  final DepotListes _depotListes;
+  final DepotCategories _depotCategories;
+  final ServiceParametres? _serviceParametres;
+
+  /// Import en cours : un second appel (double clic) reçoit le même
+  /// résultat au lieu de lancer un second import en parallèle, dont les
+  /// écritures se croiseraient avec celles du premier.
+  Future<ResultatImport>? _enCours;
+
+  /// Lit le fichier [chemin] (UTF-8) et l'importe : voir [importerTexte].
+  ///
+  /// Lève une [ErreurService] si le fichier est introuvable, illisible,
+  /// démesuré ou n'est pas un export de l'application.
+  Future<ResultatImport> importerFichier(
+    String chemin, {
+    bool? appliquerReglagesGeneraux,
+  }) => _partager(() async {
+    final String texte;
+    try {
+      final fichier = File(chemin);
+      if (await fichier.length() > tailleMaximaleFichierImport) {
+        throw const ErreurService(
+          "Ce fichier est bien trop gros pour être un export de la "
+          'bibliothèque.',
+        );
+      }
+      texte = await fichier.readAsString(encoding: utf8);
+    } on FileSystemException catch (erreur) {
+      throw ErreurService("Le fichier n'a pas pu être lu.", cause: erreur);
+    } on FormatException catch (erreur) {
+      // Octets qui ne sont pas de l'UTF-8 : ce n'est pas un export.
+      throw ErreurService(_messagePasUnExport, cause: erreur);
+    }
+    return _importer(
+      lireJson(texte),
+      appliquerReglagesGeneraux: appliquerReglagesGeneraux,
+    );
+  });
+
+  /// Importe le texte JSON [texte] d'un export.
+  ///
+  /// [appliquerReglagesGeneraux] : `true` enregistre les langues et niveaux
+  /// de contenu du fichier, `false` garde ceux de l'appareil ; `null` (par
+  /// défaut) ne les applique que si la bibliothèque est vide avant l'import
+  /// (restauration sur un nouvel appareil), pour ne jamais écraser en
+  /// silence un choix du client.
+  ///
+  /// Un appel pendant un import en cours reçoit le résultat de celui-ci.
+  /// Lève une [ErreurService] si le texte n'est pas un export lisible (rien
+  /// n'est alors écrit). Les erreurs de base sur une ligne sont rendues dans
+  /// [ResultatImport.erreurs].
+  Future<ResultatImport> importerTexte(
+    String texte, {
+    bool? appliquerReglagesGeneraux,
+  }) => _partager(
+    () async => _importer(
+      lireJson(texte),
+      appliquerReglagesGeneraux: appliquerReglagesGeneraux,
+    ),
+  );
+
+  Future<ResultatImport> _partager(Future<ResultatImport> Function() action) {
+    final enCours = _enCours;
+    if (enCours != null) return enCours;
+    final nouveau = action();
+    _enCours = nouveau;
+    // Libéré après coup, réussite ou échec : un nouvel import reste possible.
+    nouveau.then<void>(
+      (_) => _enCours = null,
+      onError: (Object _) => _enCours = null,
+    );
+    return nouveau;
+  }
+
+  // ---------------------------------------------------- Lecture (pure)
+
+  static const String _messagePasUnExport =
+      "Ce fichier n'est pas un export de Bibliothèque perso : choisissez le "
+      'fichier .json créé par « Exporter ».';
+
+  /// Vérifie et lit le texte d'un export. Fonction pure.
+  ///
+  /// Lève une [ErreurService] (message en français) si le texte n'est pas du
+  /// JSON, n'est pas un export de l'application, vient d'un format plus
+  /// récent ou n'a pas la structure attendue. Une ligne isolée illisible
+  /// (titre sans nom, site sans adresse) n'est pas fatale : elle est
+  /// rangée dans [ContenuImport.erreursLecture].
+  static ContenuImport lireJson(String texte) {
+    // Un fichier réenregistré par un éditeur de texte Windows peut commencer
+    // par une marque d'ordre des octets, que jsonDecode refuse.
+    final marque = String.fromCharCode(0xFEFF);
+    final propre = texte.startsWith(marque) ? texte.substring(1) : texte;
+    final Object? donnees;
+    try {
+      donnees = jsonDecode(propre);
+    } on FormatException catch (erreur) {
+      throw ErreurService(
+        "Ce fichier n'est pas un export valide : son contenu JSON est "
+        'illisible ou incomplet.',
+        cause: erreur,
+      );
+    }
+    if (donnees is! Map<String, Object?> ||
+        donnees['format'] != identifiantFormatExport) {
+      throw const ErreurService(_messagePasUnExport);
+    }
+    final version = donnees['version'];
+    if (version is! int) {
+      throw const ErreurService(_messagePasUnExport);
+    }
+    if (version > versionFormatExport) {
+      throw ErreurService(
+        'Cet export vient d\'une version plus récente de l\'application '
+        '(format $version) : mettez l\'application à jour pour l\'importer.',
+      );
+    }
+    if (version < versionFormatImportMinimale) {
+      throw ErreurService(
+        "Ce format d'export ($version) n'est pas pris en charge.",
+      );
+    }
+
+    final titresBruts = _liste(donnees, 'titres', obligatoire: true);
+    if (titresBruts.length > nombreMaximalTitresImport) {
+      throw ErreurService(
+        'Cet export contient trop de titres (${titresBruts.length}, au plus '
+        '$nombreMaximalTitresImport).',
+      );
+    }
+    final erreurs = <ErreurLigneImport>[];
+
+    final sources = <SourceImportee>[];
+    final sourcesBrutes = _liste(donnees, 'sources');
+    for (var i = 0; i < sourcesBrutes.length; i++) {
+      final ligne = _lireSource(sourcesBrutes[i], i + 1);
+      switch (ligne) {
+        case final SourceImportee source:
+          sources.add(source);
+        case final ErreurLigneImport erreur:
+          erreurs.add(erreur);
+      }
+    }
+
+    final listes = <ListeImportee>[
+      for (final brute in _liste(donnees, 'listes'))
+        if (brute is Map<String, Object?>)
+          if (_texte(brute, 'nom') case final nom?)
+            ListeImportee(
+              nom: nom,
+              estSysteme: _booleen(brute, 'systeme', defaut: false),
+            ),
+    ];
+
+    final titres = <TitreImporte>[];
+    for (var i = 0; i < titresBruts.length; i++) {
+      final ligne = _lireTitre(titresBruts[i], i + 1);
+      switch (ligne) {
+        case final TitreImporte titre:
+          titres.add(titre);
+        case final ErreurLigneImport erreur:
+          erreurs.add(erreur);
+      }
+    }
+
+    final reglages = donnees['reglages'];
+    final reglagesLus = reglages is Map<String, Object?> ? reglages : null;
+    final niveaux = reglagesLus?['niveauxContenu'];
+    return ContenuImport(
+      versionFormat: version,
+      versionApplication: _texte(donnees, 'versionApplication'),
+      languesGenerales: reglagesLus == null
+          ? const <String>[]
+          : ServiceParametres.nettoyerLangues(_textes(reglagesLus, 'langues')),
+      // Absent ≠ vide : une liste vide est un vrai choix du client (n'afficher
+      // que les titres sans niveau connu).
+      niveauxContenu: niveaux is List<Object?>
+          ? ServiceParametres.nettoyerNiveauxContenu(
+              niveaux.whereType<String>(),
+            )
+          : null,
+      listes: listes,
+      sources: sources,
+      titres: titres,
+      erreursLecture: erreurs,
+    );
+  }
+
+  /// Site lu dans [brut], ou l'erreur qui l'écarte.
+  static Object _lireSource(Object? brut, int numero) {
+    if (brut is! Map<String, Object?>) {
+      return ErreurLigneImport(
+        partie: PartieImport.site,
+        numero: numero,
+        message: 'ligne illisible.',
+      );
+    }
+    final nom = _texte(brut, 'nom');
+    final urlBase = _texte(brut, 'urlBase');
+    if (urlBase == null || !_estAdresseWeb(urlBase)) {
+      return ErreurLigneImport(
+        partie: PartieImport.site,
+        numero: numero,
+        nom: nom,
+        message: 'adresse du site absente ou invalide.',
+      );
+    }
+    return SourceImportee(
+      numero: numero,
+      nom: nom ?? ServiceAjoutSite.proposerNom(Uri.parse(urlBase)),
+      urlBase: urlBase,
+      typeBrut: _texte(brut, 'type') ?? '',
+      langues: ServiceParametres.nettoyerLangues(_textes(brut, 'langues')),
+      estActive: _booleen(brut, 'active', defaut: true),
+      configurationSelecteurs: _texte(brut, 'configurationSelecteurs'),
+    );
+  }
+
+  /// Titre lu dans [brut], ou l'erreur qui l'écarte.
+  static Object _lireTitre(Object? brut, int numero) {
+    if (brut is! Map<String, Object?>) {
+      return ErreurLigneImport(
+        partie: PartieImport.titre,
+        numero: numero,
+        message: 'ligne illisible.',
+      );
+    }
+    final nom = _texte(brut, 'nom');
+    if (nom == null) {
+      return ErreurLigneImport(
+        partie: PartieImport.titre,
+        numero: numero,
+        message: 'titre sans nom.',
+      );
+    }
+    final sites = <SiteImporte>[];
+    // Format 1 sans le champ `sites` (avant l'étape 8) : seul le site
+    // principal est décrit, par `url` / `source` / `urlSource`.
+    final sitesBruts = brut['sites'];
+    if (sitesBruts is List<Object?> && sitesBruts.isNotEmpty) {
+      for (final site in sitesBruts) {
+        if (site is! Map<String, Object?>) continue;
+        final url = _texte(site, 'url');
+        if (url == null || !_estAdresseWeb(url)) continue;
+        sites.add(
+          SiteImporte(
+            url: url,
+            nomSource: _texte(site, 'source'),
+            urlSource: _texte(site, 'urlSource'),
+            estPrincipal: _booleen(site, 'principal', defaut: false),
+            estLienSeul: _booleen(site, 'lienSeul', defaut: false),
+          ),
+        );
+      }
+    } else if (_texte(brut, 'url') case final url? when _estAdresseWeb(url)) {
+      sites.add(
+        SiteImporte(
+          url: url,
+          nomSource: _texte(brut, 'source'),
+          urlSource: _texte(brut, 'urlSource'),
+          estPrincipal: true,
+        ),
+      );
+    }
+    if (sites.isEmpty) {
+      return ErreurLigneImport(
+        partie: PartieImport.titre,
+        numero: numero,
+        nom: nom,
+        message: 'aucune adresse valide.',
+      );
+    }
+    // Le site principal d'abord : c'est lui qui crée le titre.
+    sites.sort(
+      (a, b) => (b.estPrincipal ? 1 : 0).compareTo(a.estPrincipal ? 1 : 0),
+    );
+
+    final typeBrut = _texte(brut, 'type');
+    final couverture = _texte(brut, 'couvertureChoisie');
+    return TitreImporte(
+      numero: numero,
+      nom: nom,
+      sites: sites,
+      typeTitre: TypeTitre.values.firstWhere(
+        (type) => type.name == typeBrut,
+        orElse: () => TypeTitre.autre,
+      ),
+      titresAlternatifs: <TitreAlternatif>[
+        for (final alternatif in _liste(brut, 'titresAlternatifs'))
+          if (alternatif is Map<String, Object?>)
+            if (_texte(alternatif, 'nom') case final nomAlternatif?)
+              TitreAlternatif(
+                nom: nomAlternatif,
+                langue: _texte(alternatif, 'langue') ?? '',
+              ),
+      ],
+      listes: _textes(brut, 'listes'),
+      categories: _textes(brut, 'categories'),
+      langues: ServiceParametres.nettoyerLangues(_textes(brut, 'langues')),
+      niveauContenu: _texte(brut, 'niveauContenu'),
+      urlCouverture: _texte(brut, 'urlCouverture'),
+      // Une image de l'appareil n'est exportée que par son nom de fichier
+      // (vie privée) : inutilisable ici, la couverture du site s'affichera.
+      couvertureChoisie:
+          couverture != null &&
+              !ServiceBibliotheque.estCouvertureLocale(couverture)
+          ? couverture
+          : null,
+      resume: _texte(brut, 'resume'),
+      auteur: _texte(brut, 'auteur'),
+      statut: _texte(brut, 'statut'),
+    );
+  }
+
+  /// Liste [cle] de [objet] ; vide si absente. Lève une [ErreurService] si
+  /// elle a un autre type, ou si elle est absente et [obligatoire].
+  static List<Object?> _liste(
+    Map<String, Object?> objet,
+    String cle, {
+    bool obligatoire = false,
+  }) {
+    final valeur = objet[cle];
+    if (valeur is List<Object?>) return valeur;
+    if (valeur == null && !obligatoire) return const <Object?>[];
+    throw ErreurService(
+      'Cet export est incomplet ou abîmé (partie « $cle » illisible).',
+    );
+  }
+
+  /// Texte [cle] sans espaces autour, `null` s'il est absent, vide ou d'un
+  /// autre type.
+  static String? _texte(Map<String, Object?> objet, String cle) {
+    final valeur = objet[cle];
+    if (valeur is! String) return null;
+    final propre = valeur.trim();
+    return propre.isEmpty ? null : propre;
+  }
+
+  /// Textes non vides de la liste [cle] (les autres valeurs sont ignorées).
+  static List<String> _textes(Map<String, Object?> objet, String cle) {
+    final valeur = objet[cle];
+    if (valeur is! List<Object?>) return const <String>[];
+    return <String>[
+      for (final element in valeur)
+        if (element is String && element.trim().isNotEmpty) element.trim(),
+    ];
+  }
+
+  static bool _booleen(
+    Map<String, Object?> objet,
+    String cle, {
+    required bool defaut,
+  }) {
+    final valeur = objet[cle];
+    return valeur is bool ? valeur : defaut;
+  }
+
+  /// `true` pour une adresse `http`/`https` avec un hôte.
+  static bool _estAdresseWeb(String texte) {
+    final uri = Uri.tryParse(texte);
+    return uri != null &&
+        (uri.scheme == 'http' || uri.scheme == 'https') &&
+        uri.host.isNotEmpty;
+  }
+
+  /// Hôte d'une adresse sans `www.` ni `m.` (comme
+  /// `ServiceAjoutSite.trouverSourcePourUrl`), ou `null`.
+  static String? _hote(String? adresse) {
+    if (adresse == null) return null;
+    final uri = Uri.tryParse(adresse);
+    if (uri == null || uri.host.isEmpty) return null;
+    return ServiceAjoutSite.proposerNom(uri);
+  }
+
+  // ------------------------------------------------------------ Écriture
+
+  Future<ResultatImport> _importer(
+    ContenuImport contenu, {
+    bool? appliquerReglagesGeneraux,
+  }) async {
+    final ecriture = _Ecriture(this, contenu);
+    // Lu avant toute écriture : « bibliothèque vide » décrit l'appareil tel
+    // que le client l'avait avant l'import.
+    final bibliothequeVide = (await _depotTitres.chargerTitres()).isEmpty;
+    await ecriture.chargerEtat();
+    await ecriture.importerSources();
+    await ecriture.importerListes();
+    final appliquer = appliquerReglagesGeneraux ?? bibliothequeVide;
+    final reglagesAppliques = appliquer && await ecriture.importerReglages();
+    for (final titre in contenu.titres) {
+      await ecriture.importerTitre(titre);
+    }
+    return ResultatImport(
+      versionFormat: contenu.versionFormat,
+      titresAjoutes: ecriture.titresAjoutes,
+      titresCompletes: ecriture.titresCompletes,
+      titresIgnores: ecriture.titresIgnores,
+      sitesAjoutes: ecriture.sitesAjoutes,
+      listesAjoutees: ecriture.listesAjoutees,
+      reglagesGenerauxAppliques: reglagesAppliques,
+      erreurs: <ErreurLigneImport>[
+        ...contenu.erreursLecture,
+        ...ecriture.erreurs,
+      ],
+    );
+  }
+}
+
+/// État d'un import en cours d'écriture : sites et listes connus, compteurs
+/// et erreurs. Une instance par import.
+class _Ecriture {
+  _Ecriture(this._service, this._contenu);
+
+  final ServiceImport _service;
+  final ContenuImport _contenu;
+
+  /// Sites connus par adresse de base exacte, puis par hôte (sans `www.` ni
+  /// `m.`) : un site `https://www.exemple.com` de la base reconnaît
+  /// `https://exemple.com` du fichier.
+  final Map<String, Source> _sourcesParUrl = <String, Source>{};
+  final Map<String, Source> _sourcesParHote = <String, Source>{};
+
+  /// Listes connues, par nom en minuscules.
+  final Map<String, ListeLecture> _listesParNom = <String, ListeLecture>{};
+
+  int titresAjoutes = 0;
+  int titresCompletes = 0;
+  int titresIgnores = 0;
+  int sitesAjoutes = 0;
+  int listesAjoutees = 0;
+  final List<ErreurLigneImport> erreurs = <ErreurLigneImport>[];
+
+  Future<void> chargerEtat() async {
+    for (final source in await _service._depotSources.chargerSources()) {
+      _retenirSource(source);
+    }
+    for (final liste in await _service._depotListes.chargerListes()) {
+      _listesParNom[liste.nom.toLowerCase()] = liste;
+    }
+  }
+
+  void _retenirSource(Source source) {
+    _sourcesParUrl[source.urlBase] = source;
+    final hote = ServiceImport._hote(source.urlBase);
+    // putIfAbsent : si deux sites de la base partagent un hôte, le premier
+    // (ordre alphabétique) reste la référence, comme dans « Sources ».
+    if (hote != null) _sourcesParHote.putIfAbsent(hote, () => source);
+  }
+
+  /// Site de la base pour un site du fichier ; `null` s'il est inconnu.
+  ///
+  /// Adresses exactes d'abord : l'adresse de base [urlSource] donnée par le
+  /// fichier, puis la racine (`schéma://hôte`) de l'adresse du titre
+  /// [urlTitre]. La recherche par hôte (sans `www.` ni `m.`) ne sert qu'en
+  /// dernier recours, pour reconnaître un site enregistré sous une autre
+  /// forme (`https://www.exemple.com` pour `https://exemple.com`).
+  ///
+  /// LIMITE : si la base contient deux sites sur le même domaine (par
+  /// exemple `http://` et `https://`, ou avec et sans `www.`) et qu'aucune
+  /// adresse exacte ne correspond, le premier par ordre alphabétique du nom
+  /// est retenu ; le client peut ensuite déplacer le titre vers l'autre
+  /// site depuis sa fiche.
+  Source? _trouverSource(String? urlSource, String urlTitre) {
+    if (urlSource != null) {
+      final exacte = _sourcesParUrl[urlSource];
+      if (exacte != null) return exacte;
+    }
+    final uriTitre = Uri.tryParse(urlTitre);
+    if (uriTitre != null && uriTitre.host.isNotEmpty) {
+      final racine = _sourcesParUrl[ServiceAjoutSite.calculerUrlBase(uriTitre)];
+      if (racine != null) return racine;
+    }
+    if (urlSource != null) {
+      final parHote = _sourcesParHote[ServiceImport._hote(urlSource)];
+      if (parHote != null) return parHote;
+    }
+    return _sourcesParHote[ServiceImport._hote(urlTitre)];
+  }
+
+  // ---------------------------------------------------------------- Sites
+
+  /// Crée les sites du fichier absents de la base ; un site présent (même
+  /// adresse ou même hôte) est gardé tel quel, réglages du client compris.
+  Future<void> importerSources() async {
+    for (final importee in _contenu.sources) {
+      if (_trouverSource(importee.urlBase, importee.urlBase) != null) continue;
+      final type = importee.type;
+      if (type == null) {
+        erreurs.add(
+          ErreurLigneImport(
+            partie: PartieImport.site,
+            numero: importee.numero,
+            nom: importee.nom,
+            message:
+                'type de site inconnu (« ${importee.typeBrut} ») : '
+                'ajoutez ce site à la main dans « Sources ».',
+          ),
+        );
+        continue;
+      }
+      try {
+        final source = await _service._depotSources.enregistrerSource(
+          Source(
+            nom: importee.nom,
+            urlBase: importee.urlBase,
+            typeSource: type,
+            langueParDefaut: importee.langues.join(','),
+            configurationSelecteurs: importee.configurationSelecteurs,
+            estActive: importee.estActive,
+          ),
+        );
+        _retenirSource(source);
+        sitesAjoutes++;
+      } on ErreurBaseDeDonnees catch (erreur) {
+        erreurs.add(
+          ErreurLigneImport(
+            partie: PartieImport.site,
+            numero: importee.numero,
+            nom: importee.nom,
+            message: erreur.message,
+          ),
+        );
+      }
+    }
+  }
+
+  // --------------------------------------------------------------- Listes
+
+  /// Crée les listes du client absentes de la base, dans l'ordre du fichier
+  /// (elles gardent ainsi leur ordre d'affichage relatif).
+  Future<void> importerListes() async {
+    for (final importee in _contenu.listes) {
+      await _liste(importee.nom);
+    }
+  }
+
+  /// Liste nommée [nom], créée si besoin ; `null` (erreur notée) si elle ne
+  /// peut pas l'être.
+  Future<ListeLecture?> _liste(String nom) async {
+    final connue = _listesParNom[nom.toLowerCase()];
+    if (connue != null) return connue;
+    try {
+      // Les listes système (Favoris…) sont créées par les migrations : elles
+      // sont toujours déjà connues ici. Seules les listes du client peuvent
+      // manquer.
+      final creee = await _service._depotListes.creerListe(nom);
+      _listesParNom[creee.nom.toLowerCase()] = creee;
+      listesAjoutees++;
+      return creee;
+    } on ErreurBaseDeDonnees catch (erreur) {
+      erreurs.add(
+        ErreurLigneImport(
+          partie: PartieImport.liste,
+          nom: nom,
+          message: erreur.message,
+        ),
+      );
+      return null;
+    }
+  }
+
+  // ------------------------------------------------------------- Réglages
+
+  /// Enregistre les langues et niveaux de contenu du fichier. Renvoie
+  /// `true` si au moins l'un des deux a été écrit.
+  Future<bool> importerReglages() async {
+    final parametres = _service._serviceParametres;
+    if (parametres == null) return false;
+    var applique = false;
+    try {
+      if (_contenu.languesGenerales.isNotEmpty) {
+        await parametres.enregistrerLangues(_contenu.languesGenerales);
+        applique = true;
+      }
+      final niveaux = _contenu.niveauxContenu;
+      if (niveaux != null) {
+        await parametres.enregistrerNiveauxContenu(niveaux);
+        applique = true;
+      }
+    } on Exception catch (erreur) {
+      erreurs.add(
+        ErreurLigneImport(
+          partie: PartieImport.reglages,
+          message: _messageDe(erreur),
+        ),
+      );
+    }
+    return applique;
+  }
+
+  // --------------------------------------------------------------- Titres
+
+  /// Ajoute ou complète un titre. Une erreur est notée sans arrêter les
+  /// titres suivants.
+  ///
+  /// LIMITE : le titre, puis ses sites, puis ses listes sont écrits l'un
+  /// après l'autre (chaque dépôt ouvre sa propre transaction). Un échec au
+  /// milieu laisse un titre incomplet, que le même import relancé complète.
+  Future<void> importerTitre(TitreImporte importe) async {
+    try {
+      final existant = await _titreExistant(importe);
+      if (existant == null) {
+        await _ajouterTitre(importe);
+      } else if (await _completerTitre(existant, importe)) {
+        titresCompletes++;
+      } else {
+        titresIgnores++;
+      }
+    } on Exception catch (erreur) {
+      _noterErreurTitre(importe, _messageDe(erreur));
+    } on ArgumentError catch (erreur) {
+      // Valeur refusée par un dépôt (code de langue…) : propre à cette
+      // ligne, elle ne doit pas arrêter l'import des suivantes.
+      _noterErreurTitre(importe, '${erreur.message}');
+    }
+  }
+
+  void _noterErreurTitre(TitreImporte importe, String message) {
+    erreurs.add(
+      ErreurLigneImport(
+        partie: PartieImport.titre,
+        numero: importe.numero,
+        nom: importe.nom,
+        message: message,
+      ),
+    );
+  }
+
+  /// Titre de la base dont un site (principal ou secondaire) a l'une des
+  /// adresses du titre importé, ou `null`. Le site principal est regardé
+  /// d'abord.
+  Future<Titre?> _titreExistant(TitreImporte importe) async {
+    for (final site in importe.sites) {
+      final titre = await _service._depotTitresSources.chargerTitreParUrl(
+        site.url,
+      );
+      if (titre != null) return titre;
+    }
+    return null;
+  }
+
+  Future<void> _ajouterTitre(TitreImporte importe) async {
+    // Site principal : celui du fichier s'il est configuré, sinon le
+    // premier site lisible configuré (un lien seul ne peut pas être
+    // principal : l'application ne sait pas le lire).
+    SiteImporte? principal;
+    Source? sourcePrincipale;
+    for (final site in importe.sites) {
+      if (site.estLienSeul) continue;
+      final source = _trouverSource(site.urlSource, site.url);
+      if (source != null) {
+        principal = site;
+        sourcePrincipale = source;
+        break;
+      }
+    }
+    if (principal == null || sourcePrincipale == null) {
+      final premier = importe.sites.first;
+      _noterErreurTitre(
+        importe,
+        'site « ${premier.nomSource ?? ServiceImport._hote(premier.url)} » '
+        'non configuré : ajoutez-le dans « Sources », puis importez de '
+        'nouveau ce fichier.',
+      );
+      return;
+    }
+
+    final enregistre = await _service._depotTitres.enregistrerTitre(
+      Titre(
+        idSource: sourcePrincipale.id,
+        urlTitre: principal.url,
+        nom: importe.nom,
+        typeTitre: importe.typeTitre,
+        urlCouverture: importe.urlCouverture,
+        resume: importe.resume,
+        auteur: importe.auteur,
+        statut: importe.statut,
+        titresAlternatifs: importe.titresAlternatifs,
+        languesPreferees: importe.langues.isEmpty
+            ? null
+            : importe.langues.join(','),
+        niveauContenu: importe.niveauContenu,
+        couvertureChoisie: importe.couvertureChoisie,
+        // Date de vérification laissée vide : la prochaine vérification
+        // traite ce titre comme jamais vérifié et récupère ses chapitres.
+      ),
+      categories: importe.categories,
+    );
+    titresAjoutes++;
+    final idTitre = enregistre.id!;
+    final liens = await _service._depotTitresSources.chargerLiensTitre(idTitre);
+    await _ajouterSitesManquants(importe, idTitre, liens);
+    await _ajouterListesManquantes(importe, idTitre);
+  }
+
+  /// Complète un titre déjà présent. Renvoie `true` si quelque chose a été
+  /// ajouté. Rien n'est remplacé : nom, fiche, site principal et choix déjà
+  /// faits par le client restent tels quels.
+  Future<bool> _completerTitre(Titre existant, TitreImporte importe) async {
+    final idTitre = existant.id!;
+    var complete = false;
+
+    final liens = await _service._depotTitresSources.chargerLiensTitre(idTitre);
+    if (await _ajouterSitesManquants(importe, idTitre, liens)) complete = true;
+    if (await _ajouterListesManquantes(importe, idTitre)) complete = true;
+
+    // Catégories et noms : union de l'existant et du fichier.
+    final categoriesActuelles = <String>[
+      for (final categorie
+          in await _service._depotCategories.chargerCategoriesDuTitre(idTitre))
+        categorie.nom,
+    ];
+    final categoriesManquantes = <String>{
+      for (final brute in importe.categories)
+        if (Categorie.normaliserNom(brute) case final nom
+            when nom.isNotEmpty && !categoriesActuelles.contains(nom))
+          nom,
+    };
+    final nomsActuels = <String>{
+      existant.nom,
+      for (final alternatif in existant.titresAlternatifs) alternatif.nom,
+    };
+    final alternatifsManquants = <TitreAlternatif>[
+      for (final alternatif in importe.titresAlternatifs)
+        if (!nomsActuels.contains(alternatif.nom)) alternatif,
+    ];
+    final niveauManquant =
+        existant.niveauContenu == null && importe.niveauContenu != null;
+    if (categoriesManquantes.isNotEmpty ||
+        alternatifsManquants.isNotEmpty ||
+        niveauManquant) {
+      // enregistrerTitre remplace les noms et (si fournies) les catégories :
+      // on lui passe l'existant augmenté. La fiche est réécrite à l'identique.
+      await _service._depotTitres.enregistrerTitre(
+        existant.copierAvec(
+          titresAlternatifs: <TitreAlternatif>[
+            ...existant.titresAlternatifs,
+            ...alternatifsManquants,
+          ],
+          niveauContenu: niveauManquant ? importe.niveauContenu : null,
+        ),
+        categories: categoriesManquantes.isEmpty
+            ? null
+            : <String>[...categoriesActuelles, ...categoriesManquantes],
+      );
+      complete = true;
+    }
+
+    // Choix du client : seulement s'il n'en a pas encore fait sur cet
+    // appareil.
+    if (existant.languesPreferees == null && importe.langues.isNotEmpty) {
+      await _service._depotTitres.enregistrerLanguesPreferees(
+        idTitre,
+        importe.langues.join(','),
+      );
+      complete = true;
+    }
+    final couverture = importe.couvertureChoisie;
+    if (existant.couvertureChoisie == null && couverture != null) {
+      await _service._depotTitres.enregistrerCouvertureChoisie(
+        idTitre,
+        couverture,
+      );
+      complete = true;
+    }
+    return complete;
+  }
+
+  /// Lie au titre les sites du fichier qu'il n'a pas encore, comme sites
+  /// secondaires (le site principal d'un titre présent n'est jamais
+  /// changé). Renvoie `true` si au moins un site a été lié.
+  Future<bool> _ajouterSitesManquants(
+    TitreImporte importe,
+    int idTitre,
+    List<LienTitreSource> liens,
+  ) async {
+    final adresses = <String>{for (final lien in liens) lien.urlTitre};
+    final sourcesLiees = <int>{for (final lien in liens) lien.idSource};
+    var ajoute = false;
+    for (final site in importe.sites) {
+      if (adresses.contains(site.url)) continue;
+      final source = _trouverSource(site.urlSource, site.url);
+      final nomSite = site.nomSource ?? ServiceImport._hote(site.url);
+      if (source == null) {
+        _noterErreurTitre(
+          importe,
+          'site « $nomSite » non configuré : son adresse ${site.url} n\'a pas '
+          'été ajoutée.',
+        );
+        continue;
+      }
+      final idSource = source.id!;
+      // Un titre n'a qu'une adresse par site (contrainte de la base) : une
+      // autre adresse sur un site déjà lié n'est pas imposée au client.
+      if (sourcesLiees.contains(idSource)) {
+        _noterErreurTitre(
+          importe,
+          'le site « ${source.nom} » est déjà lié à ce titre avec une autre '
+          'adresse ; ${site.url} n\'a pas été ajoutée.',
+        );
+        continue;
+      }
+      final autre = await _service._depotTitresSources.chargerTitreParUrl(
+        site.url,
+      );
+      if (autre != null) {
+        _noterErreurTitre(
+          importe,
+          "l'adresse ${site.url} appartient déjà au titre « ${autre.nom} ».",
+        );
+        continue;
+      }
+      try {
+        await _service._depotTitresSources.ajouterSourceSecondaire(
+          idTitre,
+          idSource,
+          site.url,
+          lienSeul: site.estLienSeul,
+        );
+        adresses.add(site.url);
+        sourcesLiees.add(idSource);
+        ajoute = true;
+      } on ErreurBaseDeDonnees catch (erreur) {
+        _noterErreurTitre(importe, erreur.message);
+      }
+    }
+    return ajoute;
+  }
+
+  /// Ajoute le titre aux listes du fichier dont il ne fait pas encore
+  /// partie (aucune n'est retirée). Renvoie `true` si au moins une a été
+  /// ajoutée.
+  ///
+  /// « En attente » est reprise telle qu'exportée, sans le refus réservé au
+  /// client (`ServiceBibliotheque.ajouterTitreALaListe`) : c'était l'état
+  /// calculé par l'application, recalculé à la prochaine vérification.
+  Future<bool> _ajouterListesManquantes(
+    TitreImporte importe,
+    int idTitre,
+  ) async {
+    final actuelles = <int>{
+      for (final liste in await _service._depotListes.chargerListesDuTitre(
+        idTitre,
+      ))
+        ?liste.id,
+    };
+    var ajoute = false;
+    for (final nom in importe.listes) {
+      final liste = await _liste(nom);
+      final idListe = liste?.id;
+      if (idListe == null || actuelles.contains(idListe)) continue;
+      await _service._depotListes.ajouterTitre(idListe, idTitre);
+      actuelles.add(idListe);
+      ajoute = true;
+    }
+    return ajoute;
+  }
+
+  /// Message lisible d'une erreur attrapée pendant l'import.
+  static String _messageDe(Object erreur) => switch (erreur) {
+    ErreurService(:final message) => message,
+    ErreurBaseDeDonnees(:final message) => message,
+    _ => "erreur inattendue lors de l'enregistrement ($erreur).",
+  };
+}
