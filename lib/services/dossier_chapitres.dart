@@ -87,7 +87,13 @@ class ResultatChangementDossier {
     required this.dossierChoisi,
     required this.cheminDossier,
     this.bilan,
+    this.avertissement,
   });
+
+  /// Nombre maximal de chemins en conflit cités dans [message] : au-delà,
+  /// seul le nombre restant est indiqué (le message reste lisible dans une
+  /// boîte de dialogue).
+  static const int nombreMaximalConflitsCites = 5;
 
   /// Dossier enregistré dans les réglages, ou `null` pour le dossier par
   /// défaut de l'application.
@@ -100,8 +106,21 @@ class ResultatChangementDossier {
   /// ne pas déplacer les chapitres déjà téléchargés.
   final BilanDeplacement? bilan;
 
+  /// Avertissement à montrer avec le résultat, ou `null` : par exemple un
+  /// déplacement inachevé abandonné par un changement sans déplacement
+  /// (`ServiceDossierChapitres.avertissementAvantChangement`). Déjà repris
+  /// dans [message].
+  final String? avertissement;
+
   /// `true` si les archives ont été déplacées vers le nouveau dossier.
   bool get archivesDeplacees => bilan != null;
+
+  /// Chemins relatifs (`type/titre/fichier`) des fichiers restés dans
+  /// l'ancien dossier parce qu'un fichier différent portait déjà ce nom dans
+  /// le nouveau : à vérifier par le client. Vide sans déplacement ou sans
+  /// conflit.
+  List<String> get cheminsEnConflit =>
+      bilan?.cheminsEnConflit ?? const <String>[];
 
   /// Toujours `true` : le nouveau dossier ne s'applique qu'au prochain
   /// démarrage de l'application (plus simple et plus sûr que de
@@ -117,8 +136,26 @@ class ResultatChangementDossier {
               'règles demandent seront retéléchargés dans le nouveau.'
         : 'Chapitres déplacés vers « $cheminDossier » '
               '(${deplacement.nombreFichiers} fichier(s)).';
-    return '$debut Redémarrez l\'application pour utiliser ce dossier ; '
-        "d'ici là, les téléchargements sont en pause.";
+    final morceaux = <String>[
+      debut,
+      ?avertissement,
+      if (deplacement != null && deplacement.aDesConflits)
+        _messageConflits(deplacement.cheminsEnConflit),
+      "Redémarrez l'application pour utiliser ce dossier ; d'ici là, les "
+          'téléchargements sont en pause.',
+    ];
+    return morceaux.join(' ');
+  }
+
+  /// Phrase sur les fichiers en conflit : ils sont restés dans l'ancien
+  /// dossier, le client doit les vérifier (aucun n'est écrasé).
+  static String _messageConflits(List<String> conflits) {
+    final cites = conflits.take(nombreMaximalConflitsCites).join(', ');
+    final reste = conflits.length - nombreMaximalConflitsCites;
+    final suite = reste > 0 ? ' et $reste autre(s)' : '';
+    return '${conflits.length} fichier(s) ne sont pas déplacés, car un '
+        'fichier différent du même nom existe déjà dans le nouveau dossier : '
+        "ils sont restés dans l'ancien dossier, à vérifier ($cites$suite).";
   }
 
   @override

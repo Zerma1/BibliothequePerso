@@ -83,6 +83,14 @@ const Duration attenteMinimaleNouvelEssai = Duration(seconds: 5);
 /// qui met plusieurs secondes à répondre.
 const Duration attenteNouvelEssaiDossierInaccessible = Duration(minutes: 2);
 
+/// Contrôle des archives manquantes sur un dossier choisi par le client
+/// (lecteur réseau, NAS) : au-delà de ce nombre d'archives manquantes
+/// d'affilée, le contrôle s'arrête sans rien remettre à « non téléchargé ».
+/// Un partage instable (qui répond « fichier absent » par moments) ferait
+/// sinon retélécharger toute la bibliothèque ; une vraie suppression de plus
+/// de 20 chapitres de suite est rare et reste visible (lecture impossible).
+const int nombreMaximalArchivesManquantesDAffilee = 20;
+
 /// Titres « En attente » : vérifiés toutes les N heures pleines, par défaut
 /// à chaque heure (décision de l'étape 6 : surveillance accrue des titres
 /// qui n'ont encore aucun chapitre dans les langues du client).

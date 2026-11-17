@@ -122,9 +122,20 @@ class ServiceDossierChapitres {
 
   /// Oublie un déplacement inachevé : le contrôle des archives manquantes
   /// reprend au prochain démarrage, et les chapitres dont l'archive est
-  /// restée dans l'autre dossier seront retéléchargés selon les règles.
-  Future<void> abandonnerDeplacementInacheve() =>
-      _depot.supprimer(ServiceParametres.cleDeplacementDossierEnCours);
+  /// restée dans l'autre dossier seront retéléchargés selon les règles. La
+  /// file, arrêtée pendant le déplacement inachevé, est relancée.
+  Future<void> abandonnerDeplacementInacheve() async {
+    await _depot.supprimer(ServiceParametres.cleDeplacementDossierEnCours);
+    _service._signaler();
+    unawaited(_service.lancerTraitement());
+  }
+
+  /// Texte de `avertissementAvantChangement` pour le dossier [inacheve].
+  static String _avertissementAbandon(String inacheve) =>
+      'Un déplacement des chapitres vers « $inacheve » est resté inachevé : '
+      'les chapitres déjà copiés dans ce dossier ne seront pas utilisés '
+      '(vous pourrez les y effacer) et seront retéléchargés dans le nouveau '
+      'dossier selon vos règles.';
 
   /// Lève la pause posée par un changement de dossier refusé (chapitre en
   /// cours de téléchargement) quand le client y renonce, et relance la
@@ -187,10 +198,15 @@ class ServiceDossierChapitres {
       surProgression: surProgression,
     );
     _changement = changement;
+    // Aucune suppression d'archive pendant le changement (règles échues,
+    // bouton « Supprimer ») : un fichier en cours de copie serait effacé de
+    // l'ancien dossier en laissant sa copie dans le nouveau.
+    _service._changementDossierEnCours = true;
     try {
       return await changement;
     } finally {
       _changement = null;
+      _service._changementDossierEnCours = false;
     }
   }
 
@@ -216,15 +232,20 @@ class ServiceDossierChapitres {
     if (_memeChemin(cible, service._stockage.dossierRacine)) {
       throw const ErreurService("C'est déjà le dossier des chapitres.");
     }
-    if (deplacerArchives) {
-      final inacheve = await chargerDeplacementInacheve();
-      if (inacheve != null && !_memeChemin(inacheve, cible)) {
+    final inacheve = await chargerDeplacementInacheve();
+    String? avertissement;
+    if (inacheve != null && !_memeChemin(inacheve, cible)) {
+      if (deplacerArchives) {
         throw ErreurService(
           'Un déplacement des chapitres vers « $inacheve » est resté '
           'inachevé : reprenez-le (même dossier) ou abandonnez-le avant '
           "d'en choisir un autre.",
         );
       }
+      // Sans déplacement, le déplacement inachevé est abandonné : le client
+      // l'a lu avant de confirmer ([avertissementAvantChangement]), le
+      // résultat le redit.
+      avertissement = _avertissementAbandon(inacheve);
     }
 
     // Validation avant toute autre action : un dossier refusé ne met même
@@ -277,6 +298,7 @@ class ServiceDossierChapitres {
         dossierChoisi: versDefaut ? null : valide,
         cheminDossier: valide,
         bilan: bilan,
+        avertissement: avertissement,
       );
     } finally {
       if (!reussi && !garderPause) {
@@ -364,4 +386,40 @@ class ServiceDossierChapitres {
   /// normalisée ; sous Windows, sans tenir compte de la casse).
   static bool _memeChemin(String a, String b) =>
       chemins.equals(chemins.normalize(a.trim()), chemins.normalize(b.trim()));
+}
+
+/// Avertissement avant un changement du dossier des chapitres.
+///
+/// Extension plutôt que méthode de [ServiceDossierChapitres] : elle n'utilise
+/// que des méthodes publiques, et les faux services des tests de
+/// l'interface (`implements ServiceDossierChapitres`) restent valables sans
+/// changement.
+extension AvertissementDossierChapitres on ServiceDossierChapitres {
+  /// Avertissement à montrer au client **avant** de confirmer un changement
+  /// de dossier, ou `null` s'il n'y a rien de particulier à signaler.
+  ///
+  /// Cas prévu : un déplacement est resté inachevé
+  /// ([ServiceDossierChapitres.chargerDeplacementInacheve]) et le client
+  /// choisit un autre dossier sans déplacer les archives ([deplacerArchives]
+  /// à `false`). Les archives déjà copiées dans le dossier du déplacement
+  /// inachevé ne seront alors plus utilisées, et ces chapitres seront
+  /// retéléchargés. Le même texte est repris dans
+  /// [ResultatChangementDossier.avertissement]. Ne modifie rien ; peut lever
+  /// l'erreur de lecture de la base.
+  Future<String?> avertissementAvantChangement(
+    String? nouveauDossier, {
+    required bool deplacerArchives,
+  }) async {
+    if (deplacerArchives) return null;
+    final inacheve = await chargerDeplacementInacheve();
+    if (inacheve == null) return null;
+    final demande = nouveauDossier?.trim() ?? '';
+    final cible = demande.isEmpty
+        ? await chargerCheminDossierParDefaut()
+        : demande;
+    // Vers le dossier du déplacement inachevé lui-même : les archives déjà
+    // copiées y sont, elles serviront au prochain démarrage.
+    if (ServiceDossierChapitres._memeChemin(inacheve, cible)) return null;
+    return ServiceDossierChapitres._avertissementAbandon(inacheve);
+  }
 }

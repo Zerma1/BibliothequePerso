@@ -164,6 +164,7 @@ void main() {
   ServiceTelechargement creerService(
     StockageTelechargements stockage, {
     String identifiant = 'application',
+    bool avecParametres = true,
   }) {
     final service = ServiceTelechargement(
       depotTelechargements: depotTelechargements,
@@ -176,7 +177,7 @@ void main() {
       client: client,
       serviceParametres: parametres,
       identifiantVerrou: identifiant,
-      depotParametres: depotParametres,
+      depotParametres: avecParametres ? depotParametres : null,
     );
     addTearDown(service.fermer);
     return service;
@@ -192,6 +193,31 @@ void main() {
   /// Dossier « NAS » accepté par la validation (fichier repère écrit).
   Future<String> preparerNas([String nom = 'nas']) =>
       StockageTelechargements.validerDossier(p.join(temporaire.path, nom));
+
+  /// Stockage sur le NAS, comme au démarrage : le réglage pointe dessus.
+  Future<StockageTelechargements> stockageNas(String nas) async {
+    await depotParametres.enregistrerTexte(
+      ServiceParametres.cleDossierChapitres,
+      nas,
+    );
+    return StockageTelechargements.personnalise(nas);
+  }
+
+  /// Ajoute [nombre] chapitres au titre (numéros 101, 102…) et renvoie-les.
+  Future<List<Chapitre>> ajouterChapitres(int nombre) async {
+    await depotChapitres.enregistrerChapitres(<Chapitre>[
+      for (var n = 1; n <= nombre; n++)
+        Chapitre(
+          idTitre: titre.id,
+          urlChapitre: 'https://mangadex.org/chapter/supplement-$n',
+          nom: 'Chapitre ${100 + n}',
+          numero: (100 + n).toDouble(),
+          langue: 'fr',
+        ),
+    ]);
+    final tous = await depotChapitres.chargerChapitres(titre.id!);
+    return tous.where((c) => c.numero > 100).toList();
+  }
 
   /// NAS éteint : le dossier disparaît (renommé).
   Future<void> eteindre(String nas) => Directory(nas).rename('$nas.eteint');
@@ -315,7 +341,7 @@ void main() {
     test('NAS éteint : la file attend sans requête ni échec, puis reprend '
         'dès son retour', () async {
       final nas = await preparerNas();
-      final service = creerService(StockageTelechargements.personnalise(nas));
+      final service = creerService(await stockageNas(nas));
       final dossiers = creerDossiers(service);
       await eteindre(nas);
       final premier = await chapitre(1);
@@ -343,7 +369,7 @@ void main() {
     test("NAS perdu au début d'un chapitre : le chapitre retourne en attente "
         "sans compter d'échec, puis se télécharge au retour du NAS", () async {
       final nas = await preparerNas();
-      final service = creerService(StockageTelechargements.personnalise(nas));
+      final service = creerService(await stockageNas(nas));
       final dossiers = creerDossiers(service);
       final premier = await chapitre(1);
       // Le NAS s'éteint juste après le contrôle d'avant chapitre, pendant
@@ -688,6 +714,334 @@ void main() {
     });
   });
 
+  group('aucune suppression pendant un déplacement', () {
+    test('les suppressions échues attendent tant qu\'un déplacement est '
+        'inachevé', () async {
+      final ancien = p.join(temporaire.path, 'ancien');
+      final stockage = StockageTelechargements(ancien);
+      final premier = await chapitre(1);
+      final nomArchive = await ecrireArchive(stockage, premier);
+      await depotChapitres.planifierSuppression(
+        premier.id!,
+        DateTime.now().toUtc().subtract(const Duration(hours: 1)),
+      );
+      await depotParametres.enregistrerTexte(
+        ServiceParametres.cleDeplacementDossierEnCours,
+        p.join(temporaire.path, 'nas'),
+      );
+      final service = creerService(stockage);
+
+      expect(await service.supprimerArchivesEchues(), 0);
+      final relu = await chapitre(1);
+      expect(relu.estTelecharge, isTrue);
+      expect(relu.dateSuppressionPrevue, isNotNull);
+      expect(await File(cheminArchive(ancien, nomArchive)).exists(), isTrue);
+    });
+
+    test('une suppression manuelle est refusée avec un message clair '
+        'pendant un déplacement inachevé ; retirer de la file un chapitre '
+        'sans archive reste possible', () async {
+      final ancien = p.join(temporaire.path, 'ancien');
+      final stockage = StockageTelechargements(ancien);
+      final premier = await chapitre(1);
+      final nomArchive = await ecrireArchive(stockage, premier);
+      final deuxieme = await chapitre(2);
+      await depotTelechargements.ajouterEnFile(deuxieme.id!);
+      await depotParametres.enregistrerTexte(
+        ServiceParametres.cleDeplacementDossierEnCours,
+        p.join(temporaire.path, 'nas'),
+      );
+      final service = creerService(stockage);
+
+      await expectLater(
+        service.supprimerTelechargement(premier.id!),
+        throwsA(
+          isA<ErreurService>().having(
+            (e) => e.message,
+            'message',
+            contains('en cours de déplacement'),
+          ),
+        ),
+      );
+      await expectLater(
+        service.supprimerTitre(titre.id!),
+        throwsA(isA<ErreurService>()),
+      );
+      expect((await chapitre(1)).estTelecharge, isTrue);
+      expect(await File(cheminArchive(ancien, nomArchive)).exists(), isTrue);
+
+      await service.supprimerTelechargement(deuxieme.id!);
+      expect(
+        await depotTelechargements.chargerParChapitre(deuxieme.id!),
+        isNull,
+      );
+    });
+
+    test('pendant le changement de dossier lui-même, aucune archive n\'est '
+        'supprimée (même sans repère lisible par ce service)', () async {
+      final ancien = p.join(temporaire.path, 'ancien');
+      final stockage = StockageTelechargements(ancien);
+      final premier = await chapitre(1);
+      final nomArchive = await ecrireArchive(stockage, premier);
+      await depotChapitres.planifierSuppression(
+        premier.id!,
+        DateTime.now().toUtc().subtract(const Duration(hours: 1)),
+      );
+      // Sans dépôt des paramètres : seul le changement en cours (en
+      // mémoire) peut protéger l'archive.
+      final service = creerService(stockage, avecParametres: false);
+      final dossiers = creerDossiers(service);
+      final nouveau = p.join(temporaire.path, 'nas');
+      final pendant = <Future<Object?>>[];
+
+      await dossiers.changerDossierChapitres(
+        nouveau,
+        surProgression: (faits, total) {
+          if (faits != 0) return;
+          pendant
+            ..add(
+              service
+                  .supprimerTelechargement(premier.id!)
+                  .then<Object?>((_) => null, onError: (Object e) => e),
+            )
+            ..add(service.supprimerArchivesEchues());
+        },
+      );
+      final issues = await Future.wait(pendant);
+
+      expect(issues[0], isA<ErreurService>());
+      expect(issues[1], 0);
+      expect((await chapitre(1)).estTelecharge, isTrue);
+      expect(await File(cheminArchive(nouveau, nomArchive)).exists(), isTrue);
+    });
+  });
+
+  group('file de téléchargement et changement de dossier', () {
+    test('une file lancée avant un changement de dossier (tâche de fond) '
+        's\'arrête sans échec dès que le réglage ne correspond plus', () async {
+      final ancien = p.join(temporaire.path, 'ancien');
+      final service = creerService(StockageTelechargements(ancien));
+      final premier = await chapitre(1);
+      await depotTelechargements.ajouterEnFile(premier.id!);
+      // L'application a changé le dossier depuis la création de ce service.
+      await depotParametres.enregistrerTexte(
+        ServiceParametres.cleDossierChapitres,
+        await preparerNas(),
+      );
+
+      await service.lancerTraitement();
+
+      expect(requetes, isEmpty);
+      final ligne = await depotTelechargements.chargerParChapitre(premier.id!);
+      expect(ligne!.statut, StatutTelechargement.enAttente);
+      expect(ligne.messageErreur, isNull);
+      expect((await chapitre(1)).estTelecharge, isFalse);
+    });
+
+    test('retour au dossier par défaut : une file sur le NAS s\'arrête sans '
+        'échec', () async {
+      final nas = await preparerNas();
+      final service = creerService(StockageTelechargements.personnalise(nas));
+      final premier = await chapitre(1);
+      await depotTelechargements.ajouterEnFile(premier.id!);
+
+      await service.lancerTraitement();
+
+      expect(requetes, isEmpty);
+      expect(
+        (await depotTelechargements.chargerParChapitre(premier.id!))!.statut,
+        StatutTelechargement.enAttente,
+      );
+    });
+
+    test('un déplacement inachevé arrête la file ; l\'abandonner la '
+        'relance', () async {
+      final ancien = p.join(temporaire.path, 'ancien');
+      final service = creerService(StockageTelechargements(ancien));
+      final dossiers = creerDossiers(service);
+      final premier = await chapitre(1);
+      await depotParametres.enregistrerTexte(
+        ServiceParametres.cleDeplacementDossierEnCours,
+        p.join(temporaire.path, 'nas'),
+      );
+
+      await service.telechargerChapitre(premier.id!);
+      await service.lancerTraitement();
+      expect(requetes, isEmpty);
+      final ligne = await depotTelechargements.chargerParChapitre(premier.id!);
+      expect(ligne!.statut, StatutTelechargement.enAttente);
+      expect(ligne.messageErreur, isNull);
+
+      await dossiers.abandonnerDeplacementInacheve();
+      await service.lancerTraitement();
+      expect((await chapitre(1)).estTelecharge, isTrue);
+    });
+  });
+
+  group('contrôle des archives sur un partage réseau', () {
+    test('une archive vue absente une seule fois (partage instable) n\'est '
+        'pas remise à « non téléchargé »', () async {
+      final nas = await preparerNas();
+      final stockage = _StockageInstable(nas);
+      final nomArchive = await ecrireArchive(stockage, await chapitre(1));
+      final service = creerService(stockage);
+
+      expect(await service.reparerArchivesManquantes(), 0);
+      final relu = await chapitre(1);
+      expect(relu.estTelecharge, isTrue);
+      expect(relu.nomArchive, nomArchive);
+      expect(stockage.appels, 2);
+    });
+
+    test('plus de 20 archives manquantes d\'affilée sur le NAS arrêtent le '
+        'contrôle sans rien remettre à zéro', () async {
+      final nas = await preparerNas();
+      final stockage = StockageTelechargements.personnalise(nas);
+      final supplements = await ajouterChapitres(21);
+      for (final supplement in supplements) {
+        final nom = await ecrireArchive(stockage, supplement);
+        await File(cheminArchive(nas, nom)).delete();
+      }
+      final service = creerService(stockage);
+
+      expect(await service.reparerArchivesManquantes(), 0);
+      for (final supplement in supplements) {
+        final relu = await depotChapitres.chargerChapitre(supplement.id!);
+        expect(relu!.estTelecharge, isTrue);
+      }
+    });
+
+    test('des archives manquantes suivies d\'une archive présente sont '
+        'bien réparées sur le NAS', () async {
+      final nas = await preparerNas();
+      final stockage = StockageTelechargements.personnalise(nas);
+      final premier = await chapitre(1);
+      final deuxieme = await chapitre(2);
+      final troisieme = await chapitre(3);
+      for (final perdu in <Chapitre>[premier, deuxieme]) {
+        final nom = await ecrireArchive(stockage, perdu);
+        await File(cheminArchive(nas, nom)).delete();
+      }
+      await ecrireArchive(stockage, troisieme);
+      final service = creerService(stockage);
+
+      expect(await service.reparerArchivesManquantes(), 2);
+      expect((await chapitre(1)).estTelecharge, isFalse);
+      expect((await chapitre(2)).estTelecharge, isFalse);
+      expect((await chapitre(3)).estTelecharge, isTrue);
+    });
+
+    test('dans le dossier par défaut, la limite d\'affilée ne s\'applique '
+        'pas', () async {
+      final ancien = p.join(temporaire.path, 'ancien');
+      final stockage = StockageTelechargements(ancien);
+      final supplements = await ajouterChapitres(21);
+      for (final supplement in supplements) {
+        final nom = await ecrireArchive(stockage, supplement);
+        await File(cheminArchive(ancien, nom)).delete();
+      }
+      final service = creerService(stockage);
+
+      expect(await service.reparerArchivesManquantes(), 21);
+    });
+  });
+
+  group('changement sans déplacement après un déplacement inachevé', () {
+    test('l\'avertissement prévient que les chapitres déjà copiés seront '
+        'retéléchargés, seulement quand c\'est le cas', () async {
+      final service = creerService(
+        StockageTelechargements(p.join(temporaire.path, 'ancien')),
+      );
+      final dossiers = creerDossiers(service);
+      final inacheve = p.join(temporaire.path, 'nas');
+      final autre = p.join(temporaire.path, 'autre');
+
+      expect(
+        await dossiers.avertissementAvantChangement(
+          autre,
+          deplacerArchives: false,
+        ),
+        isNull,
+      );
+      await depotParametres.enregistrerTexte(
+        ServiceParametres.cleDeplacementDossierEnCours,
+        inacheve,
+      );
+      final texte = await dossiers.avertissementAvantChangement(
+        autre,
+        deplacerArchives: false,
+      );
+      expect(texte, contains(inacheve));
+      expect(texte, contains('ne seront pas utilisés'));
+      expect(texte, contains('retéléchargés'));
+      expect(
+        await dossiers.avertissementAvantChangement(
+          autre,
+          deplacerArchives: true,
+        ),
+        isNull,
+      );
+      expect(
+        await dossiers.avertissementAvantChangement(
+          inacheve,
+          deplacerArchives: false,
+        ),
+        isNull,
+      );
+
+      final resultat = await dossiers.changerDossierChapitres(
+        autre,
+        deplacerArchives: false,
+      );
+      expect(resultat.avertissement, texte);
+      expect(resultat.message, contains('ne seront pas utilisés'));
+      expect(await dossiers.chargerDeplacementInacheve(), isNull);
+    });
+  });
+
+  group('conflits au déplacement', () {
+    test('un fichier différent déjà présent dans le nouveau dossier est '
+        'laissé dans l\'ancien et signalé dans le message', () async {
+      final ancien = p.join(temporaire.path, 'ancien');
+      final stockage = StockageTelechargements(ancien);
+      final nomArchive = await ecrireArchive(stockage, await chapitre(1));
+      final nouveau = await preparerNas();
+      final occupe = File(cheminArchive(nouveau, nomArchive));
+      await occupe.parent.create(recursive: true);
+      await occupe.writeAsString('autre bibliothèque');
+      final dossiers = creerDossiers(creerService(stockage));
+
+      final resultat = await dossiers.changerDossierChapitres(nouveau);
+
+      expect(resultat.cheminsEnConflit, <String>[nomArchive]);
+      expect(resultat.message, contains("restés dans l'ancien dossier"));
+      expect(resultat.message, contains(nomArchive));
+      expect(await File(cheminArchive(ancien, nomArchive)).exists(), isTrue);
+      expect(await occupe.readAsString(), 'autre bibliothèque');
+    });
+
+    test('au-delà de 5 conflits, le message n\'en cite que 5', () {
+      final conflits = <String>[
+        for (var n = 1; n <= 7; n++) 'manga/Titre/ch$n.fr.zip',
+      ];
+      final resultat = ResultatChangementDossier(
+        dossierChoisi: '/mnt/nas',
+        cheminDossier: '/mnt/nas',
+        bilan: BilanDeplacement(
+          nombreFichiers: 7,
+          nombreCopies: 0,
+          nombreDejaPresents: 0,
+          octetsCopies: 0,
+          cheminsEnConflit: conflits,
+        ),
+      );
+      expect(resultat.message, contains('7 fichier(s) ne sont pas déplacés'));
+      expect(resultat.message, contains('ch5.fr.zip'));
+      expect(resultat.message, isNot(contains('ch6.fr.zip')));
+      expect(resultat.message, contains('et 2 autre(s)'));
+    });
+  });
+
   group('messages pour l\'interface', () {
     test('un dossier accessible n\'affiche aucun bandeau', () {
       const acces = AccesDossierChapitres.accessible(
@@ -734,4 +1088,24 @@ void main() {
       expect(avec.message, contains('3 fichier(s)'));
     });
   });
+}
+
+/// Partage réseau instable : chaque archive est vue absente au premier
+/// contrôle, puis présente au second.
+class _StockageInstable extends StockageTelechargements {
+  _StockageInstable(super.dossierRacine) : super.personnalise();
+
+  /// Nombre d'appels à [estTelecharge].
+  int appels = 0;
+
+  @override
+  Future<bool> estTelecharge(
+    Titre titre,
+    Chapitre chapitre, {
+    String? nomSource,
+  }) async {
+    appels++;
+    if (appels.isOdd) return false;
+    return super.estTelecharge(titre, chapitre, nomSource: nomSource);
+  }
 }
