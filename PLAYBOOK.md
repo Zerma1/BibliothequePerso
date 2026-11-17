@@ -259,9 +259,10 @@ gérer un cas particulier.**
 ### Règles réseau (obligatoires)
 - Toutes les requêtes passent par **`ClientHttpPoli`**, la seule classe autorisée à appeler
   `package:http`. Elle s'occupe de :
-  - l'en-tête `User-Agent` d'un navigateur courant par défaut ; **sauf si le site exige un
-    User-Agent honnête** (cas de l'API MangaDex, qui interdit d'usurper un navigateur) : on
-    envoie alors `BibliothequePerso/<version> (usage personnel)` ;
+  - l'en-tête `User-Agent` **honnête** de l'application pour tous les sites :
+    `BibliothequePerso/<version> (usage personnel)` (exigé par MangaDex ; se faire passer
+    pour un navigateur sans en être un déclenche les protections anti-robot, cf. retours du
+    client sur la 0.1.0-test.4) ;
   - l'en-tête `Referer` pour les images, que beaucoup de sites exigent ;
   - un délai minimal de **1 seconde entre deux requêtes vers un même domaine** ;
   - un délai d'expiration de 20 secondes et 2 nouvelles tentatives au maximum.
