@@ -68,10 +68,13 @@ limité à son scope :
 - Commandes : `flutter pub get`, `flutter analyze`, `flutter test`, `flutter run -d windows`,
   `flutter build windows`, `flutter build apk --release`.
 
-## État actuel (2026-11-16)
+## État actuel (2026-11-17)
 
-Étapes 0 à 5 faites : version de test `0.1.0-test.1` sur la branche `test`, en attente de
-l'essai et de l'accord du client. Étape 6 en cours (suivi dans `docs/TACHES_EN_COURS.md`).
+- `main` : version **0.1.0** (validée par le client).
+- `test` : **0.1.0-test.3** (étapes 6 et 8, Scan-Manga, sources par défaut), en attente de
+  l'essai du client.
+- Reste : étape 7 (Madara, MangaThemesia, générique CSS, webtoons.com), étape 9 (intégration
+  continue Android / Windows / Linux) ; suivi dans `docs/TACHES_EN_COURS.md`.
 
 ## Pièges connus
 

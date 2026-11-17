@@ -42,14 +42,18 @@ Ensuite :
 
 ```powershell
 git switch test
-git merge --ff-only dev      # « avance rapide » : test reprend exactement dev
-git tag -a v0.1.0-test.1 -m "Version de test 0.1.0-test.1"
+git merge --no-ff -X theirs dev -m "Version de test 0.1.0-test.N"
+git diff --quiet dev -- lib test pubspec.yaml docs   # doit être vrai : code identique à dev
+git tag -a v0.1.0-test.N -m "Version de test 0.1.0-test.N"
 git push origin test --follow-tags
 git switch dev
 ```
 
-Si l'avance rapide est refusée, c'est que quelqu'un a écrit sur `test` : ne pas forcer,
-chercher pourquoi.
+`test` contient des commits propres (les fichiers de `livraisons/`) que `dev` n'a pas : une
+avance rapide est donc impossible, on **fusionne** en donnant la priorité à `dev`
+(`-X theirs`), puis on vérifie que le code est identique à celui de `dev`. Sans pouvoir
+changer de branche dans le dossier de travail (agents en cours), on fait la même chose dans un
+dossier séparé : `git worktree add <dossier> test`.
 
 ## 3. Construire les fichiers à installer
 
