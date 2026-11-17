@@ -885,16 +885,37 @@ abstract final class Textes {
   // ------------------------------------------------------------- Paramètres
 
   /// Section des réglages de téléchargement.
-  static const String sectionTelechargements = 'Téléchargements';
+  static const String sectionTelechargements =
+      'Téléchargements et conservation';
+
+  /// Résumé de la section des téléchargements quand des valeurs ont été
+  /// changées sans être enregistrées.
+  static const String modificationsNonEnregistrees =
+      'Modifications non enregistrées';
+
+  /// Résumé de la section des téléchargements, visible section repliée.
+  static const String resumeTelechargements =
+      "Chapitres téléchargés d'avance et chapitres gardés après lecture";
 
   /// Section des sites.
   static const String sectionSites = 'Sites';
+
+  /// Nombre de sites configurés (résumé de la section Sites).
+  static String nombreSites(int nombre) => switch (nombre) {
+    0 => 'Aucun site configuré',
+    1 => '1 site configuré',
+    _ => '$nombre sites configurés',
+  };
 
   /// Section « À propos ».
   static const String sectionAPropos = 'À propos';
 
   /// Section « Sauvegarde et export ».
   static const String sectionSauvegardeExport = 'Sauvegarde et export';
+
+  /// Résumé de la section « Sauvegarde et export ».
+  static const String resumeSauvegardeExport =
+      'Exporter vos titres et vos sites dans des fichiers';
 
   /// Explication de l'export.
   static const String explicationExport =
@@ -981,8 +1002,13 @@ abstract final class Textes {
   static const String reglagesEnregistres =
       'Réglages enregistrés : les téléchargements sont mis à jour.';
 
-  /// Section des recherches de mises à jour.
-  static const String sectionMisesAJour = 'Mises à jour';
+  /// Section des recherches de mises à jour (Paramètres).
+  static const String sectionMisesAJour = 'Recherche des nouveaux chapitres';
+
+  /// Résumé de la section des recherches, visible section repliée.
+  static String resumeRecherches(int nombre) => nombre <= 1
+      ? '$nombre recherche par jour'
+      : '$nombre recherches par jour';
 
   /// Libellé du nombre de recherches par jour.
   static const String verificationsParJour =
@@ -1118,7 +1144,8 @@ abstract final class Textes {
   /// Explication en haut de l'onglet Mises à jour.
   static const String explicationMisesAJour =
       'Titres favoris, suivis et en attente, du plus récemment paru au plus '
-      'ancien, dans les langues de chaque titre.';
+      'ancien, dans les langues de chaque titre. « Nouveau » : dernier '
+      "chapitre non lu, paru depuis moins d'une semaine.";
 
   /// Onglet Mises à jour vide.
   static const String misesAJourVide =
@@ -1409,6 +1436,13 @@ abstract final class Textes {
 
   /// Intertitre de la section « Sites » de la fiche.
   static const String sitesDuTitre = 'Sites';
+
+  /// En-tête de la section « Sites » repliable, avec le nombre de sites.
+  static String sitesDuTitreAvecNombre(int nombre) => '$sitesDuTitre ($nombre)';
+
+  /// Résumé de la section « Sites » : le site principal.
+  static String resumeSitesDuTitre(String sitePrincipal) =>
+      'Site principal : $sitePrincipal';
 
   /// Explication de la section « Sites ».
   static const String explicationSitesDuTitre =

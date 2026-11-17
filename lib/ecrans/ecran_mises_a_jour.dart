@@ -15,7 +15,8 @@ import '../widgets/vues_etat.dart';
 import 'ecran_titre.dart';
 
 /// Liste des dernières parutions dans les langues de chaque titre, avec un
-/// badge « Nouveau » quand le dernier chapitre paru n'est pas lu.
+/// badge « Nouveau » quand le dernier chapitre paru n'est pas lu et date de
+/// moins d'une semaine (`EtatParutions.estNouveaute`).
 ///
 /// Les titres sans aucun chapitre dans leurs langues (liste « En attente »)
 /// sont regroupés à la fin sous un intertitre.
@@ -120,6 +121,7 @@ class _EtatEcranMisesAJour extends State<EcranMisesAJour> {
           key: ValueKey<int?>(ligne.titre.id),
           ligne: ligne,
           maintenant: etat.maintenant,
+          estNouveau: etat.estNouveau(ligne),
           surAppui: () => _ouvrir(ligne),
         ),
       if (sans.isNotEmpty)
@@ -142,6 +144,7 @@ class _EtatEcranMisesAJour extends State<EcranMisesAJour> {
           key: ValueKey<int?>(ligne.titre.id),
           ligne: ligne,
           maintenant: etat.maintenant,
+          estNouveau: etat.estNouveau(ligne),
           surAppui: () => _ouvrir(ligne),
         ),
     ];
@@ -163,11 +166,15 @@ class _LigneParution extends StatelessWidget {
     super.key,
     required this.ligne,
     required this.maintenant,
+    required this.estNouveau,
     required this.surAppui,
   });
 
   final ParutionTitre ligne;
   final DateTime maintenant;
+
+  /// Badge « Nouveau » (critère de `EtatParutions.estNouveaute`).
+  final bool estNouveau;
   final VoidCallback surAppui;
 
   @override
@@ -201,9 +208,7 @@ class _LigneParution extends StatelessWidget {
         ligne.titre.nom,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: ligne.aNouveaute
-            ? const TextStyle(fontWeight: FontWeight.w600)
-            : null,
+        style: estNouveau ? const TextStyle(fontWeight: FontWeight.w600) : null,
       ),
       subtitle: Text(
         ligne.estEnAttente ? '$detail\n${Textes.enAttente}' : detail,
@@ -211,7 +216,7 @@ class _LigneParution extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
       ),
       isThreeLine: ligne.estEnAttente,
-      trailing: ligne.aNouveaute
+      trailing: estNouveau
           ? Badge(
               label: const Text(Textes.nouveau),
               backgroundColor: couleurs.primary,

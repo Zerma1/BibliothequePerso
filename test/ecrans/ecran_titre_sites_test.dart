@@ -16,6 +16,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../etat/outils_tests_etat.dart';
+import '../widgets/outils_sections_pliables.dart';
 
 void main() {
   late FauxServiceBibliotheque service;
@@ -311,7 +312,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text(Textes.titreDejaPresent), findsOneWidget);
     expect(find.byType(EcranTitre), findsOneWidget);
-    expect(find.text(Textes.sitesDuTitre), findsOneWidget);
+    expect(find.text(Textes.sitesDuTitreAvecNombre(2)), findsOneWidget);
     // Aucun titre créé en double.
     expect(service.titres, hasLength(1));
   });
@@ -334,6 +335,8 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      // Section « Sites » repliée au départ (retour 0.2.0-test).
+      await basculerSitesDuTitre(tester);
     }
 
     testWidgets('section Sites, filtre et nom du site des chapitres', (
@@ -341,7 +344,9 @@ void main() {
     ) async {
       preparer();
       await afficher(tester);
-      expect(find.text(Textes.sitesDuTitre), findsOneWidget);
+      // En-tête : nombre de sites et site principal.
+      expect(find.text(Textes.sitesDuTitreAvecNombre(2)), findsOneWidget);
+      expect(find.text(Textes.resumeSitesDuTitre('MangaDex')), findsOneWidget);
       expect(
         find.text('${Textes.sitePrincipal} · ${Textes.chapitresDuSite(1)}'),
         findsOneWidget,
@@ -368,12 +373,25 @@ void main() {
     testWidgets('un seul site : ni filtre ni nom de site', (tester) async {
       preparer(avecSecondaire: false);
       await afficher(tester, largeur: 400);
-      expect(find.text(Textes.sitesDuTitre), findsOneWidget);
+      expect(find.text(Textes.sitesDuTitreAvecNombre(1)), findsOneWidget);
       expect(find.byType(ChoiceChip), findsNothing);
       // Seule la ligne « Site » des informations nomme le site.
       expect(find.text(Textes.chapitreDuSite('MangaDex')), findsOneWidget);
       expect(find.text(Textes.legendeSiteChapitre), findsNothing);
       expect(find.text(Textes.ajouterAutreSite), findsOneWidget);
+    });
+
+    testWidgets('section Sites repliable : l\'en-tête reste, le contenu se '
+        'cache', (tester) async {
+      preparer();
+      // `afficher` a déplié la section, repliée au départ.
+      await afficher(tester);
+      expect(find.text(Textes.ajouterAutreSite), findsOneWidget);
+
+      await basculerSitesDuTitre(tester);
+      expect(find.text(Textes.ajouterAutreSite), findsNothing);
+      expect(find.text(Textes.ouvrirCeSite), findsNothing);
+      expect(find.text(Textes.sitesDuTitreAvecNombre(2)), findsOneWidget);
     });
 
     testWidgets('retirer : confirmation avec chapitres et archives', (

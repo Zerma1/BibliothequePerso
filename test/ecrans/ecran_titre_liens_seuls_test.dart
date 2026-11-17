@@ -15,6 +15,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../etat/outils_tests_etat.dart';
+import '../widgets/outils_sections_pliables.dart';
 
 const String _urlRuri = 'https://ruri-dragon.online/';
 
@@ -212,6 +213,8 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      // Section « Sites » repliée au départ (retour 0.2.0-test).
+      await basculerSitesDuTitre(tester);
     }
 
     Future<void> ajouterRefuse(WidgetTester tester) async {

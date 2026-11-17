@@ -21,6 +21,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../etat/outils_tests_etat.dart';
+import '../widgets/outils_sections_pliables.dart';
 
 void main() {
   late FauxServiceBibliotheque bibliotheque;
@@ -379,6 +380,8 @@ void main() {
       );
       await tester.pump();
       await tester.pump();
+      // Section Sites repliée au départ.
+      await basculerSection(tester, Textes.sectionSites);
       // La section Sites est bas dans la liste (construite à la demande).
       await tester.scrollUntilVisible(
         find.byTooltip(Textes.modifierSite),
@@ -421,6 +424,8 @@ void main() {
       );
       await tester.pump();
       await tester.pump();
+      // Section des recherches repliée au départ.
+      await basculerSection(tester, Textes.sectionMisesAJour);
 
       expect(find.text(Textes.valeurHeures(1)), findsOneWidget);
       // Deuxième « + » : celui de la surveillance « En attente ».
