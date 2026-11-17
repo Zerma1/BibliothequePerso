@@ -115,4 +115,5 @@ Décisions de l'orchestrateur :
 ## Étape 7 — autres sites
 
 - [x] W1. **webtoons.com** (signalé par le client : https://www.webtoons.com/fr/romance/the-gangster-daughter-of-the-henchman-dukes-family/list?title_no=11499) : diagnostic (HTML lisible ? pagination de la liste des épisodes ? images protégées ?), puis adaptateur `SourceWebtoons` sur le modèle de Scan-Manga : fiche + tous les épisodes, chaque épisode avec `urlExterne` = sa page (« Lire sur WEBTOON ») tant que la récupération des images n'est pas clairement autorisée sans contournement. Langue d'après l'adresse (/fr/, /en/…).
-- [x] W2. Adaptateurs Madara et MangaThemesia (thèmes WordPress courants), puis générique par sélecteurs CSS.
+- [x] W2. Adaptateurs Madara et MangaThemesia (thèmes WordPress courants).
+- [ ] W3. Adaptateur générique par sélecteurs CSS (formulaire de sélecteurs dans « Ajouter un site »).

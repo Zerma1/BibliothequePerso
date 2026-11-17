@@ -24,7 +24,7 @@ limité à son scope :
 
 | Agent | Scope en écriture |
 |-------|-------------------|
-| `integrateur-plateformes` | `pubspec.yaml`, `analysis_options.yaml`, `lib/main.dart`, `android/`, `windows/`, `linux/`, `assets/` |
+| `integrateur-plateformes` | `pubspec.yaml`, `analysis_options.yaml`, `lib/main.dart`, `android/`, `windows/`, `linux/`, `assets/`, `.github/` (compilation automatique) |
 | `developpeur-donnees` | `lib/modeles/`, `lib/donnees/` (+ tests) |
 | `developpeur-sources` | `lib/sources/` (+ tests, HTML enregistrés) |
 | `developpeur-services` | `lib/services/` (+ tests) |
