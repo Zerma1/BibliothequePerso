@@ -54,7 +54,7 @@ limité à son scope :
 ## Branches et versions (détail : PLAYBOOK.md section 12)
 
 - **On code uniquement sur `dev`**, et on y teste en local. `test` reçoit les versions de
-  test (`X.Y.Z-test.N`) à essayer par le client ; `main` sert seulement à publier les versions
+  test (`X.Y.Z-test`) à essayer par le client ; `main` sert seulement à publier les versions
   validées par le client. Ne jamais commiter sur `test` ni sur `main` : procédure dans
   `docs/DEPLOIEMENT.md`.
 - Versions de test : **`X.Y.Z-test`** sur `test` (Z+1 à chaque itération de corrections),
