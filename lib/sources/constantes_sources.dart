@@ -173,6 +173,26 @@ const int nombreMaxCandidatsPageListe = 3;
 /// le résumé d'un titre par `SourceGenerique`.
 const int longueurMinResumeGenerique = 40;
 
+/// Longueur maximale (en caractères) d'un nom de genre lu par
+/// `SourceGenerique` : un genre est un mot ou deux ; un texte plus long est
+/// un bloc entier (description, menu), pas un tag.
+const int longueurMaxGenreGenerique = 40;
+
+/// Longueur maximale (en caractères) de la valeur d'une ligne
+/// « Libellé : valeur » lue par `SourceGenerique` (auteur, statut, type) :
+/// au-delà, le texte capturé est un paragraphe entier, pas une valeur.
+const int longueurMaxValeurLibelleGenerique = 200;
+
+/// Longueur maximale (en caractères) du texte visible d'une page pour que
+/// `verifierLisibilite` la juge construite par des scripts : une page
+/// lisible en contient bien davantage.
+const int longueurMaxTextePageScripts = 200;
+
+/// Nombre de liens (`a[href]`) à partir duquel une page n'est plus jugée
+/// construite par des scripts par `verifierLisibilite` : en dessous,
+/// le HTML reçu n'est qu'une coquille vide remplie ensuite en JavaScript.
+const int nombreMinLiensPageLisible = 3;
+
 /// Texte dont la présence dans l'URL de base désigne un serveur MangaDex
 /// (docs/04-chapter/retrieving-chapter : signaler chaque image chargée
 /// « from a base url that doesn't contain mangadex.org »).

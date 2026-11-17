@@ -8,6 +8,7 @@ library;
 
 import 'package:html/parser.dart' show parse;
 
+import 'constantes_sources.dart';
 import 'erreur_source.dart';
 import 'protection_anti_robot.dart';
 import 'source_generique.dart';
@@ -164,8 +165,8 @@ DiagnosticLisibilite verifierLisibilite(
       raisonImages == null &&
       nombreLiens == 0 &&
       nombreImages == 0 &&
-      texte.trim().length < 200 &&
-      nombreLiensPage < 3 &&
+      texte.trim().length < longueurMaxTextePageScripts &&
+      nombreLiensPage < nombreMinLiensPageLisible &&
       document.querySelectorAll('script').isNotEmpty) {
     raisons.add(
       'La page est construite par des scripts (JavaScript) : son HTML ne '

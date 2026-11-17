@@ -1185,7 +1185,7 @@ class SourceGenerique implements SourceSite {
       final genre = OutilsWordPress.nettoyer(texte);
       // Un genre est court : un texte long est un bloc entier, pas un tag.
       if (genre.isNotEmpty &&
-          genre.length <= 40 &&
+          genre.length <= longueurMaxGenreGenerique &&
           !categories.any((c) => c.toLowerCase() == genre.toLowerCase())) {
         categories.add(genre);
       }
@@ -1258,7 +1258,9 @@ class SourceGenerique implements SourceSite {
           element.nextElementSibling?.text ?? '',
         );
       }
-      if (valeur.isNotEmpty && valeur != '-' && valeur.length <= 200) {
+      if (valeur.isNotEmpty &&
+          valeur != '-' &&
+          valeur.length <= longueurMaxValeurLibelleGenerique) {
         return valeur;
       }
     }
@@ -1367,9 +1369,14 @@ class SourceGenerique implements SourceSite {
       return (url: uri, html: await _recupererPage(uri));
     }
     final maintenant = _maintenant();
+    // Purge des résolutions périmées, comme pour `_pages` : sans elle, le
+    // cache grossirait à chaque adresse de chapitre collée.
+    _resolutions.removeWhere(
+      (_, resolution) =>
+          maintenant.difference(resolution.date) >= dureeCachePageGenerique,
+    );
     final connue = _resolutions[uri.toString()];
-    if (connue != null &&
-        maintenant.difference(connue.date) < dureeCachePageGenerique) {
+    if (connue != null) {
       return (url: connue.url, html: await _recupererPage(connue.url));
     }
 
