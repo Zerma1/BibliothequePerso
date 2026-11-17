@@ -414,6 +414,45 @@ class ServiceTelechargement {
     }
   }
 
+  /// Après un déplacement avec conflits : remet à « non téléchargé » les
+  /// chapitres dont l'archive est restée dans l'ancien dossier parce qu'un
+  /// fichier **différent** occupait déjà son nom dans le nouveau
+  /// ([cheminsEnConflit], chemins relatifs comme `nom_archive`). Sans cela,
+  /// au prochain démarrage, le lecteur ouvrirait ce fichier étranger.
+  /// Renvoie le nombre de chapitres remis à zéro.
+  ///
+  /// Une fois `nom_archive` effacé, le prochain téléchargement choisit un
+  /// nom libre (`ch1.fr.2.zip`…) : le fichier étranger n'est jamais
+  /// remplacé. Les couvertures en conflit ne concernent aucun chapitre.
+  /// Lève l'erreur de la base : l'appelant ne doit pas enregistrer le
+  /// nouveau dossier tant que ces chapitres pointent vers le fichier
+  /// étranger.
+  Future<int> _oublierArchivesEnConflit(List<String> cheminsEnConflit) async {
+    if (cheminsEnConflit.isEmpty) return 0;
+    final conflits = cheminsEnConflit.toSet();
+    var nombre = 0;
+    for (final chapitre
+        in await _depotChapitres.chargerChapitresTelecharges()) {
+      final id = chapitre.id;
+      if (id == null) continue;
+      var nom = chapitre.nomArchive;
+      if (nom == null) {
+        // Chapitre téléchargé avant la migration 4 : nom calculé.
+        final contexte = await _chargerContexte(id);
+        if (contexte == null) continue;
+        nom = StockageTelechargements.nomArchiveDuChapitre(
+          contexte.titre,
+          contexte.chapitre,
+        );
+      }
+      if (!conflits.contains(nom)) continue;
+      await _marquerArchiveManquante(id);
+      nombre++;
+    }
+    if (nombre > 0) _signaler();
+    return nombre;
+  }
+
   /// `true` si un déplacement des archives est en cours (changement de
   /// dossier demandé dans cette session) ou resté inachevé (repère en base,
   /// posé par cet isolat ou par l'autre) : aucune archive ne doit alors être

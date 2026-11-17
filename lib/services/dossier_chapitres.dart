@@ -118,7 +118,8 @@ class ResultatChangementDossier {
   /// Chemins relatifs (`type/titre/fichier`) des fichiers restés dans
   /// l'ancien dossier parce qu'un fichier différent portait déjà ce nom dans
   /// le nouveau : à vérifier par le client. Vide sans déplacement ou sans
-  /// conflit.
+  /// conflit. Les chapitres concernés ont été remis à « non téléchargé » :
+  /// ils seront retéléchargés dans le nouveau dossier sous un nom libre.
   List<String> get cheminsEnConflit =>
       bilan?.cheminsEnConflit ?? const <String>[];
 
@@ -155,7 +156,9 @@ class ResultatChangementDossier {
     final suite = reste > 0 ? ' et $reste autre(s)' : '';
     return '${conflits.length} fichier(s) ne sont pas déplacés, car un '
         'fichier différent du même nom existe déjà dans le nouveau dossier : '
-        "ils sont restés dans l'ancien dossier, à vérifier ($cites$suite).";
+        "ils sont restés dans l'ancien dossier, à vérifier ($cites$suite). "
+        'Les chapitres concernés seront retéléchargés dans le nouveau '
+        'dossier, sans toucher au fichier déjà présent.';
   }
 
   @override

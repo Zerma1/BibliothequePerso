@@ -1020,6 +1020,46 @@ void main() {
       expect(await occupe.readAsString(), 'autre bibliothèque');
     });
 
+    test('les chapitres en conflit sont remis à « non téléchargé » puis '
+        'retéléchargés sous un nom libre, sans toucher au fichier '
+        'étranger', () async {
+      final ancien = p.join(temporaire.path, 'ancien');
+      final stockage = StockageTelechargements(ancien);
+      final premier = await chapitre(1);
+      final nomConflit = await ecrireArchive(stockage, premier);
+      final nomSain = await ecrireArchive(stockage, await chapitre(2));
+      final nouveau = await preparerNas();
+      final occupe = File(cheminArchive(nouveau, nomConflit));
+      await occupe.parent.create(recursive: true);
+      await occupe.writeAsString('autre bibliothèque');
+      final dossiers = creerDossiers(creerService(stockage));
+
+      final resultat = await dossiers.changerDossierChapitres(nouveau);
+
+      expect(resultat.message, contains('seront retéléchargés'));
+      final relu = await chapitre(1);
+      expect(relu.estTelecharge, isFalse);
+      expect(relu.nomArchive, isNull);
+      // Le chapitre sans conflit garde son archive, déplacée.
+      expect((await chapitre(2)).nomArchive, nomSain);
+      expect(await File(cheminArchive(nouveau, nomSain)).exists(), isTrue);
+      // L'original reste dans l'ancien dossier.
+      expect(await File(cheminArchive(ancien, nomConflit)).exists(), isTrue);
+
+      // Prochain démarrage : le retéléchargement choisit un nom libre.
+      final apres = await ServiceDossierChapitres.creerStockage(
+        depotParametres,
+      );
+      final redemarre = creerService(apres, identifiant: 'redemarre');
+      await redemarre.telechargerChapitre(premier.id!);
+      await redemarre.lancerTraitement();
+      final retelecharge = await chapitre(1);
+      expect(retelecharge.estTelecharge, isTrue);
+      expect(retelecharge.nomArchive, isNot(nomConflit));
+      expect(await occupe.readAsString(), 'autre bibliothèque');
+      expect(await redemarre.compterPages(premier.id!), greaterThan(0));
+    });
+
     test('au-delà de 5 conflits, le message n\'en cite que 5', () {
       final conflits = <String>[
         for (var n = 1; n <= 7; n++) 'manga/Titre/ch$n.fr.zip',

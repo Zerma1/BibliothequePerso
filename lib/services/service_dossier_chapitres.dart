@@ -275,6 +275,23 @@ class ServiceDossierChapitres {
           );
         }
         bilan = await _deplacer(valide, surProgression);
+        // Conflits (décision de l'orchestrateur, 2026-11-17) : le lecteur ne
+        // doit jamais ouvrir le fichier différent resté sous ce nom dans le
+        // nouveau dossier. Ces chapitres sont remis à « non téléchargé » et
+        // seront retéléchargés sous un nom libre. Fait **avant** le réglage :
+        // si cette écriture échoue, le dossier ne change pas (l'inverse
+        // laisserait des chapitres pointer vers le fichier étranger).
+        // Le repère de déplacement reste posé en cas d'échec : relancer la
+        // même demande retrouve les mêmes conflits et refait cette étape.
+        try {
+          await service._oublierArchivesEnConflit(bilan.cheminsEnConflit);
+        } catch (erreur) {
+          throw ErreurService(
+            "Les chapitres en conflit n'ont pas pu être notés à retélécharger "
+            ': relancez le changement vers le même dossier pour terminer.',
+            cause: erreur,
+          );
+        }
       }
       // Réglage enregistré seulement maintenant : un déplacement échoué ne
       // laisse jamais un réglage qui pointe vers un dossier incomplet.
