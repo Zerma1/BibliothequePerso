@@ -239,16 +239,34 @@ class EtatTitre extends EtatNotifiant {
     return null;
   }
 
-  /// Nombre de chapitres non lus et non téléchargés du site [idSource] :
-  /// ceux que le retrait de ce site supprime.
+  /// Nombre de chapitres du site [idSource] que le retrait de ce site
+  /// supprime.
+  ///
+  /// Même filtre que `supprimerChapitresNonConservesSource` (couche
+  /// données) : sont épargnés les chapitres lus, téléchargés (marqueur ou
+  /// archive enregistrée), gardés et ceux dont le téléchargement est en
+  /// cours. Le site est lu sur `idSource` seul (pas de repli sur le site
+  /// principal, comme la requête) : l'annonce n'est jamais supérieure à la
+  /// réalité.
   int nombreChapitresRetiresAvecSite(int idSource) => _chapitres
       .where(
         (chapitre) =>
-            idSiteDe(chapitre) == idSource &&
+            chapitre.idSource == idSource &&
             !chapitre.estLu &&
-            !chapitre.estTelecharge,
+            !chapitre.estTelecharge &&
+            chapitre.nomArchive == null &&
+            !chapitre.estGarde &&
+            !_estEnTelechargement(chapitre),
       )
       .length;
+
+  /// `true` si le téléchargement de [chapitre] est en cours dans la file
+  /// connue de la fiche.
+  bool _estEnTelechargement(Chapitre chapitre) {
+    final id = chapitre.id;
+    return id != null &&
+        _telechargements[id]?.statut == StatutTelechargement.enCours;
+  }
 
   /// Nombre de chapitres téléchargés du site [idSource] : leur archive sera
   /// supprimée 24 heures après le retrait de ce site (sauf si le client la

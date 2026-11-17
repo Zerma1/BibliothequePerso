@@ -7,6 +7,7 @@ import 'package:bibliotheque_perso/etat/description_erreur.dart';
 import 'package:bibliotheque_perso/etat/etat_titre.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
+import 'package:bibliotheque_perso/modeles/telechargement.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
@@ -152,6 +153,54 @@ void main() {
       expect(etat.nombreChapitresRetiresAvecSite(2), 2);
       expect(etat.nombreTelechargesDuSite(2), 1);
     });
+
+    test(
+      'chapitres retirés : même filtre que la suppression en base '
+      '(lus, archives, gardés et téléchargements en cours épargnés)',
+      () async {
+        preparer();
+        Chapitre chapitre(
+          int id, {
+          bool estLu = false,
+          bool estGarde = false,
+          String? nomArchive,
+        }) => Chapitre(
+          id: id,
+          idSource: 2,
+          urlChapitre: 'https://www.scan-manga.com/lecture/$id',
+          nom: '',
+          numero: id.toDouble(),
+          langue: 'fr',
+          estLu: estLu,
+          estGarde: estGarde,
+          nomArchive: nomArchive,
+        );
+        service.chapitresParTitre[1]!.addAll(<Chapitre>[
+          chapitre(20, estLu: true),
+          chapitre(21, nomArchive: 'archive_21.zip'),
+          chapitre(22, estGarde: true),
+          chapitre(23),
+          chapitre(24),
+          // Sans site connu : la requête (id_source = ?) ne le supprime pas.
+          const Chapitre(
+            id: 25,
+            urlChapitre: 'https://mangadex.org/chapter/25',
+            nom: '',
+            numero: 25,
+            langue: 'fr',
+          ),
+        ]);
+        telechargement.modifierLigne(23, StatutTelechargement.enCours);
+        telechargement.modifierLigne(24, StatutTelechargement.enAttente);
+        await charger();
+        // Chapitres 2 et 3 (préparés) et 24 (seulement en attente : son
+        // entrée de file disparaît avec lui).
+        expect(etat.nombreChapitresRetiresAvecSite(2), 3);
+        // Site 1 : seul le chapitre 1 ; le 25, sans site connu, n'est pas
+        // compté (pas de repli sur le site principal, comme la requête).
+        expect(etat.nombreChapitresRetiresAvecSite(1), 1);
+      },
+    );
 
     test('ajouter un site : règles appliquées puis fiche relue', () async {
       preparer(avecSecondaire: false);
