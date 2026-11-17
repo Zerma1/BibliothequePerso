@@ -251,6 +251,9 @@ class _EtatDialogueChangementDossier extends State<DialogueChangementDossier> {
   String? _erreur;
   ResultatChangementDossier? _resultat;
 
+  /// `true` pendant la lecture de l'avertissement avant changement.
+  bool _verificationEnCours = false;
+
   bool get _estImpose => widget.cheminImpose != null;
 
   @override
@@ -274,9 +277,14 @@ class _EtatDialogueChangementDossier extends State<DialogueChangementDossier> {
   }
 
   Future<void> _changer(String? chemin) async {
+    if (_verificationEnCours) return;
     // Le déplacement est toujours demandé pour terminer un déplacement
     // inachevé.
     final deplacer = _estImpose || _deplacer;
+    if (!_estImpose && !await _confirmerAvertissement(chemin, deplacer)) {
+      return;
+    }
+    if (!mounted) return;
     setState(() {
       _etape = _Etape.enCours;
       _erreur = null;
@@ -297,6 +305,54 @@ class _EtatDialogueChangementDossier extends State<DialogueChangementDossier> {
         _erreur = erreur == null ? null : Textes.messageErreur(erreur);
       }
     });
+  }
+
+  /// Demande l'avertissement du service avant le changement ; s'il y en a
+  /// un, le client doit confirmer. Renvoie `true` si le changement peut
+  /// commencer. Une erreur de lecture reste affichée dans la saisie.
+  Future<bool> _confirmerAvertissement(String? chemin, bool deplacer) async {
+    // Boutons désactivés pendant la lecture : un double appui ne pose pas
+    // deux fois la question.
+    setState(() {
+      _verificationEnCours = true;
+      _erreur = null;
+    });
+    final resultat = await widget.etat.avertissementAvantChangement(
+      chemin,
+      deplacerArchives: deplacer,
+    );
+    if (!mounted) return false;
+    setState(() => _verificationEnCours = false);
+    final erreur = resultat.erreur;
+    if (erreur != null) {
+      setState(() => _erreur = Textes.messageErreur(erreur));
+      return false;
+    }
+    final avertissement = resultat.donnee;
+    if (avertissement == null) return true;
+    final confirme = await showDialog<bool>(
+      context: context,
+      builder: (contexteDialogue) => AlertDialog(
+        title: const Text(Textes.avantChangementDossier),
+        // Même largeur bornée que le dialogue principal : le texte cite un
+        // chemin, il reste lisible sur grand écran.
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: largeurMaxFormulaire),
+          child: SingleChildScrollView(child: Text(avertissement)),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(contexteDialogue).pop(false),
+            child: const Text(Textes.annuler),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(contexteDialogue).pop(true),
+            child: const Text(Textes.changerQuandMeme),
+          ),
+        ],
+      ),
+    );
+    return confirme == true;
   }
 
   @override
@@ -335,7 +391,7 @@ class _EtatDialogueChangementDossier extends State<DialogueChangementDossier> {
     final etat = widget.etat;
     final erreur = _erreur;
     final parDefaut = etat.cheminParDefaut;
-    final peutChanger = _chemin.text.trim().isNotEmpty;
+    final peutChanger = _chemin.text.trim().isNotEmpty && !_verificationEnCours;
     return AlertDialog(
       title: Text(
         _estImpose ? Textes.terminerDeplacement : Textes.changerDeDossier,
@@ -376,7 +432,7 @@ class _EtatDialogueChangementDossier extends State<DialogueChangementDossier> {
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
-              onPressed: etat.estDossierPersonnalise
+              onPressed: etat.estDossierPersonnalise && !_verificationEnCours
                   ? () => _changer(null)
                   : null,
               icon: const Icon(Icons.settings_backup_restore),
@@ -444,6 +500,35 @@ class _EtatDialogueChangementDossier extends State<DialogueChangementDossier> {
     );
   }
 
+  /// Liste courte des fichiers restés dans l'ancien dossier (conflits),
+  /// vide s'il n'y en a pas. Un chemin par ligne : plus facile à retrouver
+  /// dans l'explorateur que la phrase du message.
+  List<Widget> _conflits(ThemeData theme, List<String> chemins) {
+    if (chemins.isEmpty) return const <Widget>[];
+    const maximum = ResultatChangementDossier.nombreMaximalConflitsCites;
+    final reste = chemins.length - maximum;
+    return <Widget>[
+      const SizedBox(height: espacementMoyen),
+      Text(
+        Textes.fichiersEnConflit(chemins.length),
+        style: theme.textTheme.titleSmall?.copyWith(
+          color: theme.colorScheme.error,
+        ),
+      ),
+      const SizedBox(height: espacementPetit),
+      for (final chemin in chemins.take(maximum))
+        SelectableText(
+          Textes.fichierEnConflit(chemin),
+          style: theme.textTheme.bodySmall,
+        ),
+      if (reste > 0)
+        Text(
+          Textes.autresFichiersEnConflit(reste),
+          style: theme.textTheme.bodySmall,
+        ),
+    ];
+  }
+
   Widget _termine(BuildContext context) {
     final theme = Theme.of(context);
     final resultat = _resultat!;
@@ -452,6 +537,7 @@ class _EtatDialogueChangementDossier extends State<DialogueChangementDossier> {
       content: _cadre(<Widget>[
         // Message du service sélectionnable : il contient le chemin.
         SelectableText(resultat.message),
+        ..._conflits(theme, resultat.cheminsEnConflit),
         const SizedBox(height: espacementMoyen),
         // Consigne mise en avant : sans redémarrage, le nouveau dossier
         // n'est pas utilisé et les téléchargements restent en pause.

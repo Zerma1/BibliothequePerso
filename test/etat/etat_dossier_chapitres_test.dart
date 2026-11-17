@@ -161,6 +161,53 @@ void main() {
     expect(service.demandes, hasLength(1));
   });
 
+  group('avertissementAvantChangement', () {
+    test('rien à signaler sans déplacement inachevé', () async {
+      final resultat = await etat.avertissementAvantChangement(
+        r'Z:\Mangas',
+        deplacerArchives: false,
+      );
+
+      expect(resultat.estReussi, isTrue);
+      expect(resultat.donnee, isNull);
+    });
+
+    test('signale l\'abandon d\'un déplacement inachevé sans '
+        'déplacement', () async {
+      service.deplacementInacheve = r'Y:\Ancien';
+      final resultat = await etat.avertissementAvantChangement(
+        r'Z:\Mangas',
+        deplacerArchives: false,
+      );
+
+      expect(resultat.donnee, contains(r'Y:\Ancien'));
+      // Ne modifie rien.
+      expect(service.demandes, isEmpty);
+      expect(service.deplacementInacheve, r'Y:\Ancien');
+    });
+
+    test('rien à signaler avec déplacement', () async {
+      service.deplacementInacheve = r'Y:\Ancien';
+      final resultat = await etat.avertissementAvantChangement(
+        r'Z:\Mangas',
+        deplacerArchives: true,
+      );
+
+      expect(resultat.donnee, isNull);
+    });
+
+    test('une erreur de lecture devient l\'erreur du résultat', () async {
+      service.erreurLecture = const ErreurBaseDeDonnees('base verrouillée');
+      final resultat = await etat.avertissementAvantChangement(
+        r'Z:\Mangas',
+        deplacerArchives: false,
+      );
+
+      expect(resultat.estReussi, isFalse);
+      expect(resultat.erreur?.nature, NatureErreur.baseDeDonnees);
+    });
+  });
+
   test('abandonner le déplacement inachevé l\'oublie', () async {
     service.deplacementInacheve = r'Z:\Mangas';
     await etat.charger();

@@ -1953,6 +1953,24 @@ abstract final class Textes {
   static const String redemarrerPourNouveauDossier =
       'Redémarrez l\'application pour utiliser le nouveau dossier.';
 
+  /// Titre de la confirmation demandée quand le service signale un risque
+  /// avant le changement de dossier.
+  static const String avantChangementDossier = 'Changer de dossier ?';
+
+  /// Bouton : changer de dossier malgré l'avertissement.
+  static const String changerQuandMeme = 'Changer quand même';
+
+  /// Titre de la liste des fichiers en conflit après un déplacement.
+  static String fichiersEnConflit(int nombre) =>
+      "Fichiers restés dans l'ancien dossier, à vérifier ($nombre) :";
+
+  /// Ligne de la liste des fichiers en conflit.
+  static String fichierEnConflit(String chemin) => '• $chemin';
+
+  /// Fin de la liste des fichiers en conflit quand elle est tronquée.
+  static String autresFichiersEnConflit(int nombre) =>
+      'et $nombre autre(s) fichier(s)';
+
   /// Refus « chapitre en cours » : la file attend la décision du client.
   static const String filePauseeParChangement =
       'Les téléchargements sont en pause en attendant le changement de '

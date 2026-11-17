@@ -3,6 +3,7 @@
 import 'dart:async';
 
 import 'package:bibliotheque_perso/ecrans/ecran_parametres.dart';
+import 'package:bibliotheque_perso/etat/etat_dossier_chapitres.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/widgets/section_dossier_chapitres.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
@@ -279,6 +280,127 @@ void main() {
     expect(service.nombreAbandons, 1);
     expect(find.text(Textes.deplacementAbandonne), findsOneWidget);
     expect(find.text(Textes.deplacementInacheve(r'Z:\Mangas')), findsNothing);
+  });
+
+  testWidgets('bilan : les fichiers en conflit sont listés (liste '
+      'courte)', (tester) async {
+    service.cheminsEnConflit = <String>[
+      for (var i = 1; i <= 7; i++) 'manga/Titre/ch$i.fr.zip',
+    ];
+    await afficher(tester);
+    await ouvrirDialogue(tester);
+    await tester.enterText(find.byType(TextField), r'Z:\Mangas');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, Textes.changer));
+    await tester.pumpAndSettle();
+
+    expect(find.text(Textes.dossierChange), findsOneWidget);
+    expect(find.text(Textes.fichiersEnConflit(7)), findsOneWidget);
+    expect(
+      find.text(Textes.fichierEnConflit('manga/Titre/ch1.fr.zip')),
+      findsOneWidget,
+    );
+    expect(
+      find.text(Textes.fichierEnConflit('manga/Titre/ch5.fr.zip')),
+      findsOneWidget,
+    );
+    // Au-delà de la limite, seul le nombre restant est indiqué.
+    expect(
+      find.text(Textes.fichierEnConflit('manga/Titre/ch6.fr.zip')),
+      findsNothing,
+    );
+    expect(find.text(Textes.autresFichiersEnConflit(2)), findsOneWidget);
+  });
+
+  testWidgets('bilan sans conflit : pas de liste', (tester) async {
+    await afficher(tester);
+    await ouvrirDialogue(tester);
+    await tester.enterText(find.byType(TextField), r'Z:\Mangas');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, Textes.changer));
+    await tester.pumpAndSettle();
+
+    expect(find.text(Textes.dossierChange), findsOneWidget);
+    expect(find.textContaining("restés dans l'ancien dossier"), findsNothing);
+  });
+
+  group('avertissement avant changement', () {
+    late EtatDossierChapitres etat;
+
+    // Le bouton de la section est désactivé tant qu'un déplacement est
+    // inachevé : le dialogue est affiché seul pour ce cas.
+    Future<void> afficherDialogue(WidgetTester tester) async {
+      etat = EtatDossierChapitres(service);
+      addTearDown(etat.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: DialogueChangementDossier(etat: etat)),
+        ),
+      );
+    }
+
+    Future<void> demanderSansDeplacement(WidgetTester tester) async {
+      await tester.tap(find.byType(CheckboxListTile));
+      await tester.pump();
+      await tester.enterText(find.byType(TextField), r'Z:\Mangas');
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, Textes.changer));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('déplacement inachevé abandonné : confirmation avec le texte '
+        'du service', (tester) async {
+      service.deplacementInacheve = r'Y:\Ancien';
+      await afficherDialogue(tester);
+      await demanderSansDeplacement(tester);
+
+      expect(find.text(Textes.avantChangementDossier), findsOneWidget);
+      expect(find.textContaining(r'Y:\Ancien'), findsOneWidget);
+      expect(service.demandes, isEmpty);
+
+      // « Annuler » : rien n'est changé, la saisie reste ouverte.
+      await tester.tap(
+        find.descendant(
+          of: find.ancestor(
+            of: find.text(Textes.avantChangementDossier),
+            matching: find.byType(AlertDialog),
+          ),
+          matching: find.text(Textes.annuler),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text(Textes.avantChangementDossier), findsNothing);
+      expect(service.demandes, isEmpty);
+      expect(find.widgetWithText(FilledButton, Textes.changer), findsOneWidget);
+
+      // « Changer quand même » : le changement a lieu.
+      await tester.tap(find.widgetWithText(FilledButton, Textes.changer));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(Textes.changerQuandMeme));
+      await tester.pumpAndSettle();
+
+      expect(service.demandes.single, (dossier: r'Z:\Mangas', deplacer: false));
+      expect(find.text(Textes.dossierChange), findsOneWidget);
+    });
+
+    testWidgets('sans avertissement, aucune confirmation', (tester) async {
+      await afficherDialogue(tester);
+      await demanderSansDeplacement(tester);
+
+      expect(find.text(Textes.avantChangementDossier), findsNothing);
+      expect(service.demandes.single, (dossier: r'Z:\Mangas', deplacer: false));
+    });
+
+    testWidgets('erreur de lecture : message dans la boîte, rien de '
+        'changé', (tester) async {
+      service.erreurLecture = const ErreurService('Lecture impossible.');
+      await afficherDialogue(tester);
+      await demanderSansDeplacement(tester);
+
+      expect(find.text('Lecture impossible.'), findsOneWidget);
+      expect(find.text(Textes.avantChangementDossier), findsNothing);
+      expect(service.demandes, isEmpty);
+    });
   });
 
   testWidgets('dialogue utilisable sur un téléphone étroit', (tester) async {

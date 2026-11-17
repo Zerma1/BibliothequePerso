@@ -166,6 +166,28 @@ class EtatDossierChapitres extends EtatNotifiant {
     }
   }
 
+  /// Avertissement à montrer au client avant de confirmer le changement vers
+  /// [nouveauDossier] (`null` ou vide : dossier par défaut), ou `null` s'il
+  /// n'y a rien à signaler (par exemple un déplacement inachevé qui serait
+  /// abandonné par un changement sans déplacement). Ne modifie rien ; une
+  /// erreur de lecture devient l'erreur du résultat.
+  Future<ResultatAction<String?>> avertissementAvantChangement(
+    String? nouveauDossier, {
+    required bool deplacerArchives,
+  }) async {
+    try {
+      final texte = await _service.avertissementAvantChangement(
+        nouveauDossier,
+        deplacerArchives: deplacerArchives,
+      );
+      return ResultatAction<String?>.reussite(texte);
+    } catch (exception, pile) {
+      return ResultatAction<String?>.echec(
+        DescriptionErreur.depuis(exception, pile),
+      );
+    }
+  }
+
   /// Change le dossier des chapitres pour [nouveauDossier] (`null` ou vide :
   /// dossier par défaut), en déplaçant les archives si [deplacerArchives].
   /// La progression est exposée par [faits] et [total]. Un refus du service

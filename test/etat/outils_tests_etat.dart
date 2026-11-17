@@ -997,6 +997,11 @@ class FauxServiceTelechargement implements ServiceTelechargement {
   /// Erreur levée par [chargerFile], si définie.
   Object? erreurFile;
 
+  /// Erreur levée par [supprimerTelechargement] (donc aussi
+  /// [supprimerMaintenant]) et [supprimerTitre], si définie : par exemple
+  /// le refus « chapitres en cours de déplacement » du vrai service.
+  Object? erreurSuppression;
+
   /// Index de page qui lève une erreur à la lecture.
   final Set<int> pagesIllisibles = <int>{};
 
@@ -1119,6 +1124,8 @@ class FauxServiceTelechargement implements ServiceTelechargement {
     bool signalerChangement = true,
   }) async {
     journal.add('supprimer:$idChapitre');
+    final refus = erreurSuppression;
+    if (refus != null) throw refus;
     file.removeWhere((t) => t.idChapitre == idChapitre);
     pages.remove(idChapitre);
     textes.remove(idChapitre);
@@ -1195,6 +1202,8 @@ class FauxServiceTelechargement implements ServiceTelechargement {
   @override
   Future<void> supprimerTitre(int idTitre) async {
     journal.add('supprimerTitre:$idTitre');
+    final refus = erreurSuppression;
+    if (refus != null) throw refus;
     titresSupprimes.add(idTitre);
     for (final chapitre
         in bibliotheque.chapitresParTitre[idTitre] ?? const <Chapitre>[]) {
@@ -2104,6 +2113,9 @@ class FauxServiceDossierChapitres implements ServiceDossierChapitres {
   /// Nombre de fichiers « déplacés » (progression annoncée).
   int nombreFichiers = 3;
 
+  /// Chemins relatifs signalés en conflit dans le bilan d'un déplacement.
+  List<String> cheminsEnConflit = const <String>[];
+
   /// Si défini, le déplacement attend qu'il soit complété après la première
   /// progression (déplacement en cours).
   Completer<void>? retenueDeplacement;
@@ -2200,8 +2212,15 @@ class FauxServiceDossierChapitres implements ServiceDossierChapitres {
         nombreCopies: nombreFichiers,
         nombreDejaPresents: 0,
         octetsCopies: 0,
+        cheminsEnConflit: cheminsEnConflit,
       );
     }
+    // Même avertissement que le vrai service (texte de l'extension
+    // `avertissementAvantChangement`, lue avant l'effacement du repère).
+    final avertissement = await avertissementAvantChangement(
+      nouveauDossier,
+      deplacerArchives: deplacerArchives,
+    );
     dossierChoisi = demande.isEmpty ? null : cible;
     deplacementInacheve = null;
     redemarrageNecessaire = true;
@@ -2211,6 +2230,7 @@ class FauxServiceDossierChapitres implements ServiceDossierChapitres {
       dossierChoisi: dossierChoisi,
       cheminDossier: cible,
       bilan: bilan,
+      avertissement: avertissement,
     );
   }
 }
