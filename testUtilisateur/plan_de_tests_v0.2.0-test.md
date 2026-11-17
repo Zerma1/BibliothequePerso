@@ -16,14 +16,14 @@ une erreur 403 de Scan-Manga).
 
 | # | Test | Attendu | Résultat |
 |---|------|---------|----------|
-| A1 | Lancer l'application | Version **v0.2.0** sous le menu, vos titres présents | |
-| A2 | Fiche de Ruri Dragon → « Ajouter un autre site » → `ruri-dragon.online` (adresse du titre) | Le site est lu (chapitres listés) **ou** un message explique pourquoi il ne l'est pas, avec le bouton « Ajouter quand même comme simple lien » | |
+| A1 | Lancer l'application | Version **v0.2.0** sous le menu, vos titres présents | ok|
+| A2 | Fiche de Ruri Dragon → « Ajouter un autre site » → `ruri-dragon.online` (adresse du titre) | Le site est lu (chapitres listés) **ou** un message explique pourquoi il ne l'est pas, avec le bouton « Ajouter quand même comme simple lien » | ok|
 | A3 | Si A2 refuse : « Ajouter quand même comme simple lien » | Le site apparaît dans « Sites » marqué « Secondaire · lien seul », aucun chapitre ajouté | |
 | A4 | Sur ce simple lien : « Ouvrir dans le navigateur » | Le navigateur par défaut s'ouvre sur la page du titre | |
 | A5 | Sur ce simple lien : « Essayer de le lire » | Soit les chapitres apparaissent, soit il reste simple lien avec un message clair | |
 | A6 | Sur un site secondaire **lu** : « Garder comme simple lien » | Confirmation annonçant le nombre de chapitres non lus retirés ; après accord, les lus restent, les téléchargés passent au rouge 24 h | |
 | A7 | « Rechercher les nouveaux chapitres » | Aucun chapitre n'est cherché ni téléchargé pour les simples liens, pas d'erreur à leur sujet | |
-| A8 | Ajouter un titre Scan-Manga **sur l'autre PC** (celui qui avait l'erreur 403) | Soit ça marche, soit message « le site bloque les programmes automatiques » (plus d'erreur incompréhensible) ; dans ce cas « simple lien » proposé | |
+| A8 | Ajouter un titre Scan-Manga **sur l'autre PC** (celui qui avait l'erreur 403) | Soit ça marche, soit message « le site bloque les programmes automatiques » (plus d'erreur incompréhensible) ; dans ce cas « simple lien » proposé | Scan manga : redirection conforme |
 
 ## B. Diagnostic et critères de lecture (nouveau)
 
@@ -39,30 +39,32 @@ une erreur 403 de Scan-Manga).
 
 | # | Test | Attendu | Résultat |
 |---|------|---------|----------|
-| C1 | Grille de la bibliothèque | Couvertures visibles, puces Tous / Favoris / Suivis / Planifié / En attente | |
-| C2 | Entonnoir → inclure puis exclure une catégorie | Le filtre suit | |
-| C3 | Ouvrir un titre MangaDex | Couverture nette, légende, chapitres dans vos langues | |
-| C4 | Fiche d'un titre à plusieurs sites | Filtre par site affiché seulement pour les sites qui ont des chapitres | |
-| C5 | « Définir comme site principal » puis « Retirer » un site secondaire | Fonctionne comme dans la 0.1.0-test.4 | |
+| C1 | Grille de la bibliothèque | Couvertures visibles, puces Tous / Favoris / Suivis / Planifié / En attente | ok|
+| C2 | Entonnoir → inclure puis exclure une catégorie | Le filtre suit | ok|
+| C3 | Ouvrir un titre MangaDex | Couverture nette, légende, chapitres dans vos langues | ok|
+| C4 | Fiche d'un titre à plusieurs sites | Filtre par site affiché seulement pour les sites qui ont des chapitres | ok|
+| C5 | « Définir comme site principal » puis « Retirer » un site secondaire | Fonctionne comme dans la 0.1.0-test.4 | ok|
 
 ## D. Téléchargements et lecture (non-régression)
 
 | # | Test | Attendu | Résultat |
 |---|------|---------|----------|
-| D1 | Titre en Favoris | Chapitres non lus téléchargés automatiquement | |
-| D2 | Titre en Suivis | 10 premiers chapitres téléchargés, puis vague de 5 avant / 5 après le dernier lu | |
-| D3 | Lire un chapitre jusqu'au bout | Marqué lu, le suivant s'ouvre | |
-| D4 | Chapitre rouge → « Garder » / « Supprimer maintenant » | Fonctionne, compte à rebours visible | |
-| D5 | Dossier `Documents\bibliotheque_perso\manga\<titre>\` | Seulement vos langues, aucun chapitre de simple lien | |
+| D1 | Titre en Favoris | Chapitres non lus téléchargés automatiquement | ok|
+| D2 | Titre en Suivis | 10 premiers chapitres téléchargés, puis vague de 5 avant / 5 après le dernier lu | ok|
+| D3 | Lire un chapitre jusqu'au bout | Marqué lu, le suivant s'ouvre | ok|
+| D4 | Chapitre rouge → « Garder » / « Supprimer maintenant » | Fonctionne, compte à rebours visible | ok|
+| D5 | Dossier `Documents\bibliotheque_perso\manga\<titre>\` | Seulement vos langues, aucun chapitre de simple lien | ok|
 
 ## E. Mises à jour, paramètres, export
 
 | # | Test | Attendu | Résultat |
 |---|------|---------|----------|
-| E1 | Onglet Mises à jour | Titres triés, badge « Nouveau » | |
-| E2 | Paramètres → vérifications par jour | Horaires en UTC et heure locale | |
-| E3 | Paramètres → « Exporter mes titres et mes sites » | JSON + Markdown ; les simples liens y figurent | |
-| E4 | Une erreur → « Exporter le rapport d'erreur » | Fichier créé, à joindre au retour | |
+| E1 | Onglet Mises à jour | Titres triés, badge « Nouveau » | ok|
+| E2 | Paramètres → vérifications par jour | Horaires en UTC et heure locale | ok|
+| E3 | Paramètres → « Exporter mes titres et mes sites » | JSON + Markdown ; les simples liens y figurent | ok|
+| E4 | Une erreur → « Exporter le rapport d'erreur » | Fichier créé, à joindre au retour | ok|
+
+pas de possibilitée de réimporter les exports
 
 ## F. Android (facultatif)
 
