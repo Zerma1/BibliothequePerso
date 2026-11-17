@@ -5,7 +5,7 @@ publish_to: 'none'
 
 # Format X.Y.Z+N (voir PLAYBOOK.md section 12) : N est le numéro de build, qui doit
 # augmenter à chaque version publiée sur Android (versionCode).
-version: 0.1.0+3
+version: 0.1.0+4
 
 environment:
   sdk: ^3.14.0

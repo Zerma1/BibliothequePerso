@@ -1,5 +1,22 @@
 # Journal des versions
 
+## 0.1.0-test.4 — version de test (2026-11-17)
+
+Nouveau :
+- **WEBTOON** (webtoons.com) : suivi des séries et de tous leurs épisodes (dates, nouveaux
+  épisodes) avec « Lire sur WEBTOON ». Les images du site sont protégées : les épisodes ne sont
+  pas téléchargés et les couvertures ne sont pas récupérées (choisissez une image de l'appareil
+  si vous le souhaitez). Les épisodes réservés à l'application mobile WEBTOON n'apparaissent pas.
+- **Sites WordPress « Madara » et « MangaThemesia »** (thèmes utilisés par beaucoup de sites de
+  scans) : recherche, fiche, chapitres et **téléchargement** des chapitres en clair ; les
+  chapitres réservés ou protégés renvoient vers le site.
+- **Compilation automatique** Android, Windows et Linux sur GitHub à chaque version de test
+  (première exécution avec cette version : à surveiller dans l'onglet « Actions » du dépôt).
+
+Corrigé :
+- Une adresse mobile (m.webtoons.com) ne crée plus un deuxième site.
+- Dates de chapitres impossibles ou démesurées ignorées au lieu de bloquer un titre.
+
 ## 0.1.0-test.3 — version de test (2026-11-17)
 
 Nouveau :
