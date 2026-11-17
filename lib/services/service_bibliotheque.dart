@@ -297,18 +297,31 @@ class ServiceBibliotheque {
   ///
   /// Avec [titre], ses langues propres (choisies par le client pour ce
   /// titre) passent avant tout le reste.
+  ///
+  /// [plusieursSites] : le titre a plusieurs sites (étape 8). Les langues
+  /// propres de [source] sont alors ignorées : ordre = langues du titre,
+  /// sinon [general].
   static List<String> languesPreferees(
     Source? source, {
     List<String>? general,
     Titre? titre,
+    bool plusieursSites = false,
   }) {
     final propresAuTitre = ServiceParametres.nettoyerLangues(
       titre?.listeLanguesPreferees ?? const <String>[],
     );
     if (propresAuTitre.isNotEmpty) return propresAuTitre;
-    final langues = SourceMangaDex.languesIsoDepuisPreference(
-      source?.langueParDefaut ?? '',
-    );
+    // Relecture B1 : les langues d'un site ne décrivent que ce site. Pour un
+    // titre à plusieurs sites, prendre celles du site principal ferait
+    // dépendre ses langues de ce choix : passer de MangaDex à un site
+    // français effacerait (24 h plus tard) toutes ses archives anglaises,
+    // et un titre ajouté depuis un site français ne téléchargerait jamais
+    // l'anglais de MangaDex.
+    final langues = plusieursSites
+        ? const <String>[]
+        : SourceMangaDex.languesIsoDepuisPreference(
+            source?.langueParDefaut ?? '',
+          );
     if (langues.isNotEmpty) return langues;
     final propres = ServiceParametres.nettoyerLangues(general ?? const []);
     return propres.isNotEmpty
@@ -324,7 +337,8 @@ class ServiceBibliotheque {
   /// Langues à appliquer à [titre] (règles de téléchargement, version mise en
   /// avant), par ordre de préférence : langues propres au titre, sinon
   /// langues de sa source si elles sont réglées (ancien réglage par site,
-  /// gardé pour compatibilité), sinon réglage général.
+  /// gardé pour compatibilité, et seulement pour un titre à un seul site),
+  /// sinon réglage général.
   Future<List<String>> languesPourTitre(Titre titre) async {
     final idSource = titre.idSource;
     final source = idSource == null
@@ -334,7 +348,16 @@ class ServiceBibliotheque {
       source,
       general: await chargerLanguesGenerales(),
       titre: titre,
+      plusieursSites: await _aPlusieursSites(titre.id),
     );
+  }
+
+  /// `true` si le titre [idTitre] a plus d'un site (sans dépôt des sites :
+  /// un seul).
+  Future<bool> _aPlusieursSites(int? idTitre) async {
+    final depot = _depotTitresSources;
+    if (depot == null || idTitre == null) return false;
+    return (await depot.chargerLiensTitre(idTitre)).length > 1;
   }
 
   /// Enregistre les langues propres à un titre ([langues] `null` ou vide :
@@ -808,6 +831,11 @@ class ServiceBibliotheque {
       throw ErreurService(erreur.message, cause: erreur);
     }
     final apres = await _depotTitres.chargerTitre(idTitre) ?? titre;
+    // LIMITE : la fiche du nouveau site principal peut changer le nom ou le
+    // type du titre. Les nouvelles archives iront alors dans un autre
+    // dossier que les anciennes ; celles d'avant la migration 4 (sans
+    // `nom_archive` en base) seraient recherchées dans le nouveau dossier
+    // et deviendraient introuvables.
     return _ecrireDepuisSite(
       source,
       lien.urlTitre,
@@ -1277,6 +1305,9 @@ class ServiceBibliotheque {
           sources[titre.idSource],
           general: general,
           titre: titre,
+          // Une requête de base par titre : le dépôt des sites n'a pas de
+          // lecture groupée, et l'onglet ne compte que les titres suivis.
+          plusieursSites: await _aPlusieursSites(id),
         ),
     };
     // Les titres n'ont pas tous les mêmes langues : une requête par jeu.

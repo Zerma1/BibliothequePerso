@@ -69,13 +69,15 @@ const List<SourceParDefaut> sourcesParDefaut = <SourceParDefaut>[
     urlBase: urlBaseMangaDex,
     typeSource: TypeSource.mangaDex,
   ),
-  // Scan-Manga ne publie qu'en français.
+  // Scan-Manga : langues vides aussi. Le site ne publie qu'en français, mais
+  // l'adaptateur ne filtre pas les langues et chaque chapitre porte déjà la
+  // sienne. Un « fr » ici imposerait le français aux titres dont Scan-Manga
+  // est le site principal (relecture B1).
   SourceParDefaut(
     identifiant: 'scan-manga',
     nom: nomScanManga,
     urlBase: urlBaseScanManga,
     typeSource: TypeSource.scanManga,
-    langues: 'fr',
   ),
 ];
 

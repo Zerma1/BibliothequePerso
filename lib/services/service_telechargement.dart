@@ -456,21 +456,25 @@ class ServiceTelechargement {
     final source = await _depotSources.chargerSource(idSource);
     final listes = await _depotListes.chargerListesDuTitre(idTitre);
     final noms = listes.map((liste) => liste.nom).toSet();
+    final idsSourcesLiees = await _chargerIdsSourcesLiees(idTitre, idSource);
     final politique = PolitiqueTelechargement(
       reglages: await _serviceParametres.chargerReglagesTelechargement(),
       // Même résolution que ServiceBibliotheque.languesPourTitre : langues
-      // propres au titre, sinon de la source si réglées, sinon réglage
-      // général du client.
+      // propres au titre, sinon de la source si réglées (titre à un seul
+      // site), sinon réglage général du client. Pour un titre à plusieurs
+      // sites, changer de site principal ne doit pas changer ses langues
+      // (relecture B1 : archives anglaises effacées).
       languesPreferees: ServiceBibliotheque.languesPreferees(
         source,
         general: await _serviceParametres.chargerLangues(),
         titre: titre,
+        plusieursSites: (idsSourcesLiees?.length ?? 1) > 1,
       ),
       // Étape 8 : une version par numéro, le site principal départageant
       // deux versions équivalentes ; les chapitres d'un site retiré ne sont
       // plus suivis (leurs archives passent en suppression différée).
       idSourcePrincipale: idSource,
-      idsSourcesLiees: await _chargerIdsSourcesLiees(idTitre, idSource),
+      idsSourcesLiees: idsSourcesLiees,
     );
     final chapitres = await _depotChapitres.chargerChapitres(idTitre);
     final plan = politique.calculer(

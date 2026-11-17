@@ -41,7 +41,9 @@ void main() {
     final scanManga = await parUrl(urlBaseScanManga);
     expect(scanManga?.nom, nomScanManga);
     expect(scanManga?.typeSource, TypeSource.scanManga);
-    expect(scanManga?.langueParDefaut, 'fr');
+    // Sans langues propres (relecture B1) : un « fr » imposerait le français
+    // aux titres dont Scan-Manga est le site principal.
+    expect(scanManga?.langueParDefaut, '');
     expect(await parametres.chargerSourcesParDefautProposees(), <String>{
       'mangadex',
       'scan-manga',
