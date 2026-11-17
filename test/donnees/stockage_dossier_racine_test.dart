@@ -346,7 +346,7 @@ void main() {
     });
 
     test(
-      'reprise : fichier déjà copié non recopié, copie tronquée refaite',
+      'reprise : fichier déjà copié non recopié, copie interrompue refaite',
       () async {
         final nom1 = await ecrireChapitre(
           stockage,
@@ -359,20 +359,24 @@ void main() {
           chapitre(2),
         );
         final nouvelle = p.join(temporaire.path, 'nas');
-        // Interruption simulée : ch1 déjà copié, ch2 copié à moitié.
+        // Interruption simulée : ch1 déjà copié (ancien pas encore
+        // supprimé), ch2 copié à moitié dans son `.part`.
         final cible1 = File(p.joinAll(<String>[nouvelle, ...nom1.split('/')]));
         final cible2 = File(p.joinAll(<String>[nouvelle, ...nom2.split('/')]));
         await cible1.parent.create(recursive: true);
         await File(stockage.cheminDepuisNomArchive(nom1)).copy(cible1.path);
         final octets2 = await File(stockage.cheminDepuisNomArchive(nom2))
             .readAsBytes();
-        await cible2.writeAsBytes(octets2.sublist(0, octets2.length ~/ 2));
+        final partiel2 = File('${cible2.path}$suffixeArchivePartielle');
+        await partiel2.writeAsBytes(octets2.sublist(0, octets2.length ~/ 2));
 
         final bilan = await stockage.deplacerArchivesVers(nouvelle);
         expect(bilan.nombreFichiers, 2);
         expect(bilan.nombreDejaPresents, 1);
         expect(bilan.nombreCopies, 1);
+        expect(bilan.nombreConflits, 0);
         expect(await cible2.readAsBytes(), octets2);
+        expect(await partiel2.exists(), isFalse);
         expect(await stockage.existeArchive(nom1), isFalse);
         expect(await stockage.existeArchive(nom2), isFalse);
 
@@ -381,6 +385,144 @@ void main() {
         expect(encore.nombreFichiers, 0);
       },
     );
+
+    group('cible déjà présente', () {
+      late String nouvelle;
+      late String nom1;
+      late String nom2;
+      late File ancien1;
+      late File ancien2;
+      late File cible1;
+      late File cible2;
+
+      setUp(() async {
+        nom1 = await ecrireChapitre(stockage, titre('Berserk'), chapitre(1));
+        nom2 = await ecrireChapitre(stockage, titre('Berserk'), chapitre(2));
+        nouvelle = p.join(temporaire.path, 'nas');
+        ancien1 = File(stockage.cheminDepuisNomArchive(nom1));
+        ancien2 = File(stockage.cheminDepuisNomArchive(nom2));
+        cible1 = File(p.joinAll(<String>[nouvelle, ...nom1.split('/')]));
+        cible2 = File(p.joinAll(<String>[nouvelle, ...nom2.split('/')]));
+        await cible1.parent.create(recursive: true);
+      });
+
+      test('identique : non recopiée, ancien supprimé', () async {
+        await ancien1.copy(cible1.path);
+        final octets1 = await ancien1.readAsBytes();
+
+        final bilan = await stockage.deplacerArchivesVers(nouvelle);
+
+        expect(bilan.nombreDejaPresents, 1);
+        expect(bilan.nombreCopies, 1);
+        expect(bilan.nombreConflits, 0);
+        expect(bilan.cheminsEnConflit, isEmpty);
+        expect(await ancien1.exists(), isFalse);
+        expect(await cible1.readAsBytes(), octets1);
+      });
+
+      test("taille différente : conflit, cible intacte, ancien conservé, "
+          'les autres fichiers sont déplacés', () async {
+        final autre = image(42, taille: 1234);
+        await cible1.writeAsBytes(autre);
+        final octets1 = await ancien1.readAsBytes();
+        expect(octets1.length, isNot(autre.length));
+
+        final bilan = await stockage.deplacerArchivesVers(nouvelle);
+
+        expect(bilan.nombreFichiers, 2);
+        expect(bilan.nombreCopies, 1);
+        expect(bilan.nombreDejaPresents, 0);
+        expect(bilan.nombreConflits, 1);
+        expect(bilan.aDesConflits, isTrue);
+        expect(bilan.cheminsEnConflit, <String>[nom1]);
+        expect(await cible1.readAsBytes(), autre);
+        expect(await ancien1.readAsBytes(), octets1);
+        // Le fichier suivant a bien été déplacé.
+        expect(await ancien2.exists(), isFalse);
+        expect(await cible2.exists(), isTrue);
+        // Aucun .part laissé à côté de la cible en conflit.
+        expect(
+          await File('${cible1.path}$suffixeArchivePartielle').exists(),
+          isFalse,
+        );
+      });
+
+      test('même taille, contenu différent : conflit', () async {
+        final octets1 = await ancien1.readAsBytes();
+        final modifie = Uint8List.fromList(octets1);
+        // Un seul octet différent, en fin de fichier.
+        modifie[modifie.length - 1] ^= 0xFF;
+        await cible1.writeAsBytes(modifie);
+
+        final bilan = await stockage.deplacerArchivesVers(nouvelle);
+
+        expect(bilan.nombreConflits, 1);
+        expect(bilan.nombreDejaPresents, 0);
+        expect(bilan.cheminsEnConflit, <String>[nom1]);
+        expect(await cible1.readAsBytes(), modifie);
+        expect(await ancien1.readAsBytes(), octets1);
+      });
+
+      test(
+        'grand fichier identique sur plusieurs blocs : déjà présent',
+        () async {
+          // Plus de 64 Kio : la comparaison passe par plusieurs blocs.
+          final gros = image(5, taille: 200 * 1024 + 17);
+          await ancien1.writeAsBytes(gros);
+          await cible1.writeAsBytes(gros);
+
+          final bilan = await stockage.deplacerArchivesVers(nouvelle);
+
+          expect(bilan.nombreDejaPresents, 1);
+          expect(bilan.nombreConflits, 0);
+          expect(await ancien1.exists(), isFalse);
+        },
+      );
+
+      test(
+        'relance après conflit : toujours en conflit, rien écrasé',
+        () async {
+          final autre = image(42, taille: 1234);
+          await cible1.writeAsBytes(autre);
+          await stockage.deplacerArchivesVers(nouvelle);
+
+          final encore = await stockage.deplacerArchivesVers(nouvelle);
+
+          expect(encore.nombreFichiers, 1);
+          expect(encore.cheminsEnConflit, <String>[nom1]);
+          expect(await cible1.readAsBytes(), autre);
+          expect(await ancien1.exists(), isTrue);
+        },
+      );
+    });
+
+    test('bilan : égalité selon les chemins en conflit', () {
+      const a = BilanDeplacement(
+        nombreFichiers: 1,
+        nombreCopies: 0,
+        nombreDejaPresents: 0,
+        octetsCopies: 0,
+        cheminsEnConflit: <String>['manga/Berserk/ch1.fr.zip'],
+      );
+      const b = BilanDeplacement(
+        nombreFichiers: 1,
+        nombreCopies: 0,
+        nombreDejaPresents: 0,
+        octetsCopies: 0,
+        cheminsEnConflit: <String>['manga/Berserk/ch1.fr.zip'],
+      );
+      const c = BilanDeplacement(
+        nombreFichiers: 1,
+        nombreCopies: 0,
+        nombreDejaPresents: 0,
+        octetsCopies: 0,
+        cheminsEnConflit: <String>['manga/Berserk/ch2.fr.zip'],
+      );
+      expect(a, b);
+      expect(a.hashCode, b.hashCode);
+      expect(a, isNot(c));
+      expect(a.nombreConflits, 1);
+    });
 
     test('ancien dossier jamais créé : rien à déplacer', () async {
       final bilan = await stockage.deplacerArchivesVers(

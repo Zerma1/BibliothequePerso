@@ -561,12 +561,20 @@ class StockageTelechargements {
   ///
   /// [nouveauDossier] est d'abord accepté par [validerDossier] (création,
   /// essai d'écriture, fichier repère). Puis, fichier par fichier :
-  /// 1. si la cible existe déjà avec la même taille, elle n'est pas recopiée
-  ///    (reprise d'un déplacement interrompu) ;
-  /// 2. sinon le fichier est copié dans un `.part` à côté de la cible, sa
-  ///    taille est vérifiée, puis il est renommé : une copie interrompue
-  ///    n'est jamais prise pour une archive complète ;
-  /// 3. l'ancien fichier n'est supprimé qu'après ces étapes.
+  /// 1. une cible existante n'est **jamais** remplacée ni modifiée ;
+  /// 2. si elle a la même taille et le même contenu (comparaison octet par
+  ///    octet), le fichier est « déjà présent » (reprise d'un déplacement
+  ///    interrompu) : l'ancien est supprimé sans recopie ;
+  /// 3. si elle diffère (taille ou contenu), c'est un **conflit** (par
+  ///    exemple une autre bibliothèque sur un NAS partagé) : l'ancien fichier
+  ///    reste dans l'ancien dossier, la cible reste intacte, le chemin
+  ///    relatif est ajouté à [BilanDeplacement.cheminsEnConflit] et le
+  ///    déplacement continue avec les fichiers suivants. Décider du sort de
+  ///    ces fichiers revient à l'appelant (service) ;
+  /// 4. si la cible est absente, le fichier est copié dans un `.part` à côté
+  ///    de la cible, sa taille est vérifiée, puis il est renommé : une copie
+  ///    interrompue n'est jamais prise pour une archive complète ; l'ancien
+  ///    fichier n'est supprimé qu'après le renommage.
   ///
   /// Les `.zip.part`, le fichier repère et tout ce qui n'est pas dans un
   /// dossier de type (`exports/`, `rapports/`…) restent en place. L'ancien
@@ -622,17 +630,21 @@ class StockageTelechargements {
     var copies = 0;
     var dejaPresents = 0;
     var octets = 0;
+    final conflits = <String>[];
     final dossiersTouches = <String>{};
     for (var i = 0; i < total; i++) {
       final relatif = fichiers[i];
       final ancien = File(chemins.joinAll(<String>[source, ...relatif]));
       final cible = chemins.joinAll(<String>[destination, ...relatif]);
-      final copie = await _deplacerFichier(ancien, cible, relatif);
-      if (copie == null) {
-        dejaPresents++;
-      } else {
-        copies++;
-        octets += copie;
+      final (issue, copie) = await _deplacerFichier(ancien, cible, relatif);
+      switch (issue) {
+        case _IssueDeplacement.copie:
+          copies++;
+          octets += copie;
+        case _IssueDeplacement.dejaPresent:
+          dejaPresents++;
+        case _IssueDeplacement.conflit:
+          conflits.add(relatif.join(separateurNomArchive));
       }
       dossiersTouches.add(chemins.dirname(ancien.path));
       surProgression?.call(i + 1, total);
@@ -643,6 +655,7 @@ class StockageTelechargements {
       nombreCopies: copies,
       nombreDejaPresents: dejaPresents,
       octetsCopies: octets,
+      cheminsEnConflit: List<String>.unmodifiable(conflits),
     );
   }
 
@@ -694,10 +707,26 @@ class StockageTelechargements {
     return resultat;
   }
 
-  /// Copie [ancien] vers [cible] (via un `.part` vérifié puis renommé), puis
-  /// supprime [ancien]. Renvoie le nombre d'octets copiés, ou `null` si la
-  /// cible existait déjà avec la même taille (pas de copie).
-  Future<int?> _deplacerFichier(
+  /// Déplace [ancien] vers [cible] sans jamais remplacer un fichier existant.
+  ///
+  /// - Cible absente : copie dans un `.part` à côté de la cible, vérification
+  ///   de la taille, renommage, puis suppression de [ancien]
+  ///   ([_IssueDeplacement.copie]).
+  /// - Cible présente avec la même taille et le même contenu (comparaison
+  ///   octet par octet, en flux) : rien n'est écrit, [ancien] est supprimé
+  ///   ([_IssueDeplacement.dejaPresent]) ; c'est la reprise d'un déplacement
+  ///   interrompu juste avant la suppression.
+  /// - Cible présente mais différente (taille ou contenu) : conflit
+  ///   ([_IssueDeplacement.conflit]). La cible n'est pas touchée (elle peut
+  ///   appartenir à une autre bibliothèque sur un NAS partagé) et [ancien]
+  ///   reste dans l'ancien dossier.
+  ///
+  /// Une copie interrompue reste dans le `.part` (jamais sous le nom final) :
+  /// une cible existante n'est donc jamais une copie tronquée de ce
+  /// déplacement, et une taille différente signale bien un autre fichier.
+  ///
+  /// Renvoie l'issue et le nombre d'octets copiés (0 sans copie).
+  Future<(_IssueDeplacement, int)> _deplacerFichier(
     File ancien,
     String cible,
     List<String> relatif,
@@ -705,30 +734,37 @@ class StockageTelechargements {
     final nomLisible = relatif.join(separateurNomArchive);
     final partiel = File('$cible$suffixeArchivePartielle');
     try {
-      final taille = await ancien.length();
       final fichierCible = File(cible);
-      int? copie;
-      if (!await fichierCible.exists() ||
-          await fichierCible.length() != taille) {
-        await Directory(chemins.dirname(cible)).create(recursive: true);
-        await ancien.copy(partiel.path);
-        final tailleCopiee = await partiel.length();
-        if (tailleCopiee != taille) {
-          await _supprimerSansErreur(partiel);
-          throw ErreurStockage(
-            'La copie de « $nomLisible » est incomplète ($tailleCopiee octets '
-            'sur $taille) ; l\'ancien fichier est conservé. Relancez le '
-            'déplacement pour reprendre.',
-            chemin: cible,
-          );
-        }
-        // Renommage dans le même dossier : la cible n'apparaît que complète
-        // (et remplace une copie précédente de taille différente).
-        await partiel.rename(cible);
-        copie = taille;
+      if (await fichierCible.exists()) {
+        return await _traiterCibleExistante(ancien, fichierCible);
       }
+      final taille = await ancien.length();
+      await Directory(chemins.dirname(cible)).create(recursive: true);
+      await ancien.copy(partiel.path);
+      final tailleCopiee = await partiel.length();
+      if (tailleCopiee != taille) {
+        await _supprimerSansErreur(partiel);
+        throw ErreurStockage(
+          'La copie de « $nomLisible » est incomplète ($tailleCopiee octets '
+          "sur $taille) ; l'ancien fichier est conservé. Relancez le "
+          'déplacement pour reprendre.',
+          chemin: cible,
+        );
+      }
+      // La cible a pu apparaître pendant la copie (autre appareil écrivant
+      // sur le même NAS) : `rename` la remplacerait, on revérifie donc juste
+      // avant.
+      // LIMITE : `dart:io` n'offre pas de renommage « sans remplacement » ;
+      // il reste une fenêtre très courte entre cette vérification et le
+      // renommage.
+      if (await fichierCible.exists()) {
+        await _supprimerSansErreur(partiel);
+        return await _traiterCibleExistante(ancien, fichierCible);
+      }
+      // Renommage dans le même dossier : la cible n'apparaît que complète.
+      await partiel.rename(cible);
       await ancien.delete();
-      return copie;
+      return (_IssueDeplacement.copie, taille);
     } on FileSystemException catch (erreur) {
       await _supprimerSansErreur(partiel);
       throw erreurDisque(
@@ -739,6 +775,82 @@ class StockageTelechargements {
         chemin: erreur.path ?? cible,
       );
     }
+  }
+
+  /// Cas d'une [cible] déjà présente : si elle est identique à [ancien],
+  /// [ancien] est supprimé (déjà présent) ; sinon rien ne bouge (conflit).
+  Future<(_IssueDeplacement, int)> _traiterCibleExistante(
+    File ancien,
+    File cible,
+  ) async {
+    if (!await _fichiersIdentiques(ancien, cible)) {
+      return (_IssueDeplacement.conflit, 0);
+    }
+    await ancien.delete();
+    return (_IssueDeplacement.dejaPresent, 0);
+  }
+
+  /// Taille des blocs lus pour comparer deux fichiers (64 Kio) : assez grand
+  /// pour limiter les allers-retours sur un NAS, assez petit pour ne jamais
+  /// charger une archive entière en mémoire.
+  static const int _tailleBlocComparaison = 64 * 1024;
+
+  /// Vrai si [a] et [b] ont la même taille et le même contenu, comparés
+  /// octet par octet par blocs de [_tailleBlocComparaison].
+  static Future<bool> _fichiersIdentiques(File a, File b) async {
+    final taille = await a.length();
+    if (await b.length() != taille) {
+      return false;
+    }
+    final lecteurA = await a.open();
+    try {
+      final lecteurB = await b.open();
+      try {
+        final blocA = Uint8List(_tailleBlocComparaison);
+        final blocB = Uint8List(_tailleBlocComparaison);
+        var restant = taille;
+        while (restant > 0) {
+          final aLire = restant < _tailleBlocComparaison
+              ? restant
+              : _tailleBlocComparaison;
+          final luA = await _lireBloc(lecteurA, blocA, aLire);
+          final luB = await _lireBloc(lecteurB, blocB, aLire);
+          if (luA != aLire || luB != aLire) {
+            // Fichier raccourci pendant la lecture : différent.
+            return false;
+          }
+          for (var i = 0; i < aLire; i++) {
+            if (blocA[i] != blocB[i]) {
+              return false;
+            }
+          }
+          restant -= aLire;
+        }
+        return true;
+      } finally {
+        await lecteurB.close();
+      }
+    } finally {
+      await lecteurA.close();
+    }
+  }
+
+  /// Lit exactement [nombre] octets dans [bloc] (sauf fin de fichier) et
+  /// renvoie le nombre lu : `readInto` peut rendre moins que demandé.
+  static Future<int> _lireBloc(
+    RandomAccessFile lecteur,
+    Uint8List bloc,
+    int nombre,
+  ) async {
+    var lu = 0;
+    while (lu < nombre) {
+      final n = await lecteur.readInto(bloc, lu, nombre);
+      if (n <= 0) {
+        break;
+      }
+      lu += n;
+    }
+    return lu;
   }
 
   /// Supprime les dossiers de titre de [dossiers] devenus vides, puis leurs
@@ -1630,28 +1742,59 @@ class BilanDeplacement {
     required this.nombreCopies,
     required this.nombreDejaPresents,
     required this.octetsCopies,
+    this.cheminsEnConflit = const <String>[],
   });
 
-  /// Nombre de fichiers (archives et couvertures) traités.
+  /// Nombre de fichiers (archives et couvertures) traités, conflits compris :
+  /// `nombreCopies + nombreDejaPresents + nombreConflits`.
   final int nombreFichiers;
 
   /// Nombre de fichiers réellement copiés.
   final int nombreCopies;
 
-  /// Nombre de fichiers déjà présents dans le nouveau dossier avec la même
-  /// taille (déplacement repris après une interruption) : non recopiés.
+  /// Nombre de fichiers déjà présents dans le nouveau dossier, identiques
+  /// octet pour octet (déplacement repris après une interruption) : non
+  /// recopiés, l'ancien exemplaire a été supprimé.
   final int nombreDejaPresents;
 
   /// Nombre total d'octets copiés.
   final int octetsCopies;
 
+  /// Chemins relatifs à la racine (`type/titre/fichier`, séparateur `/`
+  /// comme `nom_archive`) des fichiers en conflit : la cible existait déjà
+  /// avec une taille ou un contenu différent.
+  ///
+  /// Pour chacun, rien n'a été écrit dans le nouveau dossier (la cible est
+  /// intacte) et le fichier est **resté dans l'ancien dossier** (son dossier
+  /// de titre n'est donc pas retiré). Le service décide de la suite
+  /// (garder l'ancien dossier, signaler au client…). Triés dans l'ordre de
+  /// traitement.
+  final List<String> cheminsEnConflit;
+
+  /// Nombre de fichiers en conflit (longueur de [cheminsEnConflit]) : 0 si
+  /// le déplacement est complet.
+  int get nombreConflits => cheminsEnConflit.length;
+
+  /// Vrai si au moins un fichier est resté dans l'ancien dossier.
+  bool get aDesConflits => cheminsEnConflit.isNotEmpty;
+
   @override
-  bool operator ==(Object other) =>
-      other is BilanDeplacement &&
-      other.nombreFichiers == nombreFichiers &&
-      other.nombreCopies == nombreCopies &&
-      other.nombreDejaPresents == nombreDejaPresents &&
-      other.octetsCopies == octetsCopies;
+  bool operator ==(Object other) {
+    if (other is! BilanDeplacement ||
+        other.nombreFichiers != nombreFichiers ||
+        other.nombreCopies != nombreCopies ||
+        other.nombreDejaPresents != nombreDejaPresents ||
+        other.octetsCopies != octetsCopies ||
+        other.cheminsEnConflit.length != cheminsEnConflit.length) {
+      return false;
+    }
+    for (var i = 0; i < cheminsEnConflit.length; i++) {
+      if (other.cheminsEnConflit[i] != cheminsEnConflit[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   @override
   int get hashCode => Object.hash(
@@ -1659,12 +1802,27 @@ class BilanDeplacement {
     nombreCopies,
     nombreDejaPresents,
     octetsCopies,
+    Object.hashAll(cheminsEnConflit),
   );
 
   @override
   String toString() =>
       'BilanDeplacement($nombreFichiers fichiers, $nombreCopies copiés, '
-      '$nombreDejaPresents déjà présents, $octetsCopies octets)';
+      '$nombreDejaPresents déjà présents, $nombreConflits en conflit, '
+      '$octetsCopies octets)';
+}
+
+/// Issue du déplacement d'un fichier
+/// ([StockageTelechargements.deplacerArchivesVers]).
+enum _IssueDeplacement {
+  /// Fichier copié puis ancien exemplaire supprimé.
+  copie,
+
+  /// Cible identique déjà présente : ancien exemplaire supprimé.
+  dejaPresent,
+
+  /// Cible différente déjà présente : rien n'a bougé.
+  conflit,
 }
 
 /// Écriture en cours de l'archive d'un chapitre, ouverte par
