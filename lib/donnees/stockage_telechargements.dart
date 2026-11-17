@@ -79,11 +79,22 @@ Future<String> cheminParDefautDossierTelechargements() async {
 /// l'interface saccade, l'appelant peut exécuter la lecture dans
 /// `Isolate.run`.
 class StockageTelechargements {
-  /// Crée le stockage sur le [dossierRacine] donné.
+  /// Crée le stockage sur le [dossierRacine] donné, créé au besoin à la
+  /// première écriture (dossier par défaut, dossiers temporaires des tests).
+  StockageTelechargements(this.dossierRacine) : estPersonnalise = false;
+
+  /// Crée le stockage sur un dossier **choisi par le client** (chemin local,
+  /// lecteur réseau `Z:\…`, chemin UNC `\\nas\partage\…`, dossier monté sous
+  /// Linux ou Android), déjà accepté par [validerDossier].
   ///
-  /// Les tests passent un dossier temporaire ; l'application passe le dossier
-  /// réglé dans les paramètres ou [cheminParDefautDossierTelechargements].
-  StockageTelechargements(this.dossierRacine);
+  /// Ce dossier n'est jamais recréé en silence : s'il est absent ou s'il ne
+  /// contient plus le fichier repère [nomFichierMarqueurRacine] (NAS éteint,
+  /// partage démonté), les écritures, lectures et suppressions lèvent une
+  /// [ErreurStockage] dont [ErreurStockage.estDossierInaccessible] vaut
+  /// `true`, et aucun dossier n'est créé. La base n'est pas touchée : les
+  /// chapitres redeviennent lisibles quand le dossier revient.
+  StockageTelechargements.personnalise(this.dossierRacine)
+    : estPersonnalise = true;
 
   /// Crée le stockage sur le dossier racine par défaut
   /// ([cheminParDefautDossierTelechargements]).
@@ -93,8 +104,31 @@ class StockageTelechargements {
     );
   }
 
+  /// Crée le stockage à partir du réglage du client : [dossierChoisi] vide
+  /// ou `null` donne le dossier par défaut ([parDefaut]), sinon un stockage
+  /// [StockageTelechargements.personnalise].
+  ///
+  /// Ne touche pas au disque (sauf `path_provider` pour le dossier par
+  /// défaut) et ne lève donc pas d'erreur si le dossier choisi est
+  /// injoignable : appeler ensuite [estDossierRacineAccessible] pour
+  /// prévenir le client.
+  static Future<StockageTelechargements> depuisReglage(
+    String? dossierChoisi,
+  ) async {
+    final choisi = dossierChoisi?.trim() ?? '';
+    if (choisi.isEmpty) {
+      return parDefaut();
+    }
+    return StockageTelechargements.personnalise(choisi);
+  }
+
   /// Dossier racine de tous les fichiers hors-ligne.
   final String dossierRacine;
+
+  /// `true` si le dossier racine a été choisi par le client
+  /// ([StockageTelechargements.personnalise]) : il doit alors exister et
+  /// contenir le fichier repère, sinon il est considéré comme inaccessible.
+  final bool estPersonnalise;
 
   /// Chemins des `.zip.part` en cours d'écriture par cette instance.
   ///
@@ -377,6 +411,463 @@ class StockageTelechargements {
   }
 
   // ---------------------------------------------------------------------
+  // Dossier racine choisi par le client (disque local, NAS, partage)
+  // ---------------------------------------------------------------------
+
+  /// Vérifie qu'un dossier candidat peut servir de dossier racine et renvoie
+  /// son chemin normalisé (à enregistrer dans les paramètres).
+  ///
+  /// Étapes : le chemin doit être complet (absolu) et ne pas désigner un
+  /// fichier ; le dossier est créé s'il n'existe pas ; un fichier d'essai
+  /// ([prefixeFichierEssaiEcriture]) est écrit, relu (taille) puis supprimé ;
+  /// enfin le fichier repère [nomFichierMarqueurRacine] est écrit s'il
+  /// manque (voir [StockageTelechargements.personnalise]).
+  ///
+  /// Accepte un chemin local, un lecteur réseau (`Z:\Mangas`), un chemin UNC
+  /// (`\\nas\partage\Mangas`) ou un dossier monté (`/mnt/nas/mangas`).
+  ///
+  /// Lève une [ErreurStockage] au message clair, avec sa
+  /// [ErreurStockage.nature] : [NatureErreurStockage.cheminInvalide],
+  /// [NatureErreurStockage.dossierInaccessible],
+  /// [NatureErreurStockage.reseauIndisponible],
+  /// [NatureErreurStockage.accesRefuse] ou
+  /// [NatureErreurStockage.espaceInsuffisant].
+  ///
+  /// LIMITE : un partage réseau éteint peut mettre plusieurs secondes à
+  /// répondre (délai du système) ; l'appelant affiche une attente.
+  static Future<String> validerDossier(String chemin) async {
+    final dossier = _normaliserCandidat(chemin);
+    try {
+      final type = await FileSystemEntity.type(dossier);
+      if (type == FileSystemEntityType.file) {
+        throw ErreurStockage(
+          'Ce chemin désigne un fichier et non un dossier.',
+          chemin: dossier,
+          nature: NatureErreurStockage.cheminInvalide,
+        );
+      }
+      if (type == FileSystemEntityType.notFound) {
+        await Directory(dossier).create(recursive: true);
+      }
+      await _essayerEcriture(dossier);
+      await _ecrireMarqueur(dossier);
+      return dossier;
+    } on FileSystemException catch (erreur) {
+      throw erreurDisque(
+        'Ce dossier ne peut pas recevoir les téléchargements',
+        erreur,
+        chemin: dossier,
+      );
+    }
+  }
+
+  /// Nettoie un chemin candidat (espaces, `..`, séparateurs) et vérifie qu'il
+  /// est complet. Lève une [ErreurStockage] sinon.
+  static String _normaliserCandidat(String chemin) {
+    final brut = chemin.trim();
+    if (brut.isEmpty || !chemins.isAbsolute(brut)) {
+      throw ErreurStockage(
+        'Choisissez un chemin complet : dossier du disque, lecteur réseau, '
+        'partage réseau ou dossier monté.',
+        chemin: chemin,
+        nature: NatureErreurStockage.cheminInvalide,
+      );
+    }
+    return chemins.normalize(brut);
+  }
+
+  /// Écrit un petit fichier d'essai dans [dossier], vérifie sa taille puis le
+  /// supprime (même en cas d'échec).
+  static Future<void> _essayerEcriture(String dossier) async {
+    final essai = File(
+      chemins.join(
+        dossier,
+        '$prefixeFichierEssaiEcriture'
+        '${DateTime.now().microsecondsSinceEpoch}',
+      ),
+    );
+    final octets = Uint8List.fromList(List<int>.generate(1024, (i) => i % 256));
+    try {
+      await essai.writeAsBytes(octets, flush: true);
+      final relus = await essai.length();
+      if (relus != octets.length) {
+        throw ErreurStockage(
+          "Le fichier d'essai a été mal écrit ($relus octets sur "
+          '${octets.length}) : ce dossier n\'est pas fiable.',
+          chemin: essai.path,
+        );
+      }
+    } finally {
+      await _supprimerSansErreur(essai);
+    }
+  }
+
+  /// Écrit le fichier repère dans [dossier] s'il n'existe pas encore.
+  static Future<void> _ecrireMarqueur(String dossier) async {
+    final marqueur = File(chemins.join(dossier, nomFichierMarqueurRacine));
+    if (!await marqueur.exists()) {
+      await marqueur.writeAsString(contenuMarqueurRacine, flush: true);
+    }
+  }
+
+  /// `true` si le dossier racine est joignable : il existe et, pour un
+  /// dossier [estPersonnalise], contient le fichier repère.
+  ///
+  /// Pour le dossier par défaut, `false` signifie seulement qu'aucun fichier
+  /// n'a encore été écrit (il sera créé à la première écriture) ou que le
+  /// support est absent. Ne lève jamais d'erreur.
+  ///
+  /// À appeler au démarrage pour prévenir le client, et **avant** tout
+  /// contrôle qui remettrait des chapitres à « non téléchargé » : si le
+  /// dossier est injoignable, toutes les archives sembleraient perdues.
+  Future<bool> estDossierRacineAccessible() async {
+    try {
+      if (!await Directory(dossierRacine).exists()) {
+        return false;
+      }
+      if (estPersonnalise) {
+        return await File(chemins.join(dossierRacine, nomFichierMarqueurRacine))
+            .exists();
+      }
+      return true;
+    } on FileSystemException {
+      return false;
+    }
+  }
+
+  /// Lève une [ErreurStockage] ([ErreurStockage.estDossierInaccessible])
+  /// si le dossier [estPersonnalise] est injoignable ; sans effet pour le
+  /// dossier par défaut (créé à la première écriture).
+  ///
+  /// Appelée par toutes les écritures, suppressions et lectures d'archive :
+  /// un dossier choisi par le client n'est jamais recréé ailleurs en silence.
+  Future<void> verifierDossierRacine() async {
+    if (!estPersonnalise || await estDossierRacineAccessible()) {
+      return;
+    }
+    throw ErreurStockage(
+      'Le dossier des téléchargements est inaccessible : '
+      '${NatureErreurStockage.dossierInaccessible.explication} Les chapitres '
+      'téléchargés redeviendront lisibles quand il sera de nouveau '
+      'accessible.',
+      chemin: dossierRacine,
+      nature: NatureErreurStockage.dossierInaccessible,
+    );
+  }
+
+  /// Déplace les archives (`<type>/<titre>/*.zip`) et les couvertures
+  /// (`<type>/<titre>/couverture.<ext>`) du dossier racine actuel vers
+  /// [nouveauDossier], et renvoie le bilan.
+  ///
+  /// [nouveauDossier] est d'abord accepté par [validerDossier] (création,
+  /// essai d'écriture, fichier repère). Puis, fichier par fichier :
+  /// 1. si la cible existe déjà avec la même taille, elle n'est pas recopiée
+  ///    (reprise d'un déplacement interrompu) ;
+  /// 2. sinon le fichier est copié dans un `.part` à côté de la cible, sa
+  ///    taille est vérifiée, puis il est renommé : une copie interrompue
+  ///    n'est jamais prise pour une archive complète ;
+  /// 3. l'ancien fichier n'est supprimé qu'après ces étapes.
+  ///
+  /// Les `.zip.part`, le fichier repère et tout ce qui n'est pas dans un
+  /// dossier de type (`exports/`, `rapports/`…) restent en place. L'ancien
+  /// dossier racine n'est jamais supprimé ; seuls les dossiers de titre et de
+  /// type devenus vides le sont. Les chemins enregistrés en base
+  /// (`nom_archive`) sont relatifs : la base n'a pas à changer, il suffit
+  /// ensuite d'enregistrer le nouveau dossier et de créer un
+  /// [StockageTelechargements.personnalise] dessus.
+  ///
+  /// [surProgression] reçoit `(faits, total)` : d'abord `(0, total)`, puis
+  /// après chaque fichier.
+  ///
+  /// Lève une [ErreurStockage] si un téléchargement est en cours dans cette
+  /// instance (les mettre en pause avant), si le dossier actuel est
+  /// inaccessible, si le nouveau dossier est l'actuel, est contenu dans
+  /// l'actuel ou le contient ([NatureErreurStockage.cheminInvalide]), ou si
+  /// une copie échoue (disque plein, accès refusé, réseau absent : voir
+  /// [ErreurStockage.nature]). Les fichiers déjà déplacés restent dans le
+  /// nouveau dossier ; relancer la méthode reprend où elle s'est arrêtée.
+  ///
+  /// LIMITE : `dart:io` ne donne pas l'espace libre d'un disque : un disque
+  /// plein n'est détecté qu'à la copie. Deux chemins différents désignant le
+  /// même dossier (lecteur mappé et chemin UNC du même partage, lien
+  /// symbolique) ne sont pas reconnus comme identiques.
+  Future<BilanDeplacement> deplacerArchivesVers(
+    String nouveauDossier, {
+    void Function(int faits, int total)? surProgression,
+  }) async {
+    if (_ecrituresOuvertes.isNotEmpty || _chapitresEnEcriture.isNotEmpty) {
+      throw ErreurStockage(
+        'Des téléchargements sont en cours : mettez-les en pause avant de '
+        'déplacer les archives.',
+        chemin: dossierRacine,
+      );
+    }
+    final candidat = _normaliserCandidat(nouveauDossier);
+    final source = chemins.normalize(chemins.absolute(dossierRacine));
+    if (chemins.equals(source, candidat) ||
+        chemins.isWithin(source, candidat) ||
+        chemins.isWithin(candidat, source)) {
+      throw ErreurStockage(
+        "Le nouveau dossier ne doit être ni l'actuel, ni un dossier qu'il "
+        'contient, ni un dossier qui le contient.',
+        chemin: candidat,
+        nature: NatureErreurStockage.cheminInvalide,
+      );
+    }
+    await verifierDossierRacine();
+    final destination = await validerDossier(candidat);
+    final fichiers = await _listerFichiersADeplacer(source);
+    final total = fichiers.length;
+    surProgression?.call(0, total);
+    var copies = 0;
+    var dejaPresents = 0;
+    var octets = 0;
+    final dossiersTouches = <String>{};
+    for (var i = 0; i < total; i++) {
+      final relatif = fichiers[i];
+      final ancien = File(chemins.joinAll(<String>[source, ...relatif]));
+      final cible = chemins.joinAll(<String>[destination, ...relatif]);
+      final copie = await _deplacerFichier(ancien, cible, relatif);
+      if (copie == null) {
+        dejaPresents++;
+      } else {
+        copies++;
+        octets += copie;
+      }
+      dossiersTouches.add(chemins.dirname(ancien.path));
+      surProgression?.call(i + 1, total);
+    }
+    await _retirerDossiersVides(dossiersTouches);
+    return BilanDeplacement(
+      nombreFichiers: total,
+      nombreCopies: copies,
+      nombreDejaPresents: dejaPresents,
+      octetsCopies: octets,
+    );
+  }
+
+  /// Chemins relatifs (`[type, titre, fichier]`) des archives et couvertures
+  /// à déplacer depuis [source], triés pour un ordre stable.
+  ///
+  /// Seuls les dossiers de type connus ([TypeTitre]) sont parcourus : les
+  /// dossiers `exports/`, `rapports/` ou tout fichier du client à la racine
+  /// ne sont jamais touchés.
+  Future<List<List<String>>> _listerFichiersADeplacer(String source) async {
+    final resultat = <List<String>>[];
+    try {
+      for (final type in TypeTitre.values) {
+        final dossierType = Directory(chemins.join(source, type.name));
+        if (!await dossierType.exists()) {
+          continue;
+        }
+        await for (final titre in dossierType.list(followLinks: false)) {
+          if (titre is! Directory) {
+            continue;
+          }
+          await for (final entite in titre.list(followLinks: false)) {
+            if (entite is! File) {
+              continue;
+            }
+            final nom = chemins.basename(entite.path);
+            // `.zip` exclut d'office les `.zip.part` (écritures interrompues).
+            final estArchive =
+                nom.endsWith(extensionArchiveChapitre) &&
+                nom.length > extensionArchiveChapitre.length;
+            if (estArchive || _nomCouverture.hasMatch(nom)) {
+              resultat.add(<String>[
+                type.name,
+                chemins.basename(titre.path),
+                nom,
+              ]);
+            }
+          }
+        }
+      }
+    } on FileSystemException catch (erreur) {
+      throw erreurDisque(
+        'Impossible de lister les archives à déplacer',
+        erreur,
+        chemin: source,
+      );
+    }
+    resultat.sort((a, b) => a.join('/').compareTo(b.join('/')));
+    return resultat;
+  }
+
+  /// Copie [ancien] vers [cible] (via un `.part` vérifié puis renommé), puis
+  /// supprime [ancien]. Renvoie le nombre d'octets copiés, ou `null` si la
+  /// cible existait déjà avec la même taille (pas de copie).
+  Future<int?> _deplacerFichier(
+    File ancien,
+    String cible,
+    List<String> relatif,
+  ) async {
+    final nomLisible = relatif.join(separateurNomArchive);
+    final partiel = File('$cible$suffixeArchivePartielle');
+    try {
+      final taille = await ancien.length();
+      final fichierCible = File(cible);
+      int? copie;
+      if (!await fichierCible.exists() ||
+          await fichierCible.length() != taille) {
+        await Directory(chemins.dirname(cible)).create(recursive: true);
+        await ancien.copy(partiel.path);
+        final tailleCopiee = await partiel.length();
+        if (tailleCopiee != taille) {
+          await _supprimerSansErreur(partiel);
+          throw ErreurStockage(
+            'La copie de « $nomLisible » est incomplète ($tailleCopiee octets '
+            'sur $taille) ; l\'ancien fichier est conservé. Relancez le '
+            'déplacement pour reprendre.',
+            chemin: cible,
+          );
+        }
+        // Renommage dans le même dossier : la cible n'apparaît que complète
+        // (et remplace une copie précédente de taille différente).
+        await partiel.rename(cible);
+        copie = taille;
+      }
+      await ancien.delete();
+      return copie;
+    } on FileSystemException catch (erreur) {
+      await _supprimerSansErreur(partiel);
+      throw erreurDisque(
+        'Impossible de déplacer « $nomLisible ». Les fichiers déjà déplacés '
+        'restent dans le nouveau dossier ; relancez le déplacement pour '
+        'reprendre',
+        erreur,
+        chemin: erreur.path ?? cible,
+      );
+    }
+  }
+
+  /// Supprime les dossiers de titre de [dossiers] devenus vides, puis leurs
+  /// dossiers de type s'ils sont vides à leur tour. Jamais le dossier racine.
+  /// Les erreurs sont ignorées : un dossier vide restant est sans gravité.
+  Future<void> _retirerDossiersVides(Set<String> dossiers) async {
+    final types = <String>{};
+    for (final dossier in dossiers) {
+      try {
+        await _supprimerDossierSiVide(Directory(dossier));
+      } on FileSystemException {
+        // Dossier encore utilisé ou verrouillé : on le laisse.
+      }
+      types.add(chemins.dirname(dossier));
+    }
+    for (final type in types) {
+      try {
+        await _supprimerDossierSiVide(Directory(type));
+      } on FileSystemException {
+        // Idem.
+      }
+    }
+  }
+
+  /// Construit une [ErreurStockage] à partir d'une erreur du système de
+  /// fichiers : `<debut> : <explication de la nature>`, avec la nature
+  /// déduite de [natureDepuisErreurFichier].
+  static ErreurStockage erreurDisque(
+    String debut,
+    FileSystemException erreur, {
+    String? chemin,
+  }) {
+    final nature = natureDepuisErreurFichier(erreur);
+    final explication = nature == NatureErreurStockage.autre
+        ? (erreur.osError?.message.trim().isNotEmpty ?? false)
+              ? '${erreur.osError!.message.trim()}.'
+              : '${erreur.message}.'
+        : nature.explication;
+    return ErreurStockage(
+      '$debut : $explication',
+      chemin: chemin ?? erreur.path,
+      cause: erreur,
+      nature: nature,
+    );
+  }
+
+  /// Déduit la nature d'une erreur du système de fichiers à partir de son
+  /// type et du code d'erreur du système.
+  ///
+  /// Les codes diffèrent selon le système (5 = accès refusé sous Windows,
+  /// erreur d'entrée-sortie sous Linux) : [surWindows] force le système
+  /// (tests), sinon `Platform.isWindows`. Codes Windows : `winerror.h` ;
+  /// codes Linux et Android : `errno.h`.
+  static NatureErreurStockage natureDepuisErreurFichier(
+    FileSystemException erreur, {
+    bool? surWindows,
+  }) {
+    final code = erreur.osError?.errorCode;
+    if (code != null) {
+      final nature = (surWindows ?? Platform.isWindows)
+          ? _codesWindows[code]
+          : _codesPosix[code];
+      if (nature != null) {
+        return nature;
+      }
+    }
+    if (erreur is PathAccessException) {
+      return NatureErreurStockage.accesRefuse;
+    }
+    if (erreur is PathNotFoundException) {
+      return NatureErreurStockage.dossierInaccessible;
+    }
+    return NatureErreurStockage.autre;
+  }
+
+  /// Codes d'erreur Windows (`winerror.h`) reconnus.
+  static const Map<int, NatureErreurStockage> _codesWindows =
+      <int, NatureErreurStockage>{
+        2: NatureErreurStockage.dossierInaccessible, // FILE_NOT_FOUND
+        3: NatureErreurStockage.dossierInaccessible, // PATH_NOT_FOUND
+        5: NatureErreurStockage.accesRefuse, // ACCESS_DENIED
+        15: NatureErreurStockage.dossierInaccessible, // INVALID_DRIVE
+        19: NatureErreurStockage.accesRefuse, // WRITE_PROTECT
+        21: NatureErreurStockage.dossierInaccessible, // NOT_READY
+        39: NatureErreurStockage.espaceInsuffisant, // HANDLE_DISK_FULL
+        51: NatureErreurStockage.reseauIndisponible, // REM_NOT_LIST
+        53: NatureErreurStockage.reseauIndisponible, // BAD_NETPATH
+        54: NatureErreurStockage.reseauIndisponible, // NETWORK_BUSY
+        59: NatureErreurStockage.reseauIndisponible, // UNEXP_NET_ERR
+        64: NatureErreurStockage.reseauIndisponible, // NETNAME_DELETED
+        65: NatureErreurStockage.accesRefuse, // NETWORK_ACCESS_DENIED
+        67: NatureErreurStockage.reseauIndisponible, // BAD_NET_NAME
+        112: NatureErreurStockage.espaceInsuffisant, // DISK_FULL
+        121: NatureErreurStockage.reseauIndisponible, // SEM_TIMEOUT
+        123: NatureErreurStockage.cheminInvalide, // INVALID_NAME
+        161: NatureErreurStockage.cheminInvalide, // BAD_PATHNAME
+        206: NatureErreurStockage.cheminInvalide, // FILENAME_EXCED_RANGE
+        1222: NatureErreurStockage.reseauIndisponible, // NO_NETWORK
+        1231: NatureErreurStockage.reseauIndisponible, // NETWORK_UNREACHABLE
+        1326: NatureErreurStockage.accesRefuse, // LOGON_FAILURE
+        2250: NatureErreurStockage.reseauIndisponible, // NOT_CONNECTED
+      };
+
+  /// Codes d'erreur Linux et Android (`errno.h`) reconnus.
+  static const Map<int, NatureErreurStockage> _codesPosix =
+      <int, NatureErreurStockage>{
+        1: NatureErreurStockage.accesRefuse, // EPERM
+        2: NatureErreurStockage.dossierInaccessible, // ENOENT
+        5: NatureErreurStockage.dossierInaccessible, // EIO (support retiré)
+        6: NatureErreurStockage.dossierInaccessible, // ENXIO
+        13: NatureErreurStockage.accesRefuse, // EACCES
+        19: NatureErreurStockage.dossierInaccessible, // ENODEV
+        20: NatureErreurStockage.cheminInvalide, // ENOTDIR
+        28: NatureErreurStockage.espaceInsuffisant, // ENOSPC
+        30: NatureErreurStockage.accesRefuse, // EROFS
+        36: NatureErreurStockage.cheminInvalide, // ENAMETOOLONG
+        100: NatureErreurStockage.reseauIndisponible, // ENETDOWN
+        101: NatureErreurStockage.reseauIndisponible, // ENETUNREACH
+        103: NatureErreurStockage.reseauIndisponible, // ECONNABORTED
+        104: NatureErreurStockage.reseauIndisponible, // ECONNRESET
+        107: NatureErreurStockage.reseauIndisponible, // ENOTCONN
+        110: NatureErreurStockage.reseauIndisponible, // ETIMEDOUT
+        112: NatureErreurStockage.reseauIndisponible, // EHOSTDOWN
+        113: NatureErreurStockage.reseauIndisponible, // EHOSTUNREACH
+        116: NatureErreurStockage.reseauIndisponible, // ESTALE
+        122: NatureErreurStockage.espaceInsuffisant, // EDQUOT
+      };
+
+  // ---------------------------------------------------------------------
   // Écriture
   // ---------------------------------------------------------------------
 
@@ -470,6 +961,8 @@ class StockageTelechargements {
     String? cle;
     var reussi = false;
     try {
+      // Dossier choisi injoignable (NAS éteint) : refus, sans rien créer.
+      await verifierDossierRacine();
       final nomImpose =
           chapitre.nomArchive ??
           (chapitre.estTelecharge
@@ -502,11 +995,7 @@ class StockageTelechargements {
       reussi = true;
       return ecriture;
     } on FileSystemException catch (erreur) {
-      throw ErreurStockage(
-        "Impossible de créer l'archive du chapitre.",
-        chemin: erreur.path,
-        cause: erreur,
-      );
+      throw erreurDisque("Impossible de créer l'archive du chapitre", erreur);
     } finally {
       if (!reussi) {
         _chapitresEnEcriture.remove(identite);
@@ -621,8 +1110,18 @@ class StockageTelechargements {
   /// enregistré existe. Sert au contrôle de cohérence au démarrage.
   ///
   /// Lève une [ErreurStockage] si [nomArchive] est invalide.
+  ///
+  /// Pour un dossier [estPersonnalise] injoignable, lève une [ErreurStockage]
+  /// ([ErreurStockage.estDossierInaccessible]) au lieu de répondre `false` :
+  /// l'archive n'est pas perdue, le chapitre ne doit pas être remis à « non
+  /// téléchargé ».
   Future<bool> existeArchive(String nomArchive) async {
-    return File(cheminDepuisNomArchive(nomArchive)).exists();
+    final chemin = cheminDepuisNomArchive(nomArchive);
+    if (await File(chemin).exists()) {
+      return true;
+    }
+    await verifierDossierRacine();
+    return false;
   }
 
   /// Nombre de pages (`img<n>.<ext>`) de l'archive du chapitre.
@@ -753,6 +1252,9 @@ class StockageTelechargements {
     T Function(Archive archive) lecture,
   ) async {
     if (!await File(chemin).exists()) {
+      // Dossier choisi injoignable : erreur « inaccessible », plus utile au
+      // client que « pas téléchargé ».
+      await verifierDossierRacine();
       throw ErreurStockage(
         'Le chapitre n\'est pas téléchargé.',
         chemin: chemin,
@@ -835,6 +1337,7 @@ class StockageTelechargements {
         chemin: cheminFinal,
       );
     }
+    await verifierDossierRacine();
     final cheminPartiel = '$cheminFinal$suffixeArchivePartielle';
     final cle = chemins.normalize(cheminPartiel);
     if (!_ecrituresOuvertes.add(cle)) {
@@ -857,10 +1360,10 @@ class StockageTelechargements {
       return cheminFinal;
     } on FileSystemException catch (erreur) {
       await _supprimerSansErreur(File(cheminPartiel));
-      throw ErreurStockage(
-        "Impossible d'enregistrer la couverture.",
+      throw erreurDisque(
+        "Impossible d'enregistrer la couverture",
+        erreur,
         chemin: cheminFinal,
-        cause: erreur,
       );
     } finally {
       _ecrituresOuvertes.remove(cle);
@@ -1007,11 +1510,14 @@ class StockageTelechargements {
 
   /// Comme [supprimerChapitre], à partir du chemin relatif enregistré.
   ///
-  /// Lève une [ErreurStockage] si [nomArchive] est invalide ou si le disque
-  /// refuse la suppression.
+  /// Lève une [ErreurStockage] si [nomArchive] est invalide, si le disque
+  /// refuse la suppression ou si le dossier [estPersonnalise] est injoignable
+  /// ([ErreurStockage.estDossierInaccessible] : l'archive resterait sinon
+  /// orpheline sur le NAS alors que la base la croirait supprimée).
   Future<bool> supprimerArchive(String nomArchive) async {
     final chemin = cheminDepuisNomArchive(nomArchive);
     final cheminPartiel = '$chemin$suffixeArchivePartielle';
+    await verifierDossierRacine();
     try {
       final archive = File(chemin);
       final existait = await archive.exists();
@@ -1026,10 +1532,10 @@ class StockageTelechargements {
       await _supprimerDossierSiVide(Directory(chemins.dirname(chemin)));
       return existait;
     } on FileSystemException catch (erreur) {
-      throw ErreurStockage(
-        'Impossible de supprimer l\'archive du chapitre.',
+      throw erreurDisque(
+        "Impossible de supprimer l'archive du chapitre",
+        erreur,
         chemin: chemin,
-        cause: erreur,
       );
     }
   }
@@ -1067,7 +1573,9 @@ class StockageTelechargements {
       throw ArgumentError.value(ancienneteMinimale, 'ancienneteMinimale');
     }
     final racine = Directory(dossierRacine);
-    if (!await racine.exists()) {
+    // Dossier choisi injoignable : rien à nettoyer (et surtout pas un point
+    // de montage vide sur le disque local).
+    if (!await estDossierRacineAccessible()) {
       return 0;
     }
     final limite = ancienneteMinimale == null
@@ -1111,6 +1619,52 @@ class StockageTelechargements {
     }
     return nombre;
   }
+}
+
+/// Bilan d'un déplacement des archives vers un autre dossier racine
+/// ([StockageTelechargements.deplacerArchivesVers]).
+class BilanDeplacement {
+  /// Crée un bilan.
+  const BilanDeplacement({
+    required this.nombreFichiers,
+    required this.nombreCopies,
+    required this.nombreDejaPresents,
+    required this.octetsCopies,
+  });
+
+  /// Nombre de fichiers (archives et couvertures) traités.
+  final int nombreFichiers;
+
+  /// Nombre de fichiers réellement copiés.
+  final int nombreCopies;
+
+  /// Nombre de fichiers déjà présents dans le nouveau dossier avec la même
+  /// taille (déplacement repris après une interruption) : non recopiés.
+  final int nombreDejaPresents;
+
+  /// Nombre total d'octets copiés.
+  final int octetsCopies;
+
+  @override
+  bool operator ==(Object other) =>
+      other is BilanDeplacement &&
+      other.nombreFichiers == nombreFichiers &&
+      other.nombreCopies == nombreCopies &&
+      other.nombreDejaPresents == nombreDejaPresents &&
+      other.octetsCopies == octetsCopies;
+
+  @override
+  int get hashCode => Object.hash(
+    nombreFichiers,
+    nombreCopies,
+    nombreDejaPresents,
+    octetsCopies,
+  );
+
+  @override
+  String toString() =>
+      'BilanDeplacement($nombreFichiers fichiers, $nombreCopies copiés, '
+      '$nombreDejaPresents déjà présents, $octetsCopies octets)';
 }
 
 /// Écriture en cours de l'archive d'un chapitre, ouverte par

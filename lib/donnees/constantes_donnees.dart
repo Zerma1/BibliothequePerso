@@ -77,3 +77,22 @@ const int tailleMaxCouverture = 20 * 1024 * 1024;
 /// Le tampon par défaut d'`OutputFileStream` fait 1 Mio ; on le réduit car
 /// chaque page est de toute façon vidée sur le disque dès qu'elle est ajoutée.
 const int tailleTamponEcritureArchive = 256 * 1024;
+
+/// Nom du fichier repère écrit à la racine d'un dossier de téléchargements
+/// choisi par le client (`StockageTelechargements.personnalise`).
+///
+/// Sa présence prouve que le dossier joint est bien le bon : sous Linux ou
+/// Android, un point de montage dont le partage est démonté reste un dossier
+/// vide qui existe ; sans ce repère, les archives seraient recréées en
+/// silence sur le disque local.
+const String nomFichierMarqueurRacine = '.bibliotheque_perso';
+
+/// Contenu du fichier repère ([nomFichierMarqueurRacine]), lisible par le
+/// client s'il ouvre le dossier.
+const String contenuMarqueurRacine =
+    'Dossier des téléchargements de Bibliothèque perso. '
+    'Ne pas supprimer ce fichier.\n';
+
+/// Préfixe du fichier d'essai écrit puis supprimé pour vérifier qu'un dossier
+/// candidat accepte l'écriture (`.essai_ecriture_<horodatage>`).
+const String prefixeFichierEssaiEcriture = '.essai_ecriture_';
