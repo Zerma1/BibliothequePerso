@@ -176,6 +176,31 @@ class ServiceAjoutSite {
     }
   }
 
+  /// Motif court (en français, sans préfixe) du refus de la valeur
+  /// [valeur] pour le réglage [cle], ou `null` si elle est acceptée ou vide
+  /// (un réglage vide revient à l'heuristique). Fonction pure, pour afficher
+  /// l'erreur sous le champ du formulaire.
+  ///
+  /// - [cleMotifNumeroChapitre] : « expression régulière invalide » ;
+  /// - autre clé (sélecteur CSS) : motif de
+  ///   `ConfigurationGenerique.erreurSelecteur`, même parseur que la lecture
+  ///   du site (« syntaxe CSS invalide », « non pris en charge par
+  ///   l'application ») ; LIMITE : ce parseur est tolérant (voir sa
+  ///   documentation).
+  static String? erreurReglageGenerique(String cle, String valeur) {
+    final propre = valeur.trim();
+    if (propre.isEmpty) return null;
+    if (cle == cleMotifNumeroChapitre) {
+      try {
+        RegExp(propre);
+        return null;
+      } on FormatException {
+        return 'expression régulière invalide';
+      }
+    }
+    return ConfigurationGenerique.erreurSelecteur(propre);
+  }
+
   /// Vérifie et nettoie des réglages de site générique (JSON de
   /// `Source.configurationSelecteurs`). Fonction pure.
   ///
@@ -220,16 +245,11 @@ class ServiceAjoutSite {
       }
       final propre = brut.trim();
       if (propre.isEmpty) continue;
-      if (cle == cleMotifNumeroChapitre) {
-        try {
-          RegExp(propre);
-        } on FormatException catch (erreur) {
-          throw ErreurService(
-            '${libelleReglageGenerique(cle)} : « $propre » n\'est pas une '
-            'expression régulière valide.',
-            cause: erreur,
-          );
-        }
+      final refus = erreurReglageGenerique(cle, propre);
+      if (refus != null) {
+        throw ErreurService(
+          '${libelleReglageGenerique(cle)} : « $propre » refusé ($refus).',
+        );
       }
       remplis[cle] = propre;
     }

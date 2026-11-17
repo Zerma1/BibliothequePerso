@@ -88,6 +88,19 @@ class _Bibliotheque {
   }
 }
 
+/// Dépôt des titres qui refuse toute écriture par une [ArgumentError]
+/// (valeur refusée par un dépôt, cas rare mais possible).
+class _DepotTitresPiege extends DepotTitres {
+  const _DepotTitresPiege(super.base);
+
+  @override
+  Future<Titre> enregistrerTitre(
+    Titre titre, {
+    List<String>? categories,
+    DatabaseExecutor? executeur,
+  }) => throw ArgumentError.value(titre.nom, 'titre', 'refusé par le test');
+}
+
 void main() {
   late _Bibliotheque origine;
   late _Bibliotheque cible;
@@ -127,7 +140,8 @@ void main() {
         nom: 'Générique',
         urlBase: 'https://generique.example',
         typeSource: TypeSource.generique,
-        configurationSelecteurs: '{"titre":"h1","chapitres":"ul.ch a"}',
+        configurationSelecteurs:
+            '{"selecteurTitre":"h1","selecteurLiensChapitres":"ul.ch a"}',
       ),
     );
     final protege = await origine.sources.enregistrerSource(
@@ -230,7 +244,7 @@ void main() {
       );
       expect(
         generique!.configurationSelecteurs,
-        '{"titre":"h1","chapitres":"ul.ch a"}',
+        '{"selecteurTitre":"h1","selecteurLiensChapitres":"ul.ch a"}',
       );
       final titre = await cible.titres.chargerTitreParUrl(urlTitreReference);
       expect(titre!.resume, 'Une jeune fille élevée par la Mort.');
@@ -763,6 +777,79 @@ void main() {
       expect(resultat.titresAjoutes, 1);
       expect(resultat.erreurs.single.nom, 'Inconnu');
       expect(await cible.titres.chargerTitres(), hasLength(1));
+    });
+
+    test('des réglages de site générique refusés : site importé sans '
+        'réglages, erreur notée ; un site non générique n\'en garde '
+        'aucun', () async {
+      final json = jsonEncode(<String, Object?>{
+        'format': 'bibliotheque_perso-export',
+        'version': 2,
+        'sources': <Object?>[
+          <String, Object?>{
+            'nom': 'Générique',
+            'urlBase': 'https://generique.example',
+            'type': 'generique',
+            'configurationSelecteurs':
+                '{"selecteurLiensChapitres":"a[href","selecteurTitre":"h1"}',
+          },
+          <String, Object?>{
+            'nom': 'Madara',
+            'urlBase': 'https://madara.example',
+            'type': 'madara',
+            'configurationSelecteurs': '{"selecteurTitre":"h1"}',
+          },
+          <String, Object?>{
+            'nom': 'Propre',
+            'urlBase': 'https://propre.example',
+            'type': 'generique',
+            'configurationSelecteurs':
+                '{"selecteurTitre":" h1 ","inconnue":"x"}',
+          },
+        ],
+        'titres': <Object?>[],
+      });
+
+      final resultat = await cible.import.importerTexte(json);
+
+      expect(resultat.sitesAjoutes, 3);
+      final erreur = resultat.erreurs.single;
+      expect(erreur.partie, PartieImport.site);
+      expect(erreur.nom, 'Générique');
+      expect(erreur.message, contains('Liens des chapitres'));
+      Future<String?> reglagesDe(String url) async =>
+          (await cible.sources.chargerSourceParUrl(url))!
+              .configurationSelecteurs;
+      expect(await reglagesDe('https://generique.example'), isNull);
+      expect(await reglagesDe('https://madara.example'), isNull);
+      expect(
+        await reglagesDe('https://propre.example'),
+        '{"selecteurTitre":"h1"}',
+      );
+    });
+
+    test('une ArgumentError pendant un import tout ou rien devient une '
+        'ErreurService « annulé »', () async {
+      await remplirOrigine();
+      final json = await origine.json();
+      final service = ServiceImport(
+        depotSources: cible.sources,
+        depotTitres: _DepotTitresPiege(cible.base),
+        depotTitresSources: cible.liens,
+        depotListes: cible.listes,
+        depotCategories: DepotCategories(cible.base),
+        gestionnaireTransactions: GestionnaireTransactions(cible.base),
+      );
+
+      await expectLater(
+        service.importerTexte(json),
+        throwsA(
+          isA<ErreurService>()
+              .having((e) => e.message, 'message', contains('annulé'))
+              .having((e) => e.cause, 'cause', isA<ArgumentError>()),
+        ),
+      );
+      expect(await cible.sources.chargerSources(), isEmpty);
     });
 
     test('un import transactionnel avec ServiceParametres mais sans '

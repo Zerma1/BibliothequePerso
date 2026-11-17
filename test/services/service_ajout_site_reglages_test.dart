@@ -87,6 +87,56 @@ void main() {
     });
   });
 
+  group('erreurReglageGenerique', () {
+    test('motif court, sans préfixe, ou null si accepté', () {
+      expect(
+        ServiceAjoutSite.erreurReglageGenerique('selecteurTitre', 'h1'),
+        isNull,
+      );
+      expect(
+        ServiceAjoutSite.erreurReglageGenerique('selecteurTitre', '  '),
+        isNull,
+      );
+      expect(
+        ServiceAjoutSite.erreurReglageGenerique(
+          'selecteurLiensChapitres',
+          'a[href',
+        ),
+        ConfigurationGenerique.erreurSelecteur('a[href'),
+      );
+      expect(
+        ServiceAjoutSite.erreurReglageGenerique(
+          'selecteurLiensChapitres',
+          'a[href',
+        ),
+        isNotNull,
+      );
+      expect(
+        ServiceAjoutSite.erreurReglageGenerique(
+          ServiceAjoutSite.cleMotifNumeroChapitre,
+          '(',
+        ),
+        'expression régulière invalide',
+      );
+      expect(
+        ServiceAjoutSite.erreurReglageGenerique(
+          ServiceAjoutSite.cleMotifNumeroChapitre,
+          r'ch-(\d+)',
+        ),
+        isNull,
+      );
+    });
+
+    test('un sélecteur refusé nomme le champ à l\'enregistrement', () {
+      expect(
+        () => ServiceAjoutSite.normaliserReglagesGeneriques(
+          '{"selecteurImagesChapitre":"img[src"}',
+        ),
+        erreurNommant("Images d'un chapitre"),
+      );
+    });
+  });
+
   group('normaliserReglagesGeneriques', () {
     test('des réglages vides donnent null', () {
       for (final vide in <String?>[

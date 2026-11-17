@@ -833,16 +833,28 @@ class ServiceImport {
     } on ErreurService {
       rethrow;
     } on Exception catch (erreur) {
-      // La transaction est déjà annulée : rien n'a été écrit.
-      final detail = erreur is ErreurBaseDeDonnees
-          ? ' (${erreur.message})'
-          : '';
-      throw ErreurService(
-        "L'import a échoué et a été entièrement annulé : rien n'a été "
-        'ajouté à la bibliothèque$detail.',
-        cause: erreur,
-      );
+      throw _importAnnule(erreur);
+    } on ArgumentError catch (erreur) {
+      // Valeur refusée par un dépôt (relancée en mode tout ou rien) : même
+      // annulation qu'une erreur de base, jamais une erreur brute à
+      // l'interface.
+      throw _importAnnule(erreur);
     }
+  }
+
+  /// Erreur rendue quand l'import « tout ou rien » a été annulé par
+  /// [erreur] (la transaction est déjà annulée : rien n'a été écrit).
+  static ErreurService _importAnnule(Object erreur) {
+    final detail = switch (erreur) {
+      ErreurBaseDeDonnees(:final message) => ' ($message)',
+      ArgumentError(:final message) => ' ($message)',
+      _ => '',
+    };
+    return ErreurService(
+      "L'import a échoué et a été entièrement annulé : rien n'a été "
+      'ajouté à la bibliothèque$detail.',
+      cause: erreur,
+    );
   }
 
   /// Import proprement dit. [executeur] : transaction de l'import « tout ou
@@ -854,9 +866,16 @@ class ServiceImport {
     DatabaseExecutor? executeur, {
     bool? appliquerReglagesGeneraux,
   }) async {
+    // LIMITE : pendant l'import « tout ou rien », la transaction tient la
+    // base : les autres lectures de l'application (bibliothèque, mises à
+    // jour, téléchargements) attendent sa fin. Un import de quelques
+    // centaines de titres ne dure que quelques secondes (aucun réseau).
     final ecriture = _Ecriture(this, contenu, executeur);
     // Lu avant toute écriture : « bibliothèque vide » décrit l'appareil tel
     // que le client l'avait avant l'import.
+    // LIMITE : charge tous les titres pour savoir s'il y en a un ; aucun
+    // dépôt n'offre de comptage léger (besoin : `DepotTitres.compterTitres`
+    // ou `existeTitre`, avec exécuteur). Coût unique, base seulement.
     final bibliothequeVide = (await _depotTitres.chargerTitres(
       executeur: executeur,
     )).isEmpty;
@@ -989,6 +1008,7 @@ class _Ecriture {
         );
         continue;
       }
+      final reglages = _reglagesVerifies(importee, type);
       try {
         final source = await _service._depotSources.enregistrerSource(
           Source(
@@ -996,7 +1016,7 @@ class _Ecriture {
             urlBase: importee.urlBase,
             typeSource: type,
             langueParDefaut: importee.langues.join(','),
-            configurationSelecteurs: importee.configurationSelecteurs,
+            configurationSelecteurs: reglages,
             estActive: importee.estActive,
           ),
           executeur: _executeur,
@@ -1014,6 +1034,34 @@ class _Ecriture {
           ),
         );
       }
+    }
+  }
+
+  /// Réglages du site [importee] à enregistrer, vérifiés comme dans
+  /// « Sources » (`ServiceAjoutSite.normaliserReglagesGeneriques`) :
+  /// seulement pour un site générique (les autres types n'en lisent pas),
+  /// sinon `null`. Des réglages refusés ne bloquent pas le site : il est
+  /// importé **sans réglages** (l'adaptateur devine alors), et le refus est
+  /// noté sur sa ligne pour que le client les corrige dans « Sources ». Ce
+  /// refus est décidé avant l'écriture : il n'annule rien.
+  String? _reglagesVerifies(SourceImportee importee, TypeSource type) {
+    if (type != TypeSource.generique) return null;
+    try {
+      return ServiceAjoutSite.normaliserReglagesGeneriques(
+        importee.configurationSelecteurs,
+      );
+    } on ErreurService catch (erreur) {
+      erreurs.add(
+        ErreurLigneImport(
+          partie: PartieImport.site,
+          numero: importee.numero,
+          nom: importee.nom,
+          message:
+              'importé sans ses réglages avancés, refusés : '
+              '${erreur.message}',
+        ),
+      );
+      return null;
     }
   }
 
