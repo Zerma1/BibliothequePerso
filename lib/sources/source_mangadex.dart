@@ -52,6 +52,7 @@ import 'constantes_sources.dart';
 import 'couverture_site.dart';
 import 'erreur_source.dart';
 import 'lecture_json.dart';
+import 'outils_sources.dart';
 import 'rapport_erreur_source.dart';
 import 'sites_externes.dart' as sites_externes;
 import 'source_site.dart';
@@ -876,24 +877,10 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
   /// `double.tryParse` accepte aussi « NaN », « Infinity » et « 1e3 », qui ne
   /// sont pas des numéros de chapitre : seule la forme décimale simple
   /// (chiffres, éventuellement « . » ou « , » puis chiffres) est lue. Un texte
-  /// en notation scientifique ou non fini donne 0.
-  static double convertirNumero(String? texte) {
-    if (texte == null) {
-      return 0;
-    }
-    final t = texte.trim();
-    // Notation scientifique (« 1e3 », « 2.5E-1 ») : refusée plutôt que lue
-    // comme « 1 » ou « 1000 ».
-    if (RegExp(r'\d[eE][+-]?\d').hasMatch(t)) {
-      return 0;
-    }
-    final correspondance = RegExp(r'\d+(?:[.,]\d+)?').firstMatch(t);
-    if (correspondance == null) {
-      return 0;
-    }
-    final valeur = double.parse(correspondance.group(0)!.replaceAll(',', '.'));
-    return valeur.isFinite ? valeur : 0;
-  }
+  /// en notation scientifique ou non fini donne 0. Voir
+  /// `OutilsSources.convertirNumero`, partagé avec les autres adaptateurs.
+  static double convertirNumero(String? texte) =>
+      OutilsSources.convertirNumero(texte);
 
   /// Variantes régionales des langues de chapitres (`translatedLanguage`)
   /// listées par docs/3-enumerations : `zh-hk`, `pt-br`, `es-la`.

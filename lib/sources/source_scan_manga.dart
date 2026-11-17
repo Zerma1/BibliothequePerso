@@ -26,8 +26,8 @@ import '../modeles/titre_alternatif.dart';
 import 'client_http_poli.dart';
 import 'constantes_sources.dart';
 import 'erreur_source.dart';
+import 'outils_sources.dart';
 import 'rapport_erreur_source.dart';
-import 'source_mangadex.dart';
 import 'source_site.dart';
 
 /// Lecture de Scan-Manga : fiche et liste des chapitres depuis la page HTML
@@ -467,16 +467,16 @@ class SourceScanManga implements SourceSite {
       caseSensitive: false,
     ).firstMatch(texteLien);
     if (dansTexte != null) {
-      return SourceMangaDex.convertirNumero(dansTexte.group(1));
+      return OutilsSources.convertirNumero(dansTexte.group(1));
     }
     final dansChemin = RegExp(
       r'-Chapitre-(\d+(?:\.\d+)?)-',
       caseSensitive: false,
     ).firstMatch(chemin);
     if (dansChemin != null) {
-      return SourceMangaDex.convertirNumero(dansChemin.group(1));
+      return OutilsSources.convertirNumero(dansChemin.group(1));
     }
-    return SourceMangaDex.convertirNumero(texteLien);
+    return OutilsSources.convertirNumero(texteLien);
   }
 
   /// Texte propre de [element] : ses nœuds texte directs, sans le texte de

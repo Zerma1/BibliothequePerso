@@ -1,7 +1,9 @@
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/sources/fabrique_sources.dart';
+import 'package:bibliotheque_perso/sources/source_madara.dart';
 import 'package:bibliotheque_perso/sources/source_mangadex.dart';
+import 'package:bibliotheque_perso/sources/source_mangathemesia.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
@@ -101,12 +103,31 @@ void main() {
     expect((adaptateur as SourceMangaDex).languesChapitres, isEmpty);
   });
 
-  test('les types sans adaptateur (étape 6) lèvent une ErreurSource', () {
-    for (final type in <TypeSource>[
-      TypeSource.madara,
-      TypeSource.mangaThemesia,
-      TypeSource.generique,
-    ]) {
+  test('Madara et MangaThemesia ont leur adaptateur', () {
+    expect(
+      fabrique.creer(
+        const Source(
+          nom: 'Site',
+          urlBase: 'https://exemple.org',
+          typeSource: TypeSource.madara,
+        ),
+      ),
+      isA<SourceMadara>(),
+    );
+    expect(
+      fabrique.creer(
+        const Source(
+          nom: 'Site',
+          urlBase: 'https://exemple.org',
+          typeSource: TypeSource.mangaThemesia,
+        ),
+      ),
+      isA<SourceMangaThemesia>(),
+    );
+  });
+
+  test('le type générique (sans adaptateur) lève une ErreurSource', () {
+    for (final type in <TypeSource>[TypeSource.generique]) {
       expect(
         () => fabrique.creer(
           Source(nom: 'Site', urlBase: 'https://exemple.org', typeSource: type),

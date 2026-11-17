@@ -111,3 +111,9 @@ Décisions de l'orchestrateur :
 - [x] M1. developpeur-donnees : migration 7 — table `titres_sources(id, id_titre → titres CASCADE, id_source → sources, url_titre, est_principale, date_ajout, UNIQUE(id_titre, id_source), UNIQUE(url_titre))` remplie depuis `titres.id_source/url_titre` pour les titres existants ; colonne `chapitres.id_source` (NULL = site principal pour les anciennes lignes, remplie par la migration) ; dépôt `DepotTitresSources` ; `DepotChapitres` filtre par source.
 - [x] M2. developpeur-services : ajout / retrait d'un site à un titre (vérifie que l'adresse est bien un titre du site, sans le dupliquer ailleurs), actualisation sur tous les sites, politique multi-sites (ordre ci-dessus), mises à jour multi-sites, export (tous les liens).
 - [x] M3. developpeur-interface : fiche — section « Sites » (principal + secondaires, ajouter, retirer, définir comme principal), chapitres avec le nom du site, légende ; filtre « site » dans la liste des chapitres.
+
+## Étape 7 — autres sites
+
+- [x] W1. **webtoons.com** (signalé par le client : https://www.webtoons.com/fr/romance/the-gangster-daughter-of-the-henchman-dukes-family/list?title_no=11499) : diagnostic (HTML lisible ? pagination de la liste des épisodes ? images protégées ?), puis adaptateur `SourceWebtoons` sur le modèle de Scan-Manga : fiche + tous les épisodes, chaque épisode avec `urlExterne` = sa page (« Lire sur WEBTOON ») tant que la récupération des images n'est pas clairement autorisée sans contournement. Langue d'après l'adresse (/fr/, /en/…).
+- [x] W2. Adaptateurs Madara et MangaThemesia (thèmes WordPress courants).
+- [ ] W3. Adaptateur générique par sélecteurs CSS (formulaire de sélecteurs dans « Ajouter un site »).

@@ -247,9 +247,11 @@ void main() {
       );
       await depotSources.enregistrerSource(
         const Source(
-          nom: 'Madara',
+          // Le type générique est le seul encore sans adaptateur (Madara est
+          // lisible depuis l'étape 7).
+          nom: 'Generique',
           urlBase: 'https://madara.test',
-          typeSource: TypeSource.madara,
+          typeSource: TypeSource.generique,
         ),
       );
       await expectLater(

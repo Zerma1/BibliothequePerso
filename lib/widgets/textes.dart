@@ -261,6 +261,8 @@ abstract final class Textes {
         return 'Générique (sélecteurs CSS)';
       case TypeSource.scanManga:
         return 'Scan-Manga (lecture sur le site)';
+      case TypeSource.webtoons:
+        return 'WEBTOON (lecture sur le site)';
     }
   }
 

@@ -25,6 +25,11 @@ enum TypeSource {
   /// le HTML ; les chapitres ne se lisent que sur le site (lien externe,
   /// jamais téléchargés, PLAYBOOK.md section 10).
   scanManga,
+
+  /// WEBTOON (`webtoons.com`) : fiches et listes d'épisodes lues dans le
+  /// HTML ; les épisodes ne se lisent que sur le site (lien externe, jamais
+  /// téléchargés, PLAYBOOK.md section 10).
+  webtoons,
 }
 
 /// Un site configuré dans l'application.
