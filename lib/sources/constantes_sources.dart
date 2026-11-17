@@ -111,6 +111,16 @@ const int nombreMaxPagesListeWebtoons = 100;
 /// liste d'un titre : la fiche et les épisodes en viennent tous deux.
 const Duration dureeCachePageWebtoons = Duration(minutes: 1);
 
+/// Durée pendant laquelle `SourceMadara` et `SourceMangaThemesia` réutilisent
+/// la page d'un titre qu'ils viennent de télécharger : la fiche et la liste
+/// des chapitres viennent de la même page.
+const Duration dureeCachePageWordPress = Duration(minutes: 1);
+
+/// Nombre maximal de pages de la liste des chapitres d'un titre Madara
+/// (requêtes `ajax/chapters/?t=<n>`, 1 s entre deux pages) : au-delà, les
+/// chapitres suivants ne sont pas listés.
+const int nombreMaxPagesChapitresMadara = 50;
+
 /// Texte dont la présence dans l'URL de base désigne un serveur MangaDex
 /// (docs/04-chapter/retrieving-chapter : signaler chaque image chargée
 /// « from a base url that doesn't contain mangadex.org »).

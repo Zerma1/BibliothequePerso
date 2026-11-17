@@ -311,6 +311,61 @@ class ClientHttpPoli {
     }
   }
 
+  /// Envoie un formulaire par `POST` vers [uri] (corps
+  /// `application/x-www-form-urlencoded` fait des [champs], vide si aucun)
+  /// et renvoie le corps de la réponse décodé en texte.
+  ///
+  /// Sert aux requêtes de **lecture** publiques que les thèmes WordPress font
+  /// en `POST` depuis leurs propres pages (liste des chapitres de Madara :
+  /// `<titre>/ajax/chapters/` ou `admin-ajax.php`), exactement comme le
+  /// navigateur d'un lecteur : l'en-tête `X-Requested-With: XMLHttpRequest`
+  /// est celui qu'envoie jQuery.
+  ///
+  /// Mêmes règles que les autres requêtes (User-Agent, [referer], créneau par
+  /// domaine, délai d'expiration, [ErreurSource] en cas d'échec).
+  /// Nouvelles tentatives : aucune par défaut (un `POST` n'est en général
+  /// pas idempotent, voir [envoyerJson]) ; l'appelant qui sait que la requête
+  /// ne fait que lire passe [nouvellesTentatives] (plafonné à
+  /// [nombreNouvellesTentatives]).
+  Future<String> envoyerFormulaire(
+    Uri uri, {
+    Map<String, String> champs = const <String, String>{},
+    String? referer,
+    String? userAgent,
+    Map<String, String> enTetes = const <String, String>{},
+    LimiteRequetes? limite,
+    int nouvellesTentatives = 0,
+  }) async {
+    // `Uri(queryParameters: …).query` encode les champs comme un formulaire
+    // HTML (clé=valeur&…, caractères spéciaux échappés).
+    final corps = champs.isEmpty
+        ? const <int>[]
+        : utf8.encode(Uri(queryParameters: champs).query);
+    final (reponse, _) = await _executer(
+      uri,
+      referer: referer,
+      userAgent: userAgent,
+      enTetes: <String, String>{
+        'X-Requested-With': 'XMLHttpRequest',
+        ...enTetes,
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+      },
+      limite: limite,
+      nouvellesTentatives: _plafonnerTentatives(nouvellesTentatives),
+      corpsPost: corps,
+    );
+    try {
+      return _decoderTexte(reponse);
+    } on FormatException catch (erreur) {
+      throw ErreurSource(
+        uri.toString(),
+        'Réponse illisible (encodage du texte)',
+        cause: erreur,
+        codeStatut: reponse.statusCode,
+      );
+    }
+  }
+
   /// Ferme le client HTTP sous-jacent (à appeler à la fermeture de l'app).
   void fermer() => _client.close();
 

@@ -4,7 +4,9 @@ library;
 import '../modeles/source.dart';
 import 'client_http_poli.dart';
 import 'erreur_source.dart';
+import 'source_madara.dart';
 import 'source_mangadex.dart';
+import 'source_mangathemesia.dart';
 import 'source_scan_manga.dart';
 import 'source_site.dart';
 import 'source_webtoons.dart';
@@ -27,8 +29,8 @@ class FabriqueSources {
   /// garde le défaut du site (MangaDex : tout sauf `pornographic`). Ignoré
   /// par les sites qui n'ont pas cette notion.
   ///
-  /// Lève une [ErreurSource] si le type n'a pas encore d'adaptateur (Madara,
-  /// MangaThemesia et générique arrivent à l'étape 6 de la feuille de route).
+  /// Lève une [ErreurSource] si le type n'a pas encore d'adaptateur (le type
+  /// générique, par sélecteurs CSS, n'est pas encore écrit).
   SourceSite creer(Source source, {List<String>? niveauxContenuRecherche}) {
     switch (source.typeSource) {
       case TypeSource.mangaDex:
@@ -62,12 +64,24 @@ class FabriqueSources {
         // aucun filtre de langue ni de niveau de contenu.
         return SourceWebtoons(_client);
       case TypeSource.madara:
+        // Langue des chapitres lue dans la page (`<html lang>`) ; les langues
+        // de la source ne servent que de repli.
+        return SourceMadara(
+          _client,
+          urlBase: source.urlBase,
+          languesPreferees: source.langueParDefaut,
+        );
       case TypeSource.mangaThemesia:
+        return SourceMangaThemesia(
+          _client,
+          urlBase: source.urlBase,
+          languesPreferees: source.langueParDefaut,
+        );
       case TypeSource.generique:
         throw ErreurSource(
           source.urlBase,
           'Aucun adaptateur disponible pour le type '
-          "« ${source.typeSource.name} » (prévu à l'étape 6)",
+          "« ${source.typeSource.name} » (sélecteurs CSS : prévu à l'étape 7)",
           typeDetecte: source.typeSource,
         );
     }
