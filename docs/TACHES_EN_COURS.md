@@ -168,7 +168,8 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
 
 ## Suite autonome (2026-11-17, pour la 0.2.2-test)
 
-- [ ] V1. Données : `Source.copierAvec` peut vider `configurationSelecteurs` ; exécution en une transaction pour l'import (exécuteur facultatif dans les dépôts + `executerEnTransaction`)
-- [ ] V2. Services : import tout-ou-rien (une transaction) ; validation des sélecteurs CSS avant enregistrement ; liste des clés de réglages génériques exposée
-- [ ] V3. Interface : modifier les sélecteurs CSS dans « Modifier le site » (et pouvoir les vider) ; clés lues depuis les services
-- [ ] V4. `docs/CRITERES_LECTURE_SITES.md` (critères de lecture expliqués au client)
+- [x] V1. Données : `Source.copierAvec` peut vider `configurationSelecteurs` ; exécution en une transaction pour l'import (exécuteur facultatif dans les dépôts + `executerEnTransaction`)
+- [x] V2. Services : import tout-ou-rien (une transaction) ; validation des sélecteurs CSS avant enregistrement ; liste des clés de réglages génériques exposée
+- [x] V3. Interface : modifier les sélecteurs CSS dans « Modifier le site » (et pouvoir les vider) ; clés lues depuis les services
+- [x] V4. `docs/CRITERES_LECTURE_SITES.md` (critères de lecture expliqués au client)
+- Reste possible : `DepotTitres.compterTitres` (import : savoir si la bibliothèque est vide sans tout charger) ; validation CSS plus stricte que le parseur (décision client).
