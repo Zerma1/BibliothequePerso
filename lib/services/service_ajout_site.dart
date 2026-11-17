@@ -22,10 +22,18 @@ class ServiceAjoutSite {
     return '${uri.scheme}://${uri.host.toLowerCase()}$port';
   }
 
-  /// Propose un nom affichable à partir de l'hôte (`www.` retiré).
+  /// Propose un nom affichable à partir de l'hôte (`www.` et `m.` retirés).
+  ///
+  /// Sert aussi à reconnaître un site déjà configuré : la version mobile d'un
+  /// site (`m.webtoons.com`) est le même site que `www.webtoons.com`.
   static String proposerNom(Uri uri) {
     final hote = uri.host.toLowerCase();
-    return hote.startsWith('www.') ? hote.substring(4) : hote;
+    for (final prefixe in const <String>['www.', 'm.']) {
+      if (hote.startsWith(prefixe)) {
+        return hote.substring(prefixe.length);
+      }
+    }
+    return hote;
   }
 
   /// Ajoute le site désigné par [url] et renvoie la source enregistrée.

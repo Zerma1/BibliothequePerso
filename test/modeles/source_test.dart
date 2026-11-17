@@ -32,6 +32,13 @@ void main() {
     expect(Source.depuisMap(map).typeSource, TypeSource.scanManga);
   });
 
+  test('le type webtoons est stocké sous son nom', () {
+    expect(TypeSource.values, contains(TypeSource.webtoons));
+    final map = source.copierAvec(typeSource: TypeSource.webtoons).versMap();
+    expect(map['type_source'], 'webtoons');
+    expect(Source.depuisMap(map).typeSource, TypeSource.webtoons);
+  });
+
   test('copierAvec, == et hashCode sont cohérents', () {
     final inactive = source.copierAvec(estActive: false);
     expect(inactive.estActive, isFalse);

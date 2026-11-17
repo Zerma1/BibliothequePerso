@@ -7,6 +7,7 @@ import 'erreur_source.dart';
 import 'source_mangadex.dart';
 import 'source_scan_manga.dart';
 import 'source_site.dart';
+import 'source_webtoons.dart';
 
 /// Crée l'adaptateur [SourceSite] qui correspond au type d'une [Source].
 ///
@@ -56,6 +57,10 @@ class FabriqueSources {
         // Site francophone : chapitres en « fr » sauf suffixe contraire dans
         // leur adresse ; pas de filtre de langue ni de niveau de contenu.
         return SourceScanManga(_client);
+      case TypeSource.webtoons:
+        // Langue des épisodes lue dans l'adresse du titre (/fr/, /en/…) :
+        // aucun filtre de langue ni de niveau de contenu.
+        return SourceWebtoons(_client);
       case TypeSource.madara:
       case TypeSource.mangaThemesia:
       case TypeSource.generique:

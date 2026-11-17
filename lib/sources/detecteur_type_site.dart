@@ -10,6 +10,7 @@ import 'client_http_poli.dart';
 import 'erreur_source.dart';
 import 'source_mangadex.dart';
 import 'source_scan_manga.dart';
+import 'source_webtoons.dart';
 
 /// Détermine le [TypeSource] d'un site : d'abord par le domaine, puis en
 /// analysant le HTML de la page d'accueil.
@@ -44,12 +45,18 @@ class DetecteurTypeSite {
   ///
   /// `scan-manga.com` (et `www.scan-manga.com`) → [TypeSource.scanManga] :
   /// adaptateur dédié, aucune requête vers la page d'accueil.
+  ///
+  /// `webtoons.com` (`www.` ou `m.`) → [TypeSource.webtoons] : adaptateur
+  /// dédié, aucune requête.
   static TypeSource? verifierDomaine(Uri uri) {
     if (SourceMangaDex.estHoteMangaDex(uri.host)) {
       return TypeSource.mangaDex;
     }
     if (SourceScanManga.estHoteScanManga(uri.host)) {
       return TypeSource.scanManga;
+    }
+    if (SourceWebtoons.estHoteWebtoons(uri.host)) {
+      return TypeSource.webtoons;
     }
     return null;
   }

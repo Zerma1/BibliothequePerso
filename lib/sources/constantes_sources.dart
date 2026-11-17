@@ -98,6 +98,19 @@ const String domaineScanManga = 'scan-manga.com';
 /// de la même page, inutile de la demander deux fois de suite au site.
 const Duration dureeCachePageScanManga = Duration(minutes: 1);
 
+/// Domaine de WEBTOON (sans `www.` ni `m.`), reconnu sans requête par
+/// `DetecteurTypeSite.verifierDomaine`.
+const String domaineWebtoons = 'webtoons.com';
+
+/// Nombre maximal de pages de la liste des épisodes lues pour un titre
+/// WEBTOON (une dizaine d'épisodes par page, 1 s entre deux pages) : au-delà,
+/// les épisodes les plus anciens ne sont pas listés.
+const int nombreMaxPagesListeWebtoons = 100;
+
+/// Durée pendant laquelle `SourceWebtoons` réutilise la première page de la
+/// liste d'un titre : la fiche et les épisodes en viennent tous deux.
+const Duration dureeCachePageWebtoons = Duration(minutes: 1);
+
 /// Texte dont la présence dans l'URL de base désigne un serveur MangaDex
 /// (docs/04-chapter/retrieving-chapter : signaler chaque image chargée
 /// « from a base url that doesn't contain mangadex.org »).

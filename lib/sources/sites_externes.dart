@@ -11,6 +11,9 @@ const Map<String, String> nomsSitesExternes = <String, String>{
   'mangaplus.shueisha.co.jp': 'MANGA Plus',
   'viz.com': 'VIZ',
   'scan-manga.com': 'Scan-Manga',
+  'webtoons.com': 'WEBTOON',
+  // Version mobile du site : même nom commercial.
+  'm.webtoons.com': 'WEBTOON',
 };
 
 /// Nom lisible du site de [urlExterne] pour le bouton « Lire sur `site` » :
