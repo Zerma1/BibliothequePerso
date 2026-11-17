@@ -197,7 +197,8 @@ void main() {
       await remplir();
       final json = lireJson((await service.exporter()).cheminJson);
       expect(json['format'], 'bibliotheque_perso-export');
-      expect(json['version'], 1);
+      // Format 2 : sélecteurs CSS des sites et résumé des titres (import).
+      expect(json['version'], 2);
       expect(json['dateExport'], dateExport.toUtc().toIso8601String());
       expect(json['versionApplication'], '0.1.0');
       final reglages = json['reglages']! as Map<String, Object?>;
@@ -229,6 +230,7 @@ void main() {
         'type': 'mangaDex',
         'langues': <String>['fr', 'en'],
         'active': true,
+        'configurationSelecteurs': null,
       });
       final autre = sources.firstWhere((s) => s['nom'] == "L'Étagère");
       expect(autre['active'], isFalse);

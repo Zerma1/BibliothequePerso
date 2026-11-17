@@ -443,13 +443,18 @@ class ServiceExport {
   /// Contenu du fichier JSON (indenté, UTF-8 sans échappement des accents).
   /// Fonction pure.
   ///
-  /// Format `versionFormatExport` (1) : `format`, `version`, `dateExport`
+  /// Format `versionFormatExport` (2) : `format`, `version`, `dateExport`
   /// (UTC, ISO 8601), `versionApplication`, `reglages` (`langues`,
   /// `niveauxContenu`), `listes`, `sources`, `titres`. Les titres désignent
   /// leur site par son nom **et** son `urlBase` (unique), pour que l'import
   /// retrouve le bon site même si deux sites portent le même nom. Champ
   /// `sites` (étape 8, ajout compatible) : tous les sites du titre (`url`,
-  /// `source`, `urlSource`, `principal`), le principal d'abord.
+  /// `source`, `urlSource`, `principal`, `lienSeul`), le principal d'abord.
+  ///
+  /// Format 2 (import R8, compatible) : `sources[].configurationSelecteurs`
+  /// (sélecteurs CSS d'un site générique) et `titres[].resume`. Un fichier
+  /// de format 1 reste lisible par l'import : ces champs y sont seulement
+  /// absents.
   static String produireJson(ContenuExport contenu) {
     Map<String, Object?> versSource(Source source) => <String, Object?>{
       'nom': source.nom,
@@ -459,6 +464,9 @@ class ServiceExport {
         source.langueParDefaut,
       ),
       'active': source.estActive,
+      // Format 2 (import R8) : sans ses sélecteurs CSS, un site générique
+      // recréé par l'import serait illisible.
+      'configurationSelecteurs': source.configurationSelecteurs,
     };
 
     Map<String, Object?>? versChapitre(Chapitre? chapitre) => chapitre == null
@@ -518,6 +526,9 @@ class ServiceExport {
         'couvertureChoisie': couvertureExportee(titre.couvertureChoisie),
         'auteur': titre.auteur,
         'statut': titre.statut,
+        // Format 2 (import R8) : la fiche importée est complète sans
+        // relire le site.
+        'resume': titre.resume,
         'dernierChapitreLu': versChapitre(exporte.dernierChapitreLu),
         'nombreChapitres': exporte.nombreChapitres,
       };
