@@ -149,4 +149,4 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
   (Android) ; **Windows : `webview_flutter` ne fonctionne pas sous Windows**, il faut le paquet
   `webview_windows` (moteur WebView2 de Windows 11) ; Linux : navigateur par défaut. Bouton
   « Ouvrir dans le navigateur » toujours présent.
-- [ ] T6. Plan de tests pour le client sur la branche `test` (fait par l'orchestrateur).
+- [x] T6. Plan de tests pour le client sur la branche `test` (fait par l'orchestrateur).
