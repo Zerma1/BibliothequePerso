@@ -33,6 +33,9 @@ Après chaque publication sur `main` (version `X.Y.Z`), la version suivante pren
 branche `test` et attend les retours de l'équipe de test. Une nouvelle itération de corrections
 pendant les tests augmente **Z** (`0.2.1-test`, `0.2.2-test`…). Une fois validée, la version
 passe sur `main` sous le même numéro sans « -test » (`0.2.1`).
+**Deux versions de test n'ont jamais le même numéro** : chaque nouvelle publication sur
+`test` augmente au moins Z, même s'il ne s'agit que de tests (`0.2.0-test`, `0.2.1-test`,
+`0.2.2-test`…). Une étiquette déjà publiée n'est jamais réutilisée ni déplacée.
 **Chaque version de test contient sa liste de tests à effectuer** :
 `testUtilisateur/plan_de_tests_vX.Y.Z-test.md`, et les retours vont dans
 `testUtilisateur/retour/vX.Y.Z-test/`.
