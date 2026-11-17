@@ -41,6 +41,7 @@ import 'services/constantes_services.dart' show nomDossierRapports;
 import 'services/service_ajout_site.dart';
 import 'services/service_bibliotheque.dart';
 import 'services/service_export.dart';
+import 'services/service_import.dart';
 import 'services/planification_mises_a_jour.dart';
 import 'services/service_mises_a_jour.dart';
 import 'services/service_parametres.dart';
@@ -93,10 +94,14 @@ class ServicesApplication {
     required this.serviceTelechargement,
     required this.serviceRapportsErreur,
     required this.serviceExport,
+    required this.serviceImport,
   });
 
   /// Export des titres et des sites (section « Sauvegarde et export »).
   final ServiceExport serviceExport;
+
+  /// Réimport d'un export JSON (même section).
+  final ServiceImport serviceImport;
 
   /// Export des rapports d'erreur (ajout d'un site ou d'un titre échoué).
   final ServiceRapportsErreur serviceRapportsErreur;
@@ -226,6 +231,15 @@ ServicesApplication assemblerServices(
       serviceParametres: serviceParametres,
       versionApplication: versionApplication,
       depotTitresSources: depotTitresSources,
+    ),
+    // Réimport d'un export JSON (Paramètres → Sauvegarde et export).
+    serviceImport: ServiceImport(
+      depotSources: depotSources,
+      depotTitres: depotTitres,
+      depotTitresSources: depotTitresSources,
+      depotListes: depotListes,
+      depotCategories: DepotCategories(base),
+      serviceParametres: serviceParametres,
     ),
   );
 }
@@ -483,6 +497,7 @@ Future<void> demarrer() async {
       serviceParametres: services.serviceParametres,
       serviceRapportsErreur: services.serviceRapportsErreur,
       serviceExport: services.serviceExport,
+      serviceImport: services.serviceImport,
     );
   } catch (erreur, pile) {
     debugPrint('Démarrage impossible : $erreur\n$pile');
@@ -508,6 +523,7 @@ Widget construireApplication({
   required ServiceParametres serviceParametres,
   ServiceRapportsErreur? serviceRapportsErreur,
   ServiceExport? serviceExport,
+  ServiceImport? serviceImport,
 }) {
   // Les états sont fournis au-dessus de MaterialApp : les écrans ouverts par
   // Navigator et les boîtes de dialogue y ont accès.
@@ -526,7 +542,11 @@ Widget construireApplication({
       // masquée.
       if (serviceExport != null)
         ChangeNotifierProvider<EtatExport>(
-          create: (_) => EtatExport(serviceExport),
+          create: (_) => EtatExport(
+            serviceExport,
+            serviceImport: serviceImport,
+            listerExports: serviceExport.listerExportsJson,
+          ),
         ),
       ChangeNotifierProvider<EtatBibliotheque>(
         create: (_) => EtatBibliotheque(

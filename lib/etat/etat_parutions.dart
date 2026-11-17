@@ -4,7 +4,6 @@
 library;
 
 import '../services/service_bibliotheque.dart';
-import 'constantes_etat.dart';
 import 'description_erreur.dart';
 
 // Les écrans n'importent que les états (PLAYBOOK.md section 4) : la ligne
@@ -50,29 +49,18 @@ class EtatParutions extends EtatNotifiant {
   /// l'onglet.
   int get nombreNouveautes => _parutions.where(estNouveau).length;
 
-  /// `true` si [ligne] porte le badge « Nouveau » : voir [estNouveaute].
+  /// `true` si [ligne] porte le badge « Nouveau » à l'heure de l'état
+  /// (fixée par les tests) : voir [estNouveaute].
   bool estNouveau(ParutionTitre ligne) => estNouveaute(ligne, _maintenant());
 
-  /// Critère du badge « Nouveau » : le dernier chapitre paru n'est pas lu
-  /// **et** il est récent, c'est-à-dire paru depuis moins de
-  /// [dureeNouveaute] avant [maintenant]. La date retenue est celle de
-  /// publication, sinon celle de découverte par l'application (sites sans
-  /// date), sinon la date de la ligne.
-  ///
-  /// Un chapitre publié il y a des années n'est donc jamais « Nouveau »,
-  /// même s'il vient d'être découvert (ajout du titre, nouveau site) :
-  /// retour du client sur la 0.2.0-test. Fonction pure, exposée pour les
-  /// tests.
-  static bool estNouveaute(ParutionTitre ligne, DateTime maintenant) {
-    final chapitre = ligne.dernierChapitre;
-    if (chapitre == null || chapitre.estLu) return false;
-    final date =
-        chapitre.datePublication ??
-        chapitre.dateDetection ??
-        ligne.derniereParution;
-    if (date == null) return false;
-    return maintenant.difference(date) < dureeNouveaute;
-  }
+  /// Critère du badge « Nouveau », défini par le service
+  /// (`ParutionTitre.estNouveaute`) : dernier chapitre non lu, publié depuis
+  /// moins d'une semaine, ou, sans date de publication, découvert après
+  /// l'ajout de son site et depuis moins d'une semaine. Un chapitre publié
+  /// il y a des années n'est jamais « Nouveau » (retour du client sur la
+  /// 0.2.0-test).
+  static bool estNouveaute(ParutionTitre ligne, DateTime maintenant) =>
+      ligne.estNouveaute(maintenant);
 
   /// Heure actuelle (dates relatives « aujourd'hui », « hier »…).
   DateTime get maintenant => _maintenant();

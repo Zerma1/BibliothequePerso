@@ -231,8 +231,10 @@ void main() {
     ParutionTitre ligneDatee({
       DateTime? publication,
       DateTime? detection,
+      DateTime? ajoutSite,
       bool estLu = false,
     }) => ParutionTitre(
+      dateAjoutSite: ajoutSite,
       titre: Titre(id: 1, urlTitre: 'u', nom: 'n'),
       langues: const <String>['fr'],
       derniereParution: publication ?? detection,
@@ -301,6 +303,28 @@ void main() {
       );
     });
 
+    test("sans date de publication : un chapitre reçu à l'ajout du site "
+        "n'est pas « Nouveau », un chapitre découvert ensuite l'est", () {
+      final ajout = _maintenant.subtract(const Duration(days: 2)).toUtc();
+      expect(
+        EtatParutions.estNouveaute(
+          ligneDatee(detection: ajout, ajoutSite: ajout),
+          _maintenant,
+        ),
+        isFalse,
+      );
+      expect(
+        EtatParutions.estNouveaute(
+          ligneDatee(
+            detection: _maintenant.subtract(const Duration(hours: 3)).toUtc(),
+            ajoutSite: ajout,
+          ),
+          _maintenant,
+        ),
+        isTrue,
+      );
+    });
+
     test('un chapitre lu n\'est jamais « Nouveau »', () {
       final ligne = ligneDatee(publication: _maintenant.toUtc(), estLu: true);
       expect(EtatParutions.estNouveaute(ligne, _maintenant), isFalse);
@@ -336,6 +360,6 @@ void main() {
       titre: Titre(urlTitre: 'u', nom: 'n'),
       langues: const <String>['fr'],
     );
-    expect(ligne.aNouveaute, isFalse);
+    expect(EtatParutions.estNouveaute(ligne, _maintenant), isFalse);
   });
 }

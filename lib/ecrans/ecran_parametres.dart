@@ -11,6 +11,7 @@ import '../etat/etat_parametres.dart';
 import '../etat/etat_sources.dart';
 import '../modeles/source.dart';
 import '../widgets/constantes_interface.dart';
+import '../widgets/dialogue_import.dart';
 import '../widgets/editeur_langues.dart';
 import '../widgets/messages.dart';
 import '../widgets/section_pliable.dart';
@@ -801,20 +802,35 @@ class _SectionExport extends StatelessWidget {
       enfants: <Widget>[
         const Text(Textes.explicationExport),
         const SizedBox(height: espacementPetit),
-        Align(
-          alignment: AlignmentDirectional.centerStart,
-          child: FilledButton.tonalIcon(
-            onPressed: etat.estEnCours ? null : () => _exporter(context, etat),
-            icon: etat.estEnCours
-                ? SizedBox.square(
-                    dimension: IconTheme.of(context).size,
-                    child: const CircularProgressIndicator(
-                      strokeWidth: epaisseurIndicateurBouton,
-                    ),
-                  )
-                : const Icon(Icons.save_alt_outlined),
-            label: const Text(Textes.exporterTitresEtSites),
-          ),
+        // Les deux boutons côte à côte, et l'un sous l'autre sur un écran
+        // étroit.
+        Wrap(
+          spacing: espacementPetit,
+          runSpacing: espacementPetit,
+          children: <Widget>[
+            FilledButton.tonalIcon(
+              onPressed: etat.estEnCours || etat.estEnImport
+                  ? null
+                  : () => _exporter(context, etat),
+              icon: etat.estEnCours
+                  ? SizedBox.square(
+                      dimension: IconTheme.of(context).size,
+                      child: const CircularProgressIndicator(
+                        strokeWidth: epaisseurIndicateurBouton,
+                      ),
+                    )
+                  : const Icon(Icons.save_alt_outlined),
+              label: const Text(Textes.exporterTitresEtSites),
+            ),
+            if (etat.peutImporter)
+              OutlinedButton.icon(
+                onPressed: etat.estEnCours || etat.estEnImport
+                    ? null
+                    : () => ouvrirImport(context, etat),
+                icon: const Icon(Icons.upload_file_outlined),
+                label: const Text(Textes.importerUnExport),
+              ),
+          ],
         ),
       ],
     );

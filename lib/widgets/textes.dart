@@ -915,13 +915,14 @@ abstract final class Textes {
 
   /// Résumé de la section « Sauvegarde et export ».
   static const String resumeSauvegardeExport =
-      'Exporter vos titres et vos sites dans des fichiers';
+      'Exporter ou réimporter vos titres et vos sites';
 
   /// Explication de l'export.
   static const String explicationExport =
       "Enregistre la liste de vos titres et de vos sites dans deux fichiers : "
-      "un fichier JSON complet (pour une future réimportation) et un fichier "
-      "Markdown lisible, avec des liens cliquables.";
+      "un fichier JSON complet (que « Importer un export » sait relire, par "
+      "exemple sur un autre appareil) et un fichier Markdown lisible, avec "
+      "des liens cliquables.";
 
   /// Bouton de l'export.
   static const String exporterTitresEtSites =
@@ -929,6 +930,44 @@ abstract final class Textes {
 
   /// Titre de la boîte affichée après un export réussi.
   static const String exportEnregistre = 'Export enregistré';
+
+  /// Bouton et titre du dialogue d'import d'un export.
+  static const String importerUnExport = 'Importer un export';
+
+  /// Explication en tête du dialogue d'import.
+  static const String explicationImport =
+      "Choisissez un export (fichier JSON) : ses titres, sites et listes sont "
+      "ajoutés à votre bibliothèque. Rien n'est supprimé ni remplacé, et un "
+      "titre déjà présent n'est pas ajouté deux fois.";
+
+  /// Intertitre de la liste des exports trouvés.
+  static const String exportsTrouves = 'Exports trouvés';
+
+  /// Aucun export trouvé dans le dossier des exports.
+  static const String aucunExportTrouve =
+      "Aucun export trouvé dans le dossier des exports. Collez le chemin "
+      "d'un fichier ci-dessous.";
+
+  /// Champ du chemin d'un fichier à importer.
+  static const String champCheminImport = 'Chemin du fichier JSON';
+
+  /// Aide du champ du chemin.
+  static const String aideCheminImport =
+      r'Par exemple : C:\Users\moi\Documents\export.json';
+
+  /// Bouton qui lance l'import.
+  static const String importer = 'Importer';
+
+  /// Message pendant l'import.
+  static const String importEnCours = 'Import en cours…';
+
+  /// Titre de la boîte affichée après un import.
+  static const String importTermine = 'Import terminé';
+
+  /// Intertitre des lignes non importées.
+  static String erreursImport(int nombre) => nombre <= 1
+      ? '$nombre ligne non importée :'
+      : '$nombre lignes non importées :';
 
   /// Contenu d'un export réussi.
   static String resumeExport(int titres, int sites) =>

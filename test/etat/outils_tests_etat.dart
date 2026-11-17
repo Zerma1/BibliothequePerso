@@ -36,6 +36,7 @@ import 'package:bibliotheque_perso/services/politique_telechargement.dart';
 import 'package:bibliotheque_perso/services/service_ajout_site.dart';
 import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
 import 'package:bibliotheque_perso/services/service_export.dart';
+import 'package:bibliotheque_perso/services/service_import.dart';
 import 'package:bibliotheque_perso/services/service_mises_a_jour.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
 import 'package:bibliotheque_perso/services/service_rapports_erreur.dart';
@@ -1715,6 +1716,13 @@ class FauxServiceExport implements ServiceExport {
   /// Nombres annoncés par le résultat.
   int nombreSites = 2;
 
+  /// Exports JSON renvoyés par [listerExportsJson].
+  List<String> exportsJson = <String>[];
+
+  @override
+  Future<List<String>> listerExportsJson() async =>
+      List<String>.of(exportsJson);
+
   @override
   String get dossierExports => 'C:/exports';
 
@@ -1738,6 +1746,45 @@ class FauxServiceExport implements ServiceExport {
       ContenuExport(date: date ?? DateTime.utc(2026, 11, 16));
 }
 
+/// Faux service d'import (U1) : renvoie [resultat] ou lève [erreur], et note
+/// les chemins importés.
+class FauxServiceImport implements ServiceImport {
+  /// Chemins reçus par [importerFichier].
+  final List<String> chemins = <String>[];
+
+  /// Erreur levée par l'import, si définie.
+  Object? erreur;
+
+  /// Si défini, l'import attend qu'il soit complété (import en cours).
+  Completer<void>? retenue;
+
+  /// Résultat renvoyé.
+  ResultatImport resultat = const ResultatImport(
+    versionFormat: 1,
+    titresAjoutes: 2,
+    titresIgnores: 1,
+  );
+
+  @override
+  Future<ResultatImport> importerFichier(
+    String chemin, {
+    bool? appliquerReglagesGeneraux,
+  }) async {
+    chemins.add(chemin);
+    final attente = retenue;
+    if (attente != null) await attente.future;
+    final panne = erreur;
+    if (panne != null) throw panne;
+    return resultat;
+  }
+
+  @override
+  Future<ResultatImport> importerTexte(
+    String texte, {
+    bool? appliquerReglagesGeneraux,
+  }) => importerFichier('<texte>');
+}
+
 // ------------------------------------------------------------------ Widgets
 
 /// Enveloppe [enfant] dans les fournisseurs de l'application et un
@@ -1751,6 +1798,8 @@ Widget envelopper(
   FauxServiceParametres? parametres,
   FauxServiceRapportsErreur? rapports,
   FauxServiceExport? export,
+  FauxServiceImport? importation,
+  Future<List<String>> Function()? listerExports,
   bool verifierMisesAJourAuDemarrage = false,
   DateTime Function()? maintenant,
 }) {
@@ -1774,7 +1823,13 @@ Widget envelopper(
       // Section « Sauvegarde et export » seulement si un faux service est
       // fourni (comme l'application sans service).
       if (export != null)
-        ChangeNotifierProvider<EtatExport>(create: (_) => EtatExport(export)),
+        ChangeNotifierProvider<EtatExport>(
+          create: (_) => EtatExport(
+            export,
+            serviceImport: importation,
+            listerExports: listerExports,
+          ),
+        ),
       ChangeNotifierProvider<EtatBibliotheque>(
         create: (_) => EtatBibliotheque(
           bibliotheque,

@@ -19,11 +19,3 @@ const Duration intervalleControleEcheance = Duration(minutes: 15);
 /// Fiche d'un titre : rafraîchissement du compte à rebours des suppressions
 /// prévues (affiché à la minute près).
 const Duration intervalleCompteARebours = Duration(minutes: 1);
-
-/// Onglet Mises à jour : un dernier chapitre non lu ne porte le badge
-/// « Nouveau » que s'il est paru (ou, faute de date de publication, a été
-/// découvert par l'application) depuis moins de cette durée. Sans cette
-/// limite, un titre dont le dernier chapitre date de plusieurs années restait
-/// « Nouveau » tant qu'il n'était pas lu (retour du client sur la
-/// 0.2.0-test).
-const Duration dureeNouveaute = Duration(days: 7);

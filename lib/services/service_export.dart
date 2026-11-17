@@ -216,6 +216,27 @@ class ServiceExport {
 
   // ---------------------------------------------------------------- Export
 
+  /// Chemins des exports JSON présents dans [dossierExports], le plus récent
+  /// d'abord (pour le dialogue d'import). Liste vide si le dossier n'existe
+  /// pas encore.
+  Future<List<String>> listerExportsJson() async {
+    final dossier = Directory(dossierExports);
+    if (!await dossier.exists()) return <String>[];
+    final fichiers = <File>[];
+    await for (final entree in dossier.list(followLinks: false)) {
+      if (entree is File &&
+          chemins.extension(entree.path).toLowerCase() == '.json') {
+        fichiers.add(entree);
+      }
+    }
+    final dates = <String, DateTime>{
+      for (final fichier in fichiers)
+        fichier.path: await fichier.lastModified(),
+    };
+    fichiers.sort((a, b) => dates[b.path]!.compareTo(dates[a.path]!));
+    return <String>[for (final fichier in fichiers) fichier.path];
+  }
+
   /// Lit la bibliothèque et écrit deux fichiers dans [dossierExports] :
   /// `bibliotheque_perso-export-AAAA-MM-JJ_HHMM.json` et `.md` ([date] :
   /// maintenant par défaut, heure locale). Si ces noms sont déjà pris (deux
