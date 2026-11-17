@@ -10,6 +10,7 @@ import '../etat/etat_mises_a_jour.dart';
 import '../etat/etat_parametres.dart';
 import '../etat/etat_sources.dart';
 import '../modeles/source.dart';
+import '../widgets/champs_reglages_generiques.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/dialogue_import.dart';
 import '../widgets/editeur_langues.dart';
@@ -488,6 +489,7 @@ class _SectionSites extends StatelessWidget {
       nom: saisie.nom,
       langues: saisie.langues,
       estActive: saisie.estActive,
+      reglagesGeneriques: saisie.reglagesGeneriques,
     );
     if (context.mounted) {
       afficherResultat(
@@ -602,11 +604,15 @@ class _SaisieSite {
     required this.nom,
     required this.langues,
     required this.estActive,
+    this.reglagesGeneriques,
   });
 
   final String nom;
   final String langues;
   final bool estActive;
+
+  /// Réglages avancés saisis (site générique seulement), sinon `null`.
+  final Map<String, String>? reglagesGeneriques;
 }
 
 /// Dialogue de modification d'un site.
@@ -629,10 +635,29 @@ class _EtatDialogueSite extends State<_DialogueSite> {
   );
   late bool _estActive = widget.source.estActive;
 
+  /// `true` pour un site générique : seul type qui lit les réglages avancés.
+  bool get _estGenerique => widget.source.typeSource == TypeSource.generique;
+
+  /// Réglages enregistrés du site, par clé (préremplissage).
+  late final Map<String, String> _reglagesInitiaux =
+      EtatSources.reglagesGeneriquesDepuisJson(
+        widget.source.configurationSelecteurs,
+      );
+
+  /// Un champ par réglage avancé, prérempli.
+  late final Map<String, TextEditingController> _reglages =
+      <String, TextEditingController>{
+        for (final cle in EtatSources.clesReglagesGeneriques)
+          cle: TextEditingController(text: _reglagesInitiaux[cle] ?? ''),
+      };
+
   @override
   void dispose() {
     _nom.dispose();
     _langues.dispose();
+    for (final controleur in _reglages.values) {
+      controleur.dispose();
+    }
     super.dispose();
   }
 
@@ -648,6 +673,12 @@ class _EtatDialogueSite extends State<_DialogueSite> {
         nom: _nom.text,
         langues: _langues.text,
         estActive: _estActive,
+        reglagesGeneriques: _estGenerique
+            ? <String, String>{
+                for (final entree in _reglages.entries)
+                  entree.key: entree.value.text,
+              }
+            : null,
       ),
     );
   }
@@ -709,6 +740,14 @@ class _EtatDialogueSite extends State<_DialogueSite> {
                     ),
                   ],
                 ),
+                // Sélecteurs CSS : seulement pour un site générique (les
+                // autres types ne les lisent pas). Dépliés d'office si le
+                // site en a déjà, comme les langues ci-dessus.
+                if (_estGenerique)
+                  ChampsReglagesGeneriques(
+                    controleurs: _reglages,
+                    estDeplieeAuDepart: _reglagesInitiaux.isNotEmpty,
+                  ),
               ],
             ),
           ),

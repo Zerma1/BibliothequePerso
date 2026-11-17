@@ -139,18 +139,7 @@ class ServiceAjoutSite {
   /// Libellé français de chaque réglage, par clé (formulaire et messages
   /// d'erreur).
   static const Map<String, String> libellesReglagesGeneriques =
-      <String, String>{
-        'selecteurTitre': 'Nom du titre',
-        'selecteurCouverture': 'Image de couverture',
-        'selecteurResume': 'Résumé',
-        'selecteurAuteur': 'Auteur',
-        'selecteurCategories': 'Catégories (une par élément)',
-        'selecteurLiensChapitres': 'Liens des chapitres',
-        'selecteurImagesChapitre': "Images d'un chapitre",
-        'selecteurLienListeChapitres':
-            'Lien vers la liste des chapitres (depuis un chapitre)',
-        'motifNumeroChapitre': 'Numéro de chapitre (expression régulière)',
-      };
+      ConfigurationGenerique.libelles;
 
   /// Libellé français du réglage [cle] (la clé elle-même si elle est
   /// inconnue).
@@ -198,13 +187,10 @@ class ServiceAjoutSite {
   /// pas une expression régulière valide. La lecture finale passe par
   /// `ConfigurationGenerique.depuisJson`, celle de l'adaptateur générique.
   ///
-  /// LIMITE : les sélecteurs CSS ne sont pas encore analysés ici. Le
-  /// parseur de l'adaptateur (`package:html`, appelé par une méthode privée
-  /// de `SourceGenerique`) n'est exposé par aucune fonction publique de
-  /// `lib/sources`, et les services n'importent pas `package:html`. Un
-  /// sélecteur invalide est donc signalé à la première lecture du site
-  /// (`ErreurSource` qui nomme le réglage). Besoin signalé : une fonction
-  /// publique de vérification d'un sélecteur dans `lib/sources`.
+  /// Les sélecteurs CSS sont vérifiés par `ConfigurationGenerique.depuisJson`
+  /// (même parseur que la lecture du site) : un sélecteur refusé lève une
+  /// [ErreurService] qui nomme le réglage. LIMITE : le parseur est tolérant
+  /// (voir `ConfigurationGenerique.erreurSelecteur`).
   static String? normaliserReglagesGeneriques(String? json) {
     final texte = json?.trim() ?? '';
     if (texte.isEmpty) return null;

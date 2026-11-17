@@ -921,7 +921,16 @@ class FauxServiceAjoutSite implements ServiceAjoutSite {
     if (erreur != null) {
       throw erreur;
     }
-    // Même normalisation que le vrai service.
+    // Même normalisation que le vrai service (réglages vérifiés s'ils ont
+    // changé, effacés s'ils sont vides).
+    final brut = source.configurationSelecteurs;
+    final avant = bibliotheque.sources
+        .where((s) => s.id == source.id)
+        .firstOrNull
+        ?.configurationSelecteurs;
+    final reglages = brut != null && brut == avant
+        ? brut
+        : ServiceAjoutSite.normaliserReglagesGeneriques(brut);
     final modifiee = source.copierAvec(
       nom: source.nom.trim(),
       langueParDefaut: source.langueParDefaut
@@ -929,6 +938,8 @@ class FauxServiceAjoutSite implements ServiceAjoutSite {
           .map((code) => code.trim().toLowerCase())
           .where((code) => code.isNotEmpty)
           .join(','),
+      configurationSelecteurs: reglages,
+      effacerConfigurationSelecteurs: reglages == null,
     );
     sourcesModifiees.add(modifiee);
     final index = bibliotheque.sources.indexWhere((s) => s.id == source.id);

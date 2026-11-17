@@ -1753,24 +1753,8 @@ abstract final class Textes {
       "pour que l'application devine. Un sélecteur CSS désigne un élément "
       'de la page (ex. « h1.titre », « .liste-chapitres a »).';
 
-  /// Libellé d'un réglage avancé d'un site générique, d'après sa clé.
-  static String libelleReglageSelecteur(String cle) => switch (cle) {
-    'selecteurTitre' => 'Nom du titre',
-    'selecteurCouverture' => 'Image de couverture',
-    'selecteurResume' => 'Résumé',
-    'selecteurAuteur' => 'Auteur',
-    'selecteurCategories' => 'Catégories (une par élément)',
-    'selecteurLiensChapitres' => 'Liens des chapitres',
-    'selecteurImagesChapitre' => "Images d'un chapitre",
-    'selecteurLienListeChapitres' =>
-      'Lien vers la liste des chapitres (depuis un chapitre)',
-    'motifNumeroChapitre' => 'Numéro de chapitre (expression régulière)',
-    _ => cle,
-  };
-
-  /// Expression régulière invalide.
-  static const String erreurMotifInvalide =
-      "Cette expression régulière n'est pas valide.";
+  // Libellés des réglages et messages d'erreur : fournis par le service
+  // (`ServiceAjoutSite.libellesReglagesGeneriques`), via `EtatSources`.
 
   // ------------------------------------------------------------- Formatage
 

@@ -8,6 +8,7 @@ import '../etat/description_erreur.dart';
 import '../etat/etat_sources.dart';
 import '../modeles/source.dart';
 import '../widgets/bouton_rapport_erreur.dart';
+import '../widgets/champs_reglages_generiques.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/section_diagnostic_site.dart';
 import '../widgets/textes.dart';
@@ -85,7 +86,20 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
 
   Future<void> _ajouter() async {
     final formulaire = _cleFormulaire.currentState;
+    final reglages = _reglagesUtiles
+        ? <String, String>{
+            for (final entree in _reglages.entries)
+              entree.key: entree.value.text,
+          }
+        : const <String, String>{};
     if (formulaire == null || !formulaire.validate()) {
+      // Un réglage avancé refusé peut se trouver dans la section repliée :
+      // son message (qui nomme le champ) est aussi repris sous le
+      // formulaire, à côté du bouton.
+      setState(() {
+        _messageErreur = EtatSources.erreurReglagesGeneriques(reglages);
+        _erreur = null;
+      });
       return;
     }
     setState(() {
@@ -98,12 +112,7 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
       nom: _nom.text,
       langueParDefaut: _langue.text,
       typeForce: _typeForce,
-      reglagesGeneriques: _reglagesUtiles
-          ? <String, String>{
-              for (final entree in _reglages.entries)
-                entree.key: entree.value.text,
-            }
-          : const <String, String>{},
+      reglagesGeneriques: reglages,
     );
     if (!mounted) {
       return;
@@ -228,39 +237,9 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
                   // eux (heuristiques) ; masqués pour un type qui ne s'en
                   // sert pas.
                   if (_reglagesUtiles)
-                    ExpansionTile(
-                      tilePadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.tune),
-                      // Champs gardés même repliés : leur validation (motif
-                      // invalide) s'applique toujours à l'envoi.
-                      maintainState: true,
-                      title: const Text(Textes.reglagesAvancesSelecteurs),
-                      expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: <Widget>[
-                        const Text(Textes.explicationReglagesSelecteurs),
-                        for (final cle in EtatSources.clesReglagesGeneriques)
-                          Padding(
-                            padding: const EdgeInsets.only(
-                              top: espacementPetit,
-                            ),
-                            child: TextFormField(
-                              key: ValueKey<String>('reglage_$cle'),
-                              controller: _reglages[cle],
-                              enabled: !enCours,
-                              decoration: InputDecoration(
-                                labelText: Textes.libelleReglageSelecteur(cle),
-                                helperText: cle,
-                                border: const OutlineInputBorder(),
-                              ),
-                              validator: cle == EtatSources.cleMotifNumero
-                                  ? (valeur) =>
-                                        EtatSources.motifValide(valeur ?? '')
-                                        ? null
-                                        : Textes.erreurMotifInvalide
-                                  : null,
-                            ),
-                          ),
-                      ],
+                    ChampsReglagesGeneriques(
+                      controleurs: _reglages,
+                      estActive: !enCours,
                     ),
                   const SizedBox(height: espacementGrand),
                   if (enCours) ...<Widget>[
