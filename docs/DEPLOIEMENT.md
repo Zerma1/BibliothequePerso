@@ -43,7 +43,7 @@ Ensuite :
 ```powershell
 git switch test
 git merge --no-ff -X theirs dev -m "Version de test 0.1.0-test.N"
-git diff --quiet dev -- lib test pubspec.yaml docs   # doit être vrai : code identique à dev
+git diff --quiet dev -- lib test pubspec.yaml docs .github   # doit être vrai : code identique à dev
 git tag -a v0.1.0-test.N -m "Version de test 0.1.0-test.N"
 git push origin test --follow-tags
 git switch dev
@@ -96,6 +96,11 @@ temps** sur les machines de GitHub.
 | Étiquette `v*` poussée (`v0.1.0-test.4`, `v0.1.0`…) | idem, puis **release GitHub** avec les trois fichiers : *pre-release* si l'étiquette contient `-test.`, release normale sinon |
 | Lancement manuel | onglet **Actions** → « Compilation » → « Run workflow » (choisir la branche ou l'étiquette) |
 | Push sur `dev` ou `main` | **rien** (économie de minutes) |
+| Push sur `test` ne touchant que `livraisons/` (section 4) | **rien** (`paths-ignore`) |
+
+Le filtre `paths-ignore: livraisons/**` ne concerne que les push de branche : d'après la
+documentation GitHub (« Workflow syntax », `on.push.paths`), *« Path filters are not
+evaluated for pushes of tags »*. Une étiquette `v*` déclenche donc toujours la compilation.
 
 `git push origin test --follow-tags` (section 2) envoie la branche et l'étiquette ensemble :
 GitHub lance alors deux exécutions, mais celle de la branche voit que le commit porte une
@@ -187,11 +192,18 @@ Règles :
   (elles restent dans l'historique et dans leur étiquette).
 
 Pour récupérer la version de test sans Git : sur GitHub, choisir la branche `test`, puis
-« Code » → « Download ZIP », et ouvrir `livraisons/<version>/`.
+« Code » → « Download ZIP », et ouvrir `livraisons/<version>/`. Ce commit de `livraisons/`
+ne relance pas la compilation automatique (`paths-ignore`, section 3 bis).
 
-### Pour une version publiée (`main`) : « release » GitHub
+### « Release » GitHub : créée par le workflow
 
-Les fichiers ne vont pas dans Git sur `main`. On les dépose dans une **« release » GitHub** :
+Pour **chaque étiquette** `v*` poussée (`v0.1.0-test.N` sur `test`, `v0.1.0` sur `main`), la
+release GitHub est désormais **créée automatiquement** par le workflow de compilation
+(section 3 bis), avec les trois fichiers ; *pre-release* pour une version de test. Les
+fichiers de `livraisons/` sur `test` restent le moyen du client pour télécharger en
+déplacement (téléchargement du dépôt), la release étant l'autre accès.
+
+En secours seulement (workflow en échec), la release se crée à la main :
 
 1. Sur https://github.com/Zerma1/BibliothequePerso/releases, « Draft a new release ».
 2. Choisir l'étiquette `v0.1.0-test.1`, branche `test`.
@@ -213,7 +225,8 @@ git push origin main --follow-tags
 git switch dev
 ```
 
-Puis refaire les étapes 3 et 4 depuis `main`, sans cocher « pre-release ».
+La release est créée automatiquement par le workflow à l'étiquette vX.Y.Z (release normale,
+pas *pre-release* : section 3 bis).
 
 ## En cas de problème sur une version de test
 

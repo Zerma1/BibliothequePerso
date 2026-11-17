@@ -18,6 +18,11 @@ on:
   push:
     branches:
       - test
+    # Le commit des fichiers à installer (livraisons/, DEPLOIEMENT.md §4) ne relance pas de
+    # compilation. Sans effet sur les étiquettes : d'après la documentation GitHub (« Workflow
+    # syntax », on.push.paths), « Path filters are not evaluated for pushes of tags ».
+    paths-ignore:
+      - "livraisons/**"
     tags:
       - "v*"
   workflow_dispatch:
@@ -52,6 +57,8 @@ jobs:
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - name: Récupérer le code
+        # Jeton conservé (persist-credentials par défaut) : `git ls-remote origin` ci-dessous
+        # en a besoin si le dépôt est privé. Lecture seule (permissions: contents: read).
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Calculer la version
@@ -84,10 +91,15 @@ jobs:
             # `git push origin test --follow-tags` déclenche deux exécutions (branche et
             # étiquette). Si le commit porte déjà une étiquette v*, on laisse l'exécution de
             # l'étiquette tout faire et on ne compile pas deux fois.
-            if [ "${GITHUB_EVENT_NAME}" = "push" ] && \
-               git ls-remote --tags origin 'refs/tags/v*' | grep -q "^${GITHUB_SHA}[[:space:]]"; then
-              echo "::notice::Commit étiqueté : la compilation est faite par l'exécution de l'étiquette."
-              CONSTRUIRE=false
+            # Sortie de git ls-remote dans une variable, puis test : pas de `grep -q` dans un
+            # tube sous pipefail (grep -q ferme le tube tôt, git peut finir en SIGPIPE).
+            if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+              ETIQUETTES="$(git ls-remote --tags origin 'refs/tags/v*')"
+              ETIQUETTES_DU_COMMIT="$(printf '%s\n' "${ETIQUETTES}" | awk -v sha="${GITHUB_SHA}" '$1 == sha')"
+              if [ -n "${ETIQUETTES_DU_COMMIT}" ]; then
+                echo "::notice::Commit étiqueté : la compilation est faite par l'exécution de l'étiquette."
+                CONSTRUIRE=false
+              fi
             fi
           fi
 
@@ -111,6 +123,9 @@ jobs:
     steps:
       - name: Récupérer le code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Jeton non conservé dans .git/config : la compilation n'a pas à écrire dans le dépôt.
+          persist-credentials: false
 
       - name: Installer Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
@@ -148,6 +163,9 @@ jobs:
     steps:
       - name: Récupérer le code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Jeton non conservé dans .git/config : la compilation n'a pas à écrire dans le dépôt.
+          persist-credentials: false
 
       - name: Installer Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
@@ -197,6 +215,9 @@ jobs:
     steps:
       - name: Récupérer le code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Jeton non conservé dans .git/config : la compilation n'a pas à écrire dans le dépôt.
+          persist-credentials: false
 
       - name: Paquets système pour la compilation Linux
         run: |
@@ -254,6 +275,9 @@ jobs:
     steps:
       - name: Récupérer le code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Jeton non conservé dans .git/config : la compilation n'a pas à écrire dans le dépôt.
+          persist-credentials: false
 
       - name: Installer Java 17
         uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
