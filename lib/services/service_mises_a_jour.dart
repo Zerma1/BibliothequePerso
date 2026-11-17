@@ -27,14 +27,21 @@ class ResultatVerificationTitre {
     this.erreur,
     this.estAnnonce = true,
     this.erreursParSite = const <int, Object>{},
+    this.nombreChapitresPremiereLecture = 0,
   });
 
   /// Titre vérifié.
   final Titre titre;
 
   /// Chapitres trouvés qui n'étaient pas encore connus (tous sites
-  /// confondus).
+  /// confondus), **sans** ceux de [nombreChapitresPremiereLecture] : ce sont
+  /// les parutions annoncées dans le bilan et les notifications.
   final int nombreNouveauxChapitres;
+
+  /// Chapitres enregistrés lors de la première lecture d'un site (titre
+  /// importé jamais vérifié, site ajouté depuis la dernière vérification) :
+  /// déjà parus quand le site a été lié, ils ne sont pas annoncés (U7).
+  final int nombreChapitresPremiereLecture;
 
   /// Erreur rencontrée (site injoignable…), `null` si tout s'est bien passé.
   ///
@@ -392,7 +399,13 @@ class ServiceMisesAJour {
         cumul.titre,
         idSource,
       );
-      cumul.nombreNouveaux += resultat.nombreNouveauxChapitres;
+      // U7 : les chapitres de la première lecture d'un site (titre importé,
+      // site ajouté depuis la dernière vérification) étaient déjà parus à
+      // l'ajout ; ils ne sont ni dans le bilan ni dans les notifications.
+      // Les règles de téléchargement n'en dépendent pas : elles sont
+      // réappliquées après chaque vérification, quel que soit ce nombre.
+      cumul.nombreNouveaux += resultat.nombreNouveautesAAnnoncer;
+      cumul.nombrePremiereLecture += resultat.nombreChapitresPremiereLecture;
       // Le titre relu après le site principal porte la fiche à jour ; sinon
       // le dernier relu.
       if (idSource == cumul.idSourcePrincipale || cumul.titreRelu == null) {
@@ -420,8 +433,11 @@ class _CumulTitre {
   /// Nombre de sites interrogés.
   int nombreSites = 0;
 
-  /// Nouveaux chapitres, tous sites confondus.
+  /// Nouveaux chapitres à annoncer, tous sites confondus.
   int nombreNouveaux = 0;
+
+  /// Chapitres reçus à la première lecture d'un site (non annoncés).
+  int nombrePremiereLecture = 0;
 
   /// Titre relu après une actualisation réussie.
   Titre? titreRelu;
@@ -434,6 +450,7 @@ class _CumulTitre {
     return ResultatVerificationTitre(
       titre: titreRelu ?? titre,
       nombreNouveauxChapitres: nombreNouveaux,
+      nombreChapitresPremiereLecture: nombrePremiereLecture,
       erreur: erreurPrincipale ?? erreurs.values.firstOrNull,
       erreursParSite: Map<int, Object>.unmodifiable(erreurs),
       estAnnonce: estAnnonce,

@@ -16,6 +16,7 @@ import 'package:bibliotheque_perso/modeles/titre.dart';
 import 'package:bibliotheque_perso/services/service_ajout_site.dart';
 import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
 import 'package:bibliotheque_perso/services/service_import.dart';
+import 'package:bibliotheque_perso/services/service_mises_a_jour.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
 import 'package:bibliotheque_perso/sources/detecteur_type_site.dart';
 import 'package:bibliotheque_perso/sources/fabrique_sources.dart';
@@ -133,6 +134,12 @@ void main() {
 
     final resultat = await service.actualiserTitre(titre);
     expect(resultat.nombreNouveauxChapitres, greaterThan(0));
+    // U7 : tous viennent de la première lecture du site, rien à annoncer.
+    expect(
+      resultat.nombreChapitresPremiereLecture,
+      resultat.nombreNouveauxChapitres,
+    );
+    expect(resultat.nombreNouveautesAAnnoncer, 0);
 
     final lignes = await service.chargerDernieresParutions();
     final ligne = lignes.single;
@@ -159,5 +166,57 @@ void main() {
     final ligne = (await service.chargerDernieresParutions()).single;
     expect(ligne.estDecouvertApresAjout, isTrue);
     expect(ligne.estNouveaute(DateTime.now().toUtc()), isTrue);
+  });
+
+  group('bilan des mises à jour (U7)', () {
+    ServiceMisesAJour misesAJour() => ServiceMisesAJour(
+      depotTitres: depotTitres,
+      depotListes: DepotListes(base),
+      depotSources: DepotSources(base),
+      serviceBibliotheque: service,
+    );
+
+    test("la première vérification d'un titre importé n'annonce aucun "
+        'nouveau chapitre', () async {
+      await importerIlYADeuxHeures();
+
+      final rapport = await misesAJour().verifierTitresSuivis();
+
+      final resultat = rapport.resultats.single;
+      expect(resultat.aEchoue, isFalse);
+      expect(resultat.estAnnonce, isTrue);
+      expect(resultat.nombreChapitresPremiereLecture, greaterThan(0));
+      expect(resultat.nombreNouveauxChapitres, 0);
+      expect(rapport.nombreNouveauxChapitres, 0);
+      expect(rapport.titresAvecNouveautes, isEmpty);
+      // Les chapitres sont bien enregistrés (pour les règles de
+      // téléchargement, réappliquées après chaque vérification).
+      final titre = (await depotTitres.chargerTitreParUrl(urlTitreReference))!;
+      expect(
+        await DepotChapitres(base).chargerChapitres(titre.id!),
+        hasLength(resultat.nombreChapitresPremiereLecture),
+      );
+
+      // Vérification suivante : plus de première lecture, et aucun chapitre
+      // inconnu à annoncer.
+      final suivant = await misesAJour().verifierTitresSuivis();
+      expect(suivant.resultats.single.nombreChapitresPremiereLecture, 0);
+      expect(suivant.nombreNouveauxChapitres, 0);
+    });
+
+    test('un titre déjà vérifié sans chapitre annonce ses premiers '
+        'chapitres', () async {
+      final titre = await importerIlYADeuxHeures();
+      await depotTitres.enregistrerDateVerification(
+        titre.id!,
+        DateTime.now().toUtc().subtract(const Duration(hours: 1)),
+      );
+
+      final rapport = await misesAJour().verifierTitresSuivis();
+
+      expect(rapport.resultats.single.nombreChapitresPremiereLecture, 0);
+      expect(rapport.nombreNouveauxChapitres, greaterThan(0));
+      expect(rapport.titresAvecNouveautes, hasLength(1));
+    });
   });
 }

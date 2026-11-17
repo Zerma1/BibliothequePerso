@@ -268,9 +268,9 @@ void main() {
       ]);
       expect(lignes.first.derniereParution, DateTime.utc(2026, 3, 1));
       expect(lignes.first.dernierChapitre!.numero, 1);
-      // Non lu, publié depuis moins de 7 jours au moment donné : nouveau.
-      expect(lignes.first.estNouveaute(DateTime.utc(2026, 3, 5)), isTrue);
-      expect(lignes.first.estNouveaute(DateTime.utc(2026, 3, 9)), isFalse);
+      // Non lu, publié depuis moins de dureeNouveaute (30 jours) : nouveau.
+      expect(lignes.first.estNouveaute(DateTime.utc(2026, 3, 29)), isTrue);
+      expect(lignes.first.estNouveaute(DateTime.utc(2026, 4, 2)), isFalse);
       expect(lignes.last.dernierChapitre, isNull);
     });
 
@@ -374,7 +374,7 @@ void main() {
       });
 
       test('un chapitre découvert par une vérification ultérieure est '
-          'nouveau pendant 7 jours', () async {
+          'nouveau pendant dureeNouveaute (30 jours)', () async {
         await depotChapitres.enregistrerChapitres(<Chapitre>[
           chapitre(1),
         ], dateDetection: ajout);
@@ -388,11 +388,15 @@ void main() {
         expect(ligne.dernierChapitre!.numero, 2);
         expect(ligne.estDecouvertApresAjout, isTrue);
         expect(
-          ligne.estNouveaute(decouverte.add(const Duration(days: 6))),
+          ligne.estNouveaute(
+            decouverte.add(dureeNouveaute - const Duration(days: 1)),
+          ),
           isTrue,
         );
         expect(
-          ligne.estNouveaute(decouverte.add(const Duration(days: 8))),
+          ligne.estNouveaute(
+            decouverte.add(dureeNouveaute + const Duration(days: 1)),
+          ),
           isFalse,
         );
       });
@@ -442,7 +446,9 @@ void main() {
         expect(ligne.estDecouvertApresAjout, isFalse);
         expect(ligne.estNouveaute(ajout.add(const Duration(days: 1))), isTrue);
         expect(
-          ligne.estNouveaute(publication.add(const Duration(days: 8))),
+          ligne.estNouveaute(
+            publication.add(dureeNouveaute + const Duration(days: 1)),
+          ),
           isFalse,
         );
       });

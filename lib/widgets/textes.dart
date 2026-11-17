@@ -1184,7 +1184,7 @@ abstract final class Textes {
   static const String explicationMisesAJour =
       'Titres favoris, suivis et en attente, du plus récemment paru au plus '
       'ancien, dans les langues de chaque titre. « Nouveau » : dernier '
-      "chapitre non lu, paru depuis moins d'une semaine.";
+      'chapitre non lu, paru depuis moins de 30 jours.';
 
   /// Onglet Mises à jour vide.
   static const String misesAJourVide =

@@ -118,10 +118,10 @@ const String identifiantFormatExport = 'bibliotheque_perso-export';
 const int versionFormatExport = 2;
 
 /// Durée pendant laquelle un chapitre non lu porte le badge « Nouveau »
-/// dans l'onglet Mises à jour (retour du client sur la 0.2.0-test), comptée
-/// depuis sa publication, sinon depuis sa découverte (voir
-/// `ParutionTitre.estNouveaute`).
-const Duration dureeNouveaute = Duration(days: 7);
+/// dans l'onglet Mises à jour, comptée depuis sa publication, sinon depuis
+/// sa découverte (voir `ParutionTitre.estNouveaute`). 30 jours : décision du
+/// client après la 0.2.1-test (7 jours auparavant).
+const Duration dureeNouveaute = Duration(days: 30);
 
 /// Marge après l'ajout d'un site à un titre pendant laquelle les chapitres
 /// découverts sont ceux reçus **lors de l'ajout** (lecture du site, puis

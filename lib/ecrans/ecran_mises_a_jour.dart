@@ -16,7 +16,7 @@ import 'ecran_titre.dart';
 
 /// Liste des dernières parutions dans les langues de chaque titre, avec un
 /// badge « Nouveau » quand le dernier chapitre paru n'est pas lu et date de
-/// moins d'une semaine (`EtatParutions.estNouveaute`).
+/// moins de 30 jours (`dureeNouveaute`, `EtatParutions.estNouveaute`).
 ///
 /// Les titres sans aucun chapitre dans leurs langues (liste « En attente »)
 /// sont regroupés à la fin sous un intertitre.

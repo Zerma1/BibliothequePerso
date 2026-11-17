@@ -59,14 +59,28 @@ class ResultatAjoutTitre {
     this.estEnAttente = false,
     this.estDejaPresent = false,
     this.erreursParSite = const <int, Object>{},
+    this.nombreChapitresPremiereLecture = 0,
   });
 
   /// Titre tel qu'enregistré en base.
   final Titre titre;
 
   /// Nombre de chapitres qui n'étaient pas encore connus (tous sites
-  /// confondus).
+  /// confondus), y compris ceux de [nombreChapitresPremiereLecture].
   final int nombreNouveauxChapitres;
+
+  /// Parmi [nombreNouveauxChapitres], chapitres reçus lors de la
+  /// **première lecture** d'un site (titre importé jamais vérifié, site
+  /// ajouté depuis la dernière vérification : voir
+  /// `ServiceBibliotheque._detectionPremiereLecture`). Ce sont les chapitres
+  /// déjà parus quand le site a été lié, pas des parutions : U7, ils ne sont
+  /// ni dans le bilan ni dans les notifications des mises à jour.
+  final int nombreChapitresPremiereLecture;
+
+  /// Nouveaux chapitres à annoncer au client (bilan, notifications) :
+  /// [nombreNouveauxChapitres] sans ceux de la première lecture d'un site.
+  int get nombreNouveautesAAnnoncer =>
+      nombreNouveauxChapitres - nombreChapitresPremiereLecture;
 
   /// `true` si le titre a été placé (ou laissé) dans « En attente » : il
   /// n'a encore aucun chapitre dans les langues du client. L'interface peut
@@ -186,7 +200,7 @@ class ParutionTitre {
   /// - sans date de publication (sites sans date) : découvert après l'ajout
   ///   de son site ([estDecouvertApresAjout]) et depuis moins de
   ///   [dureeNouveaute] ; sinon tous les chapitres reçus à l'ajout
-  ///   paraîtraient nouveaux pendant une semaine.
+  ///   paraîtraient nouveaux pendant [dureeNouveaute].
   bool estNouveaute(DateTime maintenant) {
     final chapitre = dernierChapitre;
     if (chapitre == null || chapitre.estLu) return false;
@@ -539,6 +553,7 @@ class ServiceBibliotheque {
     Object? premiereErreur;
     StackTrace? pileErreur;
     var nouveaux = 0;
+    var premiereLecture = 0;
     var reussis = 0;
     for (final lien in liens) {
       // Lien seul : le client l'a enregistré parce que l'application ne sait
@@ -560,6 +575,7 @@ class ServiceBibliotheque {
           classer: false,
         );
         nouveaux += resultat.nombreNouveauxChapitres;
+        premiereLecture += resultat.nombreChapitresPremiereLecture;
         reussis++;
       } catch (erreur, pile) {
         // Une erreur de programmation ne doit pas passer pour un site en
@@ -581,6 +597,7 @@ class ServiceBibliotheque {
       nouveaux,
       estEnAttente: estEnAttente,
       erreursParSite: erreurs,
+      nombreChapitresPremiereLecture: premiereLecture,
     );
   }
 
@@ -623,21 +640,31 @@ class ServiceBibliotheque {
     // Lu avant la requête réseau : « aucun chapitre connu » décrit la base
     // telle qu'elle était avant cette lecture du site.
     final detection = await _detectionPremiereLecture(titre, lien);
-    if (lien.estPrincipale) {
-      return _enregistrerDepuisSource(
-        source,
-        lien.urlTitre,
-        titre: titre,
-        classer: classer,
-        dateDetection: detection,
-      );
-    }
-    return _enregistrerChapitresDuSite(
-      titre,
-      source,
-      lien.urlTitre,
-      classer: classer,
-      dateDetection: detection,
+    final resultat = lien.estPrincipale
+        ? await _enregistrerDepuisSource(
+            source,
+            lien.urlTitre,
+            titre: titre,
+            classer: classer,
+            dateDetection: detection,
+          )
+        : await _enregistrerChapitresDuSite(
+            titre,
+            source,
+            lien.urlTitre,
+            classer: classer,
+            dateDetection: detection,
+          );
+    if (detection == null) return resultat;
+    // Première lecture du site (U7) : tous ses chapitres reçus sont ceux
+    // déjà parus à l'ajout, à ne pas annoncer comme des parutions.
+    return ResultatAjoutTitre(
+      resultat.titre,
+      resultat.nombreNouveauxChapitres,
+      estEnAttente: resultat.estEnAttente,
+      estDejaPresent: resultat.estDejaPresent,
+      erreursParSite: resultat.erreursParSite,
+      nombreChapitresPremiereLecture: resultat.nombreNouveauxChapitres,
     );
   }
 
@@ -650,7 +677,7 @@ class ServiceBibliotheque {
   /// vérification a souvent lieu plus d'une heure après l'import. Sans
   /// cette règle, tous ses chapitres seraient « découverts après l'ajout »
   /// (`ParutionTitre.estDecouvertApresAjout`) et, sur un site sans date de
-  /// publication, tous « Nouveau » pendant une semaine. Ils sont donc datés
+  /// publication, tous « Nouveau » pendant [dureeNouveaute]. Ils sont donc datés
   /// de l'ajout du site : ce sont les chapitres déjà parus à ce moment-là.
   ///
   /// Première lecture = le site a été lié après la dernière vérification

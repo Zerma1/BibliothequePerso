@@ -55,8 +55,9 @@ class EtatParutions extends EtatNotifiant {
 
   /// Critère du badge « Nouveau », défini par le service
   /// (`ParutionTitre.estNouveaute`) : dernier chapitre non lu, publié depuis
-  /// moins d'une semaine, ou, sans date de publication, découvert après
-  /// l'ajout de son site et depuis moins d'une semaine. Un chapitre publié
+  /// moins de 30 jours (`dureeNouveaute`), ou, sans date de publication,
+  /// découvert après l'ajout de son site et depuis moins de 30 jours. Un
+  /// chapitre publié
   /// il y a des années n'est jamais « Nouveau » (retour du client sur la
   /// 0.2.0-test).
   static bool estNouveaute(ParutionTitre ligne, DateTime maintenant) =>
