@@ -11,6 +11,16 @@ const String extensionArchiveChapitre = '.zip';
 /// porte ce suffixe n'est donc jamais pris pour un chapitre téléchargé.
 const String suffixeArchivePartielle = '.part';
 
+/// Suffixe de la copie temporaire d'un fichier pendant un déplacement des
+/// archives vers un autre dossier (`ch1.en.zip.deplacement`,
+/// `couverture.png.deplacement`).
+///
+/// Distinct de [suffixeArchivePartielle] : dans un dossier partagé (NAS), un
+/// déplacement ne doit jamais écraser ni supprimer le `.part` d'un
+/// téléchargement en cours d'une autre bibliothèque. Comme il ne finit pas
+/// par `.zip`, un tel fichier n'est jamais pris pour une archive.
+const String suffixeCopieDeplacement = '.deplacement';
+
 /// Préfixe du nom de fichier d'un chapitre (`ch<numero>.<langue>.zip`).
 const String prefixeFichierChapitre = 'ch';
 

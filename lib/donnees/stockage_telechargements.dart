@@ -186,6 +186,18 @@ class StockageTelechargements {
     '${RegExp.escape(suffixeArchivePartielle)}\$',
   );
 
+  // Copie temporaire laissée par un déplacement interrompu :
+  // `ch….zip.deplacement` ou `couverture.<ext>.deplacement`.
+  static final RegExp _nomResiduDeplacement = RegExp(
+    '^(?:.+${RegExp.escape(extensionArchiveChapitre)}|'
+    '$nomFichierCouverture\\.[a-z0-9]{1,$longueurMaxExtensionPage})'
+    '${RegExp.escape(suffixeCopieDeplacement)}\$',
+  );
+
+  /// Chemins normalisés des copies `.deplacement` en cours d'écriture dans
+  /// cette instance : [nettoyerFichiersPartiels] ne les supprime jamais.
+  final Set<String> _copiesDeplacementEnCours = <String>{};
+
   // ---------------------------------------------------------------------
   // Chemins
   // ---------------------------------------------------------------------
@@ -571,10 +583,13 @@ class StockageTelechargements {
   ///    relatif est ajouté à [BilanDeplacement.cheminsEnConflit] et le
   ///    déplacement continue avec les fichiers suivants. Décider du sort de
   ///    ces fichiers revient à l'appelant (service) ;
-  /// 4. si la cible est absente, le fichier est copié dans un `.part` à côté
-  ///    de la cible, sa taille est vérifiée, puis il est renommé : une copie
-  ///    interrompue n'est jamais prise pour une archive complète ; l'ancien
-  ///    fichier n'est supprimé qu'après le renommage.
+  /// 4. si la cible est absente, le fichier est copié dans un
+  ///    `.deplacement` ([suffixeCopieDeplacement], jamais un `.part` de
+  ///    téléchargement) à côté de la cible, sa taille est vérifiée, puis il
+  ///    est renommé : une copie interrompue n'est jamais prise pour une
+  ///    archive complète ; l'ancien fichier n'est supprimé qu'après le
+  ///    renommage. Les `.deplacement` d'un déplacement interrompu sont
+  ///    retirés du nouveau dossier au début de chaque appel.
   ///
   /// Les `.zip.part`, le fichier repère et tout ce qui n'est pas dans un
   /// dossier de type (`exports/`, `rapports/`…) restent en place. L'ancien
@@ -624,6 +639,17 @@ class StockageTelechargements {
     }
     await verifierDossierRacine();
     final destination = await validerDossier(candidat);
+    // Reprise : les copies `.deplacement` d'un déplacement interrompu sont
+    // retirées avant de recommencer (les `.part` ne sont jamais touchés).
+    try {
+      await _nettoyerResidusDeplacement(destination);
+    } on FileSystemException catch (erreur) {
+      throw erreurDisque(
+        'Impossible de préparer le nouveau dossier',
+        erreur,
+        chemin: destination,
+      );
+    }
     final fichiers = await _listerFichiersADeplacer(source);
     final total = fichiers.length;
     surProgression?.call(0, total);
@@ -709,9 +735,12 @@ class StockageTelechargements {
 
   /// Déplace [ancien] vers [cible] sans jamais remplacer un fichier existant.
   ///
-  /// - Cible absente : copie dans un `.part` à côté de la cible, vérification
-  ///   de la taille, renommage, puis suppression de [ancien]
-  ///   ([_IssueDeplacement.copie]).
+  /// - Cible absente : copie dans un `.deplacement`
+  ///   ([suffixeCopieDeplacement]) à côté de la cible, vérification de la
+  ///   taille, renommage, puis suppression de [ancien]
+  ///   ([_IssueDeplacement.copie]). Jamais de `.part` : celui d'un
+  ///   téléchargement en cours d'une autre bibliothèque (NAS partagé) n'est
+  ///   ni écrasé ni supprimé.
   /// - Cible présente avec la même taille et le même contenu (comparaison
   ///   octet par octet, en flux) : rien n'est écrit, [ancien] est supprimé
   ///   ([_IssueDeplacement.dejaPresent]) ; c'est la reprise d'un déplacement
@@ -721,7 +750,8 @@ class StockageTelechargements {
   ///   appartenir à une autre bibliothèque sur un NAS partagé) et [ancien]
   ///   reste dans l'ancien dossier.
   ///
-  /// Une copie interrompue reste dans le `.part` (jamais sous le nom final) :
+  /// Une copie interrompue reste dans le `.deplacement` (jamais sous le nom
+  /// final ; retiré à la reprise ou par [nettoyerFichiersPartiels]) :
   /// une cible existante n'est donc jamais une copie tronquée de ce
   /// déplacement, et une taille différente signale bien un autre fichier.
   ///
@@ -732,7 +762,9 @@ class StockageTelechargements {
     List<String> relatif,
   ) async {
     final nomLisible = relatif.join(separateurNomArchive);
-    final partiel = File('$cible$suffixeArchivePartielle');
+    final temporaire = File('$cible$suffixeCopieDeplacement');
+    final cleTemporaire = chemins.normalize(temporaire.path);
+    _copiesDeplacementEnCours.add(cleTemporaire);
     try {
       final fichierCible = File(cible);
       if (await fichierCible.exists()) {
@@ -740,10 +772,11 @@ class StockageTelechargements {
       }
       final taille = await ancien.length();
       await Directory(chemins.dirname(cible)).create(recursive: true);
-      await ancien.copy(partiel.path);
-      final tailleCopiee = await partiel.length();
+      // `copy` remplace un éventuel résidu d'une copie interrompue.
+      await ancien.copy(temporaire.path);
+      final tailleCopiee = await temporaire.length();
       if (tailleCopiee != taille) {
-        await _supprimerSansErreur(partiel);
+        await _supprimerSansErreur(temporaire);
         throw ErreurStockage(
           'La copie de « $nomLisible » est incomplète ($tailleCopiee octets '
           "sur $taille) ; l'ancien fichier est conservé. Relancez le "
@@ -758,15 +791,15 @@ class StockageTelechargements {
       // il reste une fenêtre très courte entre cette vérification et le
       // renommage.
       if (await fichierCible.exists()) {
-        await _supprimerSansErreur(partiel);
+        await _supprimerSansErreur(temporaire);
         return await _traiterCibleExistante(ancien, fichierCible);
       }
       // Renommage dans le même dossier : la cible n'apparaît que complète.
-      await partiel.rename(cible);
+      await temporaire.rename(cible);
       await ancien.delete();
       return (_IssueDeplacement.copie, taille);
     } on FileSystemException catch (erreur) {
-      await _supprimerSansErreur(partiel);
+      await _supprimerSansErreur(temporaire);
       throw erreurDisque(
         'Impossible de déplacer « $nomLisible ». Les fichiers déjà déplacés '
         'restent dans le nouveau dossier ; relancez le déplacement pour '
@@ -774,7 +807,49 @@ class StockageTelechargements {
         erreur,
         chemin: erreur.path ?? cible,
       );
+    } finally {
+      _copiesDeplacementEnCours.remove(cleTemporaire);
     }
+  }
+
+  /// Supprime, sous les dossiers de type de [racine], les copies
+  /// `.deplacement` laissées par un déplacement interrompu (application
+  /// fermée pendant une copie), sauf celles en cours dans cette instance.
+  /// Renvoie leur nombre.
+  ///
+  /// Seuls les noms reconnus par [_nomResiduDeplacement] sont visés : jamais
+  /// un `.part` de téléchargement ni un fichier du client.
+  ///
+  /// LIMITE : un déplacement lancé au même moment vers le même dossier par
+  /// une autre installation verrait sa copie en cours supprimée ; il
+  /// échouerait proprement (ancien fichier conservé) et serait à relancer.
+  Future<int> _nettoyerResidusDeplacement(String racine) async {
+    var nombre = 0;
+    for (final type in TypeTitre.values) {
+      final dossierType = Directory(chemins.join(racine, type.name));
+      if (!await dossierType.exists()) {
+        continue;
+      }
+      await for (final entite in dossierType.list(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entite is! File ||
+            !_nomResiduDeplacement.hasMatch(chemins.basename(entite.path)) ||
+            _copiesDeplacementEnCours.contains(
+              chemins.normalize(entite.path),
+            )) {
+          continue;
+        }
+        try {
+          await entite.delete();
+          nombre++;
+        } on PathNotFoundException {
+          // Déjà retiré entre la liste et la suppression.
+        }
+      }
+    }
+    return nombre;
   }
 
   /// Cas d'une [cible] déjà présente : si elle est identique à [ancien],
@@ -1665,10 +1740,13 @@ class StockageTelechargements {
 
   /// Supprime les `.zip.part` (et `couverture.<ext>.part`) laissés par des
   /// écritures interrompues (application fermée ou tuée pendant un
-  /// téléchargement) et renvoie leur nombre.
+  /// téléchargement), ainsi que les copies `.deplacement`
+  /// ([suffixeCopieDeplacement]) laissées par un déplacement des archives
+  /// interrompu, et renvoie leur nombre.
   ///
-  /// À appeler au démarrage, avant de relancer la file. Les écritures en
-  /// cours dans cette instance sont toujours épargnées.
+  /// À appeler au démarrage, avant de relancer la file. Les écritures et
+  /// copies en cours dans cette instance sont toujours épargnées ; le délai
+  /// [ancienneteMinimale] s'applique aussi aux copies `.deplacement`.
   ///
   /// - Sans [ancienneteMinimale] : tous les autres `.zip.part` sont effacés.
   /// - Avec [ancienneteMinimale] : seuls ceux dont la date de modification
@@ -1700,12 +1778,14 @@ class StockageTelechargements {
         recursive: true,
         followLinks: false,
       )) {
+        final nom = chemins.basename(entite.path);
+        final normalise = chemins.normalize(entite.path);
         if (entite is! File ||
             !(entite.path.endsWith(suffixe) ||
-                _nomCouverturePartielle.hasMatch(
-                  chemins.basename(entite.path),
-                )) ||
-            _ecrituresOuvertes.contains(chemins.normalize(entite.path))) {
+                _nomCouverturePartielle.hasMatch(nom) ||
+                _nomResiduDeplacement.hasMatch(nom)) ||
+            _ecrituresOuvertes.contains(normalise) ||
+            _copiesDeplacementEnCours.contains(normalise)) {
           continue;
         }
         try {

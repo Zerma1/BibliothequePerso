@@ -337,10 +337,14 @@ void main() {
         isFalse,
         reason: 'dossiers de titre et de type vides retirés',
       );
-      // Aucun .part laissé dans le nouveau dossier.
+      // Aucun .part ni .deplacement laissé dans le nouveau dossier.
       final restes = await Directory(nouvelle)
           .list(recursive: true)
-          .where((e) => e.path.endsWith(suffixeArchivePartielle))
+          .where(
+            (e) =>
+                e.path.endsWith(suffixeArchivePartielle) ||
+                e.path.endsWith(suffixeCopieDeplacement),
+          )
           .toList();
       expect(restes, isEmpty);
     });
@@ -360,15 +364,20 @@ void main() {
         );
         final nouvelle = p.join(temporaire.path, 'nas');
         // Interruption simulée : ch1 déjà copié (ancien pas encore
-        // supprimé), ch2 copié à moitié dans son `.part`.
+        // supprimé), ch2 copié à moitié dans son `.deplacement`, plus un
+        // résidu d'un fichier qui n'est plus à déplacer.
         final cible1 = File(p.joinAll(<String>[nouvelle, ...nom1.split('/')]));
         final cible2 = File(p.joinAll(<String>[nouvelle, ...nom2.split('/')]));
         await cible1.parent.create(recursive: true);
         await File(stockage.cheminDepuisNomArchive(nom1)).copy(cible1.path);
         final octets2 = await File(stockage.cheminDepuisNomArchive(nom2))
             .readAsBytes();
-        final partiel2 = File('${cible2.path}$suffixeArchivePartielle');
-        await partiel2.writeAsBytes(octets2.sublist(0, octets2.length ~/ 2));
+        final residu2 = File('${cible2.path}$suffixeCopieDeplacement');
+        await residu2.writeAsBytes(octets2.sublist(0, octets2.length ~/ 2));
+        final residuOrphelin = File(
+          p.join(cible1.parent.path, 'ch9.fr.zip$suffixeCopieDeplacement'),
+        );
+        await residuOrphelin.writeAsBytes(image(9));
 
         final bilan = await stockage.deplacerArchivesVers(nouvelle);
         expect(bilan.nombreFichiers, 2);
@@ -376,7 +385,8 @@ void main() {
         expect(bilan.nombreCopies, 1);
         expect(bilan.nombreConflits, 0);
         expect(await cible2.readAsBytes(), octets2);
-        expect(await partiel2.exists(), isFalse);
+        expect(await residu2.exists(), isFalse);
+        expect(await residuOrphelin.exists(), isFalse);
         expect(await stockage.existeArchive(nom1), isFalse);
         expect(await stockage.existeArchive(nom2), isFalse);
 
@@ -385,6 +395,84 @@ void main() {
         expect(encore.nombreFichiers, 0);
       },
     );
+
+    test("le .part d'un téléchargement en cours dans le nouveau dossier "
+        "n'est jamais touché", () async {
+      final nom1 = await ecrireChapitre(
+        stockage,
+        titre('Berserk'),
+        chapitre(1),
+      );
+      final nouvelle = p.join(temporaire.path, 'nas');
+      final cible1 = File(p.joinAll(<String>[nouvelle, ...nom1.split('/')]));
+      await cible1.parent.create(recursive: true);
+      // Autre bibliothèque qui télécharge le même chapitre sur le NAS.
+      final partielAutre = File('${cible1.path}$suffixeArchivePartielle');
+      await partielAutre.writeAsBytes(image(77, taille: 500));
+
+      final bilan = await stockage.deplacerArchivesVers(nouvelle);
+
+      expect(bilan.nombreCopies, 1);
+      expect(await partielAutre.readAsBytes(), image(77, taille: 500));
+      expect(
+        await cible1.readAsBytes(),
+        isNot(image(77, taille: 500)),
+        reason: 'la cible vient bien de la copie',
+      );
+    });
+
+    test("un résidu .deplacement dans l'ancien dossier n'est jamais pris "
+        'pour une archive', () async {
+      final nom1 = await ecrireChapitre(
+        stockage,
+        titre('Berserk'),
+        chapitre(1),
+      );
+      final ancien1 = File(stockage.cheminDepuisNomArchive(nom1));
+      final residu = File(
+        p.join(ancien1.parent.path, 'ch2.fr.zip$suffixeCopieDeplacement'),
+      );
+      await residu.writeAsBytes(image(2));
+      final couvertureResidu = File(
+        p.join(ancien1.parent.path, 'couverture.png$suffixeCopieDeplacement'),
+      );
+      await couvertureResidu.writeAsBytes(image(3));
+
+      final bilan = await stockage.deplacerArchivesVers(
+        p.join(temporaire.path, 'nas'),
+      );
+
+      expect(bilan.nombreFichiers, 1);
+      expect(await stockage.existeArchive('manga/Berserk/ch2.fr.zip'), isFalse);
+      expect(await stockage.chargerCouverture(titre('Berserk')), isNull);
+      // Retiré par le nettoyage au démarrage.
+      expect(await stockage.nettoyerFichiersPartiels(), 2);
+      expect(await residu.exists(), isFalse);
+      expect(await couvertureResidu.exists(), isFalse);
+    });
+
+    test('nettoyerFichiersPartiels : résidu .deplacement récent épargné avec '
+        'un délai, fichiers du client jamais touchés', () async {
+      await ecrireChapitre(stockage, titre('Berserk'), chapitre(1));
+      final dossier = p.join(ancienne, 'manga', 'Berserk');
+      final residu = File(
+        p.join(dossier, 'ch2.fr.zip$suffixeCopieDeplacement'),
+      );
+      await residu.writeAsBytes(image(2));
+      final client = File(p.join(dossier, 'notes$suffixeCopieDeplacement'));
+      await client.writeAsString('notes');
+
+      expect(
+        await stockage.nettoyerFichiersPartiels(
+          ancienneteMinimale: const Duration(hours: 1),
+        ),
+        0,
+      );
+      expect(await residu.exists(), isTrue);
+      expect(await stockage.nettoyerFichiersPartiels(), 1);
+      expect(await residu.exists(), isFalse);
+      expect(await client.readAsString(), 'notes');
+    });
 
     group('cible déjà présente', () {
       late String nouvelle;
