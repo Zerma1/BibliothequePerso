@@ -37,6 +37,7 @@ import '../sources/erreur_source.dart';
 import '../sources/fabrique_sources.dart';
 import '../sources/source_mangadex.dart';
 import '../sources/source_site.dart';
+import '../sources/source_webtoons.dart';
 import 'classement_listes.dart';
 import 'constantes_services.dart';
 import 'erreur_service.dart';
@@ -1372,11 +1373,28 @@ class ServiceBibliotheque {
   ///
   /// Lève une `ErreurSource` si le site ne répond pas ou si la réponse n'est
   /// pas une image (`Content-Type` autre que `image/*`) ; un échec n'est pas
-  /// gardé en cache.
+  /// gardé en cache. Si [referer] est WEBTOON, aucune requête n'est faite et
+  /// une `ErreurSource` est levée (voir [estSiteSansCouverture]).
   Future<Uint8List> recupererCouverture(
     String urlCouverture, {
     String? referer,
   }) {
+    // Appel sans titre (miniatures avec seulement l'adresse et le référent) :
+    // seul le référent dit de quel site vient l'image. Erreur plutôt que
+    // `null` pour garder le type de retour ; le widget affiche alors un
+    // espace réservé, comme pour un échec réseau.
+    final uriReferent = referer == null ? null : Uri.tryParse(referer);
+    if (uriReferent != null &&
+        SourceWebtoons.estHoteWebtoons(uriReferent.host)) {
+      return Future<Uint8List>.error(
+        ErreurSource(
+          urlCouverture,
+          "Les couvertures de WEBTOON ne sont pas téléchargées : choisissez "
+          "une image de l'appareil.",
+          typeDetecte: TypeSource.webtoons,
+        ),
+      );
+    }
     // Retirée puis remise : passe en dernière position (la plus récente).
     final dejaDemandee = _cacheCouvertures.remove(urlCouverture);
     if (dejaDemandee != null) {
@@ -1548,6 +1566,14 @@ class ServiceBibliotheque {
     return uri == null || (uri.scheme != 'http' && uri.scheme != 'https');
   }
 
+  /// `true` si les couvertures du site [source] ne sont jamais téléchargées
+  /// (PLAYBOOK.md section 10) : WEBTOON, dont le serveur d'images
+  /// (`pstatic.net`) refuse les demandes sans `Referer` du site. Le titre
+  /// s'affiche alors sans couverture, sauf image choisie sur l'appareil.
+  /// Fonction pure.
+  static bool estSiteSansCouverture(Source? source) =>
+      source?.typeSource == TypeSource.webtoons;
+
   /// Chemin de la couverture enregistrée sur l'appareil (pour `Image.file`),
   /// ou `null` si aucune n'est enregistrée. Ne lève jamais.
   Future<String?> cheminCouvertureLocale(Titre titre) async {
@@ -1589,6 +1615,11 @@ class ServiceBibliotheque {
       final source = titre.idSource == null
           ? null
           : await _depotSources.chargerSource(titre.idSource!);
+      // WEBTOON : aucune requête, couverture vide (sauf image de l'appareil,
+      // qui ne sollicite pas le site).
+      if (!estCouvertureLocale(voulue) && estSiteSansCouverture(source)) {
+        return null;
+      }
       final (octets, adresse) = await _octetsVignette(voulue, source);
       await _enregistrerCouvertureSurAppareil(titre, octets, adresse);
       return octets;
@@ -1625,6 +1656,7 @@ class ServiceBibliotheque {
       final source = titre.idSource == null
           ? null
           : await _depotSources.chargerSource(titre.idSource!);
+      if (estSiteSansCouverture(source)) return await chargerCouverture(titre);
       return await recupererCouverture(voulue, referer: source?.urlBase);
     } catch (erreur) {
       // Une seule tentative par session : la fiche rouverte affiche
@@ -1669,6 +1701,12 @@ class ServiceBibliotheque {
     }
     final titre = await _exigerTitre(idTitre);
     final source = await _exigerSource(titre);
+    if (estSiteSansCouverture(source)) {
+      throw const ErreurService(
+        "Les couvertures de WEBTOON ne peuvent pas être téléchargées : "
+        "choisissez une image de l'appareil.",
+      );
+    }
     _couverturesEnEchec.remove(url);
     _originalesEnEchec.remove(url);
     // L'appareil garde la vignette ; l'originale reste en cache de session
@@ -1700,16 +1738,20 @@ class ServiceBibliotheque {
   ///
   /// Si le site ne donne aucune couverture, seul le choix est effacé (et
   /// l'image enregistrée supprimée). Lève une `ErreurSource` si le site ne
-  /// répond pas (rien n'est alors modifié).
+  /// répond pas (rien n'est alors modifié). Pour WEBTOON (couvertures jamais
+  /// téléchargées, [estSiteSansCouverture]), c'est comme si le site n'en
+  /// donnait aucune.
   Future<Titre> retablirCouvertureDuSite(int idTitre) async {
     final titre = await _exigerTitre(idTitre);
     final url = titre.urlCouverture;
-    if (url == null) {
+    final source = url == null ? null : await _exigerSource(titre);
+    if (url == null || estSiteSansCouverture(source)) {
+      // LIMITE : fichier puis base, sans transaction commune (comme
+      // [_retenirCouverture]).
       await _stockage?.supprimerCouverture(titre);
       await _depotTitres.enregistrerCouvertureChoisie(idTitre, null);
       return await _depotTitres.chargerTitre(idTitre) ?? titre;
     }
-    final source = await _exigerSource(titre);
     _couverturesEnEchec.remove(url);
     _originalesEnEchec.remove(url);
     final (octets, adresse) = await _octetsVignette(url, source);
@@ -1756,6 +1798,11 @@ class ServiceBibliotheque {
         await stockage.supprimerCouverture(ancien);
       }
       if (voulue == null) return;
+      // WEBTOON : aucune requête d'image (une image de l'appareil reste
+      // enregistrée normalement).
+      if (!estCouvertureLocale(voulue) && estSiteSansCouverture(source)) {
+        return;
+      }
       final dejaEnregistree = await stockage.cheminCouverture(titre) != null;
       final siteAChange =
           titre.couvertureChoisie == null &&
@@ -1783,6 +1830,13 @@ class ServiceBibliotheque {
   ) async {
     if (estCouvertureLocale(couverture)) {
       return (await _lireImageLocale(couverture), couverture);
+    }
+    // Garde-fou : les appelants écartent déjà WEBTOON ; aucune requête même
+    // si l'un d'eux l'oubliait.
+    if (estSiteSansCouverture(source)) {
+      throw const ErreurService(
+        "Les couvertures de WEBTOON ne peuvent pas être téléchargées.",
+      );
     }
     return _recupererVignetteAvecAdresse(couverture, referer: source?.urlBase);
   }

@@ -109,6 +109,31 @@ void main() {
       );
       expect(trouvee, isNotNull);
     });
+
+    test(
+      "la version mobile d'un site déjà configuré ne crée pas de doublon",
+      () async {
+        final www = await serviceAjoutSite.ajouterSite(
+          'https://www.webtoons.com',
+        );
+        final mobile = await serviceAjoutSite.ajouterSite(
+          'https://m.webtoons.com/fr/romance/x/list?title_no=1',
+        );
+        final sansPrefixe = await serviceAjoutSite.ajouterSite(
+          'https://webtoons.com',
+        );
+
+        expect(mobile.id, www.id);
+        expect(sansPrefixe.id, www.id);
+        expect(
+          (await DepotSources(base).chargerSources()).where(
+            (source) => source.typeSource == TypeSource.webtoons,
+          ),
+          hasLength(1),
+        );
+        expect(requetes, isEmpty);
+      },
+    );
   });
 
   group('ServiceBibliotheque.ajouterTitreDepuisUrl', () {

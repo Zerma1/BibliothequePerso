@@ -53,7 +53,10 @@ class ServiceAjoutSite {
     final uri = DetecteurTypeSite.validerUrl(url);
     final urlBase = calculerUrlBase(uri);
 
-    final existante = await _depotSources.chargerSourceParUrl(urlBase);
+    // Recherche par hôte normalisé (www. et m. retirés) plutôt que par URL de
+    // base exacte : sinon coller une adresse mobile (m.webtoons.com) d'un site
+    // déjà configuré en www. créerait un doublon.
+    final existante = await trouverSourcePourUrl(url);
     if (existante != null) {
       return existante;
     }
@@ -98,8 +101,12 @@ class ServiceAjoutSite {
 
   /// Renvoie la source configurée qui correspond à l'hôte de [url], ou `null`.
   ///
-  /// La comparaison ignore `www.` pour qu'une source `https://mangadex.org`
-  /// reconnaisse aussi `https://www.mangadex.org/title/…`.
+  /// La comparaison se fait sur [proposerNom] (préfixes `www.` et `m.`
+  /// retirés) : une source `https://www.webtoons.com` reconnaît aussi
+  /// `https://m.webtoons.com/…`, et `https://mangadex.org` reconnaît
+  /// `https://www.mangadex.org/title/…`. Le schéma et le port sont ignorés.
+  ///
+  /// Lève une `ErreurSource` si [url] est invalide.
   Future<Source?> trouverSourcePourUrl(String url) async {
     final uri = DetecteurTypeSite.validerUrl(url);
     final hote = proposerNom(uri);
