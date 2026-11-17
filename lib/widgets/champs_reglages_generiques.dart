@@ -14,18 +14,25 @@ import 'textes.dart';
 /// Les contrôleurs [controleurs] (un par clé) appartiennent à l'écran
 /// parent, qui lit leurs valeurs à l'envoi. Chaque champ est vérifié par le
 /// service (`EtatSources.erreurReglageGenerique`) lors de la validation du
-/// `Form` englobant ; le message s'affiche sous le champ concerné.
+/// `Form` englobant ; le message s'affiche sous le champ concerné. Un champ
+/// resté égal à sa valeur de [valeursInitiales] n'est pas revérifié (même
+/// contrat que `ServiceAjoutSite.modifierSource`) : un ancien réglage
+/// aujourd'hui refusé n'empêche pas de renommer le site.
 class ChampsReglagesGeneriques extends StatelessWidget {
   /// Crée la section.
   const ChampsReglagesGeneriques({
     super.key,
     required this.controleurs,
+    this.valeursInitiales = const <String, String>{},
     this.estActive = true,
     this.estDeplieeAuDepart = false,
   });
 
   /// Contrôleur de chaque réglage, par clé.
   final Map<String, TextEditingController> controleurs;
+
+  /// Valeurs enregistrées de chaque réglage, par clé (vide à l'ajout).
+  final Map<String, String> valeursInitiales;
 
   /// `false` pendant un envoi : champs grisés.
   final bool estActive;
@@ -66,8 +73,15 @@ class ChampsReglagesGeneriques extends StatelessWidget {
                 errorMaxLines: 3,
                 border: const OutlineInputBorder(),
               ),
-              validator: (valeur) =>
-                  EtatSources.erreurReglageGenerique(cle, valeur ?? ''),
+              validator: (valeur) {
+                final propre = (valeur ?? '').trim();
+                // Valeur enregistrée inchangée : pas revérifiée.
+                final initiale = valeursInitiales[cle];
+                if (initiale != null && propre == initiale.trim()) {
+                  return null;
+                }
+                return EtatSources.erreurReglageGenerique(cle, propre);
+              },
             ),
           ),
       ],

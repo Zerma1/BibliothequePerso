@@ -108,6 +108,28 @@ void main() {
     );
   });
 
+  testWidgets('ancien réglage aujourd\'hui refusé : renommage possible', (
+    tester,
+  ) async {
+    const ancien = Source(
+      id: 1,
+      nom: 'Ruri',
+      urlBase: 'https://ruri-dragon.online',
+      typeSource: TypeSource.generique,
+      configurationSelecteurs: '{"motifNumeroChapitre":"(non fermé"}',
+    );
+    await ouvrirDialogue(tester, ancien);
+    await tester.enterText(
+      find.widgetWithText(TextFormField, Textes.champNomSiteObligatoire),
+      'Ruri Dragon',
+    );
+    await enregistrer(tester);
+    final modifiee = ajoutSite.sourcesModifiees.single;
+    expect(modifiee.nom, 'Ruri Dragon');
+    expect(modifiee.configurationSelecteurs, ancien.configurationSelecteurs);
+    expect(find.text(Textes.siteModifie('Ruri Dragon')), findsOneWidget);
+  });
+
   testWidgets('motif invalide : message sous le champ, rien enregistré', (
     tester,
   ) async {

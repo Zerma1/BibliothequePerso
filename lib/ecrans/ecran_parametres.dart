@@ -746,6 +746,7 @@ class _EtatDialogueSite extends State<_DialogueSite> {
                 if (_estGenerique)
                   ChampsReglagesGeneriques(
                     controleurs: _reglages,
+                    valeursInitiales: _reglagesInitiaux,
                     estDeplieeAuDepart: _reglagesInitiaux.isNotEmpty,
                   ),
               ],
