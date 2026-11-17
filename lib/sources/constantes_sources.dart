@@ -89,6 +89,15 @@ const Duration delaiMinimalAtHomeMangaDex = Duration(milliseconds: 1500);
 const String urlSignalementMangaDexAtHome =
     'https://api.mangadex.network/report';
 
+/// Domaine de Scan-Manga (sans `www.`), reconnu sans requête par
+/// `DetecteurTypeSite.verifierDomaine`.
+const String domaineScanManga = 'scan-manga.com';
+
+/// Durée pendant laquelle `SourceScanManga` réutilise la page d'un titre
+/// qu'il vient de télécharger : la fiche et la liste des chapitres viennent
+/// de la même page, inutile de la demander deux fois de suite au site.
+const Duration dureeCachePageScanManga = Duration(minutes: 1);
+
 /// Texte dont la présence dans l'URL de base désigne un serveur MangaDex
 /// (docs/04-chapter/retrieving-chapter : signaler chaque image chargée
 /// « from a base url that doesn't contain mangadex.org »).

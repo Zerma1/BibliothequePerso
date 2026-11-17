@@ -153,8 +153,13 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
                     validator: _validerLangue,
                   ),
                   const SizedBox(height: espacementPetit),
+                  // isExpanded : le menu prend la largeur du formulaire au lieu
+                  // de celle du libellé le plus long (ex. « Scan-Manga (lecture
+                  // sur le site) »), qui débordait sur un écran étroit ; les
+                  // libellés trop longs sont alors tronqués avec des points.
                   DropdownButtonFormField<TypeSource?>(
                     initialValue: _typeForce,
+                    isExpanded: true,
                     decoration: const InputDecoration(
                       labelText: Textes.champTypeSite,
                       helperText: Textes.aideTypeSite,
@@ -167,7 +172,10 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
                       for (final type in TypeSource.values)
                         DropdownMenuItem<TypeSource?>(
                           value: type,
-                          child: Text(Textes.libelleTypeSource(type)),
+                          child: Text(
+                            Textes.libelleTypeSource(type),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                     ],
                     onChanged: enCours

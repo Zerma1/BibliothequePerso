@@ -17,26 +17,32 @@ import '../donnees/depot_chapitres.dart';
 import '../donnees/depot_listes.dart';
 import '../donnees/depot_sources.dart';
 import '../donnees/depot_titres.dart';
+import '../donnees/depot_titres_sources.dart';
 import '../donnees/erreur_stockage.dart';
 import '../donnees/stockage_telechargements.dart';
 import '../modeles/categorie.dart';
 import '../modeles/chapitre.dart';
 import '../modeles/constantes.dart';
+import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/fiche_titre.dart';
+import '../modeles/lien_titre_source.dart';
 import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
 import '../modeles/titre.dart';
 import '../sources/client_http_poli.dart';
 import '../sources/constantes_sources.dart';
 import '../sources/couverture_site.dart';
+import '../sources/detecteur_type_site.dart';
 import '../sources/erreur_source.dart';
 import '../sources/fabrique_sources.dart';
 import '../sources/source_mangadex.dart';
+import '../sources/source_site.dart';
 import 'classement_listes.dart';
 import 'constantes_services.dart';
 import 'erreur_service.dart';
 import 'service_ajout_site.dart';
 import 'service_parametres.dart';
+import 'service_sources_par_defaut.dart';
 
 /// Résultat de l'ajout (ou de l'actualisation) d'un titre.
 class ResultatAjoutTitre {
@@ -45,18 +51,67 @@ class ResultatAjoutTitre {
     this.titre,
     this.nombreNouveauxChapitres, {
     this.estEnAttente = false,
+    this.estDejaPresent = false,
+    this.erreursParSite = const <int, Object>{},
   });
 
   /// Titre tel qu'enregistré en base.
   final Titre titre;
 
-  /// Nombre de chapitres qui n'étaient pas encore connus.
+  /// Nombre de chapitres qui n'étaient pas encore connus (tous sites
+  /// confondus).
   final int nombreNouveauxChapitres;
 
   /// `true` si le titre a été placé (ou laissé) dans « En attente » : il
   /// n'a encore aucun chapitre dans les langues du client. L'interface peut
   /// le signaler à l'ajout.
   final bool estEnAttente;
+
+  /// `true` quand l'adresse ajoutée était déjà celle d'un site secondaire
+  /// d'un titre de la bibliothèque : ce titre est renvoyé tel quel (sans
+  /// requête au site), au lieu d'être créé une seconde fois.
+  final bool estDejaPresent;
+
+  /// Erreurs des sites qui n'ont pas pu être lus pendant une actualisation,
+  /// par identifiant de source (étape 8 : un site en panne n'empêche pas les
+  /// autres). Vide si tous les sites ont répondu.
+  final Map<int, Object> erreursParSite;
+
+  /// `true` si au moins un site du titre n'a pas pu être lu.
+  bool get aDesErreursDeSite => erreursParSite.isNotEmpty;
+}
+
+/// Un site d'un titre, pour la section « Sites » de la fiche (étape 8).
+class SiteDuTitre {
+  /// Crée la ligne.
+  const SiteDuTitre({
+    required this.lien,
+    required this.nomSite,
+    this.source,
+    this.nombreChapitres = 0,
+  });
+
+  /// Lien enregistré (adresse du titre sur ce site, principal ou non).
+  final LienTitreSource lien;
+
+  /// Site configuré, ou `null` s'il n'existe plus (ne devrait pas arriver :
+  /// la base refuse de supprimer un site encore lié à un titre).
+  final Source? source;
+
+  /// Nom affichable du site (nom de la source, sinon nom de domaine).
+  final String nomSite;
+
+  /// Nombre de chapitres connus venant de ce site.
+  final int nombreChapitres;
+
+  /// Identifiant de la source.
+  int get idSource => lien.idSource;
+
+  /// Adresse du titre sur ce site.
+  String get urlTitre => lien.urlTitre;
+
+  /// `true` pour le site principal (fiche, couverture, résumé).
+  bool get estPrincipal => lien.estPrincipale;
 }
 
 /// Ligne de l'onglet « Mises à jour » : un titre et sa dernière parution
@@ -111,7 +166,9 @@ class ServiceBibliotheque {
     required ClientHttpPoli client,
     ServiceParametres? serviceParametres,
     StockageTelechargements? stockage,
-  }) : _depotSources = depotSources,
+    DepotTitresSources? depotTitresSources,
+  }) : _depotTitresSources = depotTitresSources,
+       _depotSources = depotSources,
        _depotTitres = depotTitres,
        _depotChapitres = depotChapitres,
        _depotListes = depotListes,
@@ -138,6 +195,11 @@ class ServiceBibliotheque {
 
   /// Stockage des couvertures sur l'appareil (voir le constructeur).
   final StockageTelechargements? _stockage;
+
+  /// Sites de chaque titre (étape 8). Facultatif pour ne pas casser les
+  /// appelants existants : sans lui, un titre n'a que son site principal et
+  /// l'ajout ou le retrait d'un site est refusé.
+  final DepotTitresSources? _depotTitresSources;
 
   /// Langues de lecture par défaut (« fr,en »), tant que le client n'a rien
   /// choisi dans les réglages.
@@ -214,9 +276,11 @@ class ServiceBibliotheque {
   Future<List<Categorie>> chargerCategoriesDuTitre(int idTitre) =>
       _depotCategories.chargerCategoriesDuTitre(idTitre);
 
-  /// Chapitres d'un titre.
-  Future<List<Chapitre>> chargerChapitres(int idTitre) =>
-      _depotChapitres.chargerChapitres(idTitre);
+  /// Chapitres d'un titre, triés par numéro ; si [idSource] est donné,
+  /// seulement ceux venant de ce site (filtre « site » de la fiche, étape 8).
+  /// Chaque chapitre porte son site d'origine (`Chapitre.idSource`).
+  Future<List<Chapitre>> chargerChapitres(int idTitre, {int? idSource}) =>
+      _depotChapitres.chargerChapitres(idTitre, idSource: idSource);
 
   /// Un chapitre par son identifiant, ou `null` s'il n'existe plus (titre
   /// supprimé entre-temps, par exemple).
@@ -233,18 +297,31 @@ class ServiceBibliotheque {
   ///
   /// Avec [titre], ses langues propres (choisies par le client pour ce
   /// titre) passent avant tout le reste.
+  ///
+  /// [plusieursSites] : le titre a plusieurs sites (étape 8). Les langues
+  /// propres de [source] sont alors ignorées : ordre = langues du titre,
+  /// sinon [general].
   static List<String> languesPreferees(
     Source? source, {
     List<String>? general,
     Titre? titre,
+    bool plusieursSites = false,
   }) {
     final propresAuTitre = ServiceParametres.nettoyerLangues(
       titre?.listeLanguesPreferees ?? const <String>[],
     );
     if (propresAuTitre.isNotEmpty) return propresAuTitre;
-    final langues = SourceMangaDex.languesIsoDepuisPreference(
-      source?.langueParDefaut ?? '',
-    );
+    // Relecture B1 : les langues d'un site ne décrivent que ce site. Pour un
+    // titre à plusieurs sites, prendre celles du site principal ferait
+    // dépendre ses langues de ce choix : passer de MangaDex à un site
+    // français effacerait (24 h plus tard) toutes ses archives anglaises,
+    // et un titre ajouté depuis un site français ne téléchargerait jamais
+    // l'anglais de MangaDex.
+    final langues = plusieursSites
+        ? const <String>[]
+        : SourceMangaDex.languesIsoDepuisPreference(
+            source?.langueParDefaut ?? '',
+          );
     if (langues.isNotEmpty) return langues;
     final propres = ServiceParametres.nettoyerLangues(general ?? const []);
     return propres.isNotEmpty
@@ -260,7 +337,8 @@ class ServiceBibliotheque {
   /// Langues à appliquer à [titre] (règles de téléchargement, version mise en
   /// avant), par ordre de préférence : langues propres au titre, sinon
   /// langues de sa source si elles sont réglées (ancien réglage par site,
-  /// gardé pour compatibilité), sinon réglage général.
+  /// gardé pour compatibilité, et seulement pour un titre à un seul site),
+  /// sinon réglage général.
   Future<List<String>> languesPourTitre(Titre titre) async {
     final idSource = titre.idSource;
     final source = idSource == null
@@ -270,7 +348,16 @@ class ServiceBibliotheque {
       source,
       general: await chargerLanguesGenerales(),
       titre: titre,
+      plusieursSites: await _aPlusieursSites(titre.id),
     );
+  }
+
+  /// `true` si le titre [idTitre] a plus d'un site (sans dépôt des sites :
+  /// un seul).
+  Future<bool> _aPlusieursSites(int? idTitre) async {
+    final depot = _depotTitresSources;
+    if (depot == null || idTitre == null) return false;
+    return (await depot.chargerLiensTitre(idTitre)).length > 1;
   }
 
   /// Enregistre les langues propres à un titre ([langues] `null` ou vide :
@@ -340,6 +427,11 @@ class ServiceBibliotheque {
   /// [idsListes] (par exemple Favoris et Suivis), puis dans « En attente »
   /// s'il n'a aucun chapitre dans les langues du client.
   ///
+  /// Si [urlTitre] est déjà l'adresse d'un **site secondaire** d'un titre de
+  /// la bibliothèque (étape 8), ce titre est renvoyé sans requête au site
+  /// (`ResultatAjoutTitre.estDejaPresent`), après l'avoir placé dans
+  /// [idsListes] : il n'est jamais créé une seconde fois.
+  ///
   /// Lève une [ErreurService] si aucun site ne correspond, sinon laisse
   /// passer `ErreurSource` (complétée du type du site, pour le rapport
   /// d'erreur) et `ErreurBaseDeDonnees`.
@@ -347,6 +439,10 @@ class ServiceBibliotheque {
     String urlTitre, {
     List<int> idsListes = const <int>[],
   }) async {
+    final existant = await _chargerTitreLieEnSecondaire(urlTitre.trim());
+    if (existant != null) {
+      return _renvoyerTitreExistant(existant, idsListes);
+    }
     final source = await _trouverOuAjouterSource(urlTitre);
     return _enregistrerDepuisSource(
       source,
@@ -355,16 +451,494 @@ class ServiceBibliotheque {
     );
   }
 
-  /// Relit la fiche et les chapitres d'un titre déjà enregistré.
+  /// Relit la fiche et les chapitres d'un titre déjà enregistré, sur **tous**
+  /// ses sites (étape 8) : la fiche (nom, couverture, résumé, catégories)
+  /// vient seulement du site principal, les chapitres de chaque site.
+  ///
+  /// Les sites sont interrogés l'un après l'autre (une requête par site,
+  /// toujours avec le délai par domaine de `ClientHttpPoli`). Un site en
+  /// panne n'empêche pas les autres : son erreur est rangée dans
+  /// `ResultatAjoutTitre.erreursParSite`. Si **aucun** site n'a répondu, la
+  /// première erreur est levée (comme avant l'étape 8). Les sites
+  /// secondaires d'une source désactivée sont ignorés ; le site principal
+  /// est toujours interrogé (actualisation demandée par le client).
   Future<ResultatAjoutTitre> actualiserTitre(Titre titre) async {
-    final idSource = titre.idSource;
-    final source = idSource == null
-        ? null
-        : await _depotSources.chargerSource(idSource);
+    final idTitre = titre.id;
+    if (idTitre == null) {
+      throw ErreurService("« ${titre.nom} » n'est pas enregistré.");
+    }
+    final liens = await chargerLiensDuTitre(titre);
+    if (liens.isEmpty) {
+      throw ErreurService('Le site de « ${titre.nom} » n\'existe plus.');
+    }
+    final erreurs = <int, Object>{};
+    Object? premiereErreur;
+    StackTrace? pileErreur;
+    var nouveaux = 0;
+    var reussis = 0;
+    for (final lien in liens) {
+      try {
+        final source = await _depotSources.chargerSource(lien.idSource);
+        if (source == null) {
+          throw ErreurService(
+            'Le site n°${lien.idSource} de « ${titre.nom} » n\'existe plus.',
+          );
+        }
+        if (!lien.estPrincipale && !source.estActive) continue;
+        final resultat = await _actualiserLien(
+          titre,
+          lien,
+          source,
+          classer: false,
+        );
+        nouveaux += resultat.nombreNouveauxChapitres;
+        reussis++;
+      } catch (erreur, pile) {
+        // Une erreur de programmation ne doit pas passer pour un site en
+        // panne : elle remonte telle quelle.
+        if (erreur is Error) rethrow;
+        erreurs[lien.idSource] = erreur;
+        premiereErreur ??= erreur;
+        pileErreur ??= pile;
+      }
+    }
+    if (reussis == 0 && premiereErreur != null) {
+      Error.throwWithStackTrace(premiereErreur, pileErreur!);
+    }
+    // Classement une seule fois, après les chapitres de tous les sites.
+    final estEnAttente = await _classerEnAttenteSansErreur(idTitre);
+    final relu = await _depotTitres.chargerTitre(idTitre) ?? titre;
+    return ResultatAjoutTitre(
+      relu,
+      nouveaux,
+      estEnAttente: estEnAttente,
+      erreursParSite: erreurs,
+    );
+  }
+
+  /// Actualise un seul site du titre : le principal (fiche et chapitres,
+  /// comme [actualiserTitre] avant l'étape 8) ou un secondaire (chapitres
+  /// seulement).
+  ///
+  /// Sert à `ServiceMisesAJour`, qui regroupe les requêtes par site pour
+  /// n'interroger qu'un titre à la fois par site. Lève une [ErreurService] si
+  /// ce site n'est pas lié au titre, et laisse passer `ErreurSource` (site
+  /// injoignable) et `ErreurBaseDeDonnees`.
+  Future<ResultatAjoutTitre> actualiserSiteDuTitre(
+    Titre titre,
+    int idSource,
+  ) async {
+    LienTitreSource? lien;
+    for (final candidat in await chargerLiensDuTitre(titre)) {
+      if (candidat.idSource == idSource) lien = candidat;
+    }
+    if (lien == null) {
+      throw ErreurService("Ce site n'est plus lié à « ${titre.nom} ».");
+    }
+    final source = await _depotSources.chargerSource(idSource);
     if (source == null) {
       throw ErreurService('Le site de « ${titre.nom} » n\'existe plus.');
     }
-    return _enregistrerDepuisSource(source, titre.urlTitre, titre: titre);
+    return _actualiserLien(titre, lien, source);
+  }
+
+  /// Actualise le site [lien] du titre (voir [actualiserSiteDuTitre]) ;
+  /// [classer] : recalculer « En attente » à la fin.
+  Future<ResultatAjoutTitre> _actualiserLien(
+    Titre titre,
+    LienTitreSource lien,
+    Source source, {
+    bool classer = true,
+  }) {
+    if (lien.estPrincipale) {
+      return _enregistrerDepuisSource(
+        source,
+        lien.urlTitre,
+        titre: titre,
+        classer: classer,
+      );
+    }
+    return _enregistrerChapitresDuSite(
+      titre,
+      source,
+      lien.urlTitre,
+      classer: classer,
+    );
+  }
+
+  /// Récupère les chapitres d'un site **secondaire** du titre et enregistre
+  /// les nouveaux avec leur site d'origine. La fiche n'est jamais lue sur
+  /// un site secondaire (elle vient du principal).
+  Future<ResultatAjoutTitre> _enregistrerChapitresDuSite(
+    Titre titre,
+    Source source,
+    String urlTitre, {
+    bool classer = true,
+  }) async {
+    final idTitre = titre.id!;
+    final idSource = source.id!;
+    final adaptateur = await _creerAdaptateur(source, titre: titre);
+    // Réseau d'abord : un site qui ne répond pas n'écrit rien.
+    final List<Chapitre> chapitres;
+    try {
+      chapitres = await adaptateur.recupererChapitres(urlTitre);
+    } on ErreurSource catch (erreur) {
+      throw erreur.avecContexte(typeDetecte: source.typeSource);
+    }
+    final nouveaux = await _depotChapitres.enregistrerChapitres(<Chapitre>[
+      for (final chapitre in chapitres) chapitre.copierAvec(idTitre: idTitre),
+    ], idSource: idSource);
+    await _depotTitres.enregistrerDateVerification(
+      idTitre,
+      DateTime.now().toUtc(),
+    );
+    final estEnAttente = classer
+        ? await _classerEnAttenteSansErreur(idTitre)
+        : false;
+    final relu = await _depotTitres.chargerTitre(idTitre) ?? titre;
+    return ResultatAjoutTitre(relu, nouveaux, estEnAttente: estEnAttente);
+  }
+
+  // ------------------------------------------- Sites d'un titre (étape 8)
+
+  /// Sites du titre : le principal d'abord, puis les secondaires dans
+  /// l'ordre d'ajout.
+  ///
+  /// Sans dépôt des sites (ancien assemblage), ou si la table ne connaît pas
+  /// le titre, seul le site principal est renvoyé (reconstruit depuis
+  /// `Titre.idSource` / `Titre.urlTitre`). Liste vide si le titre n'a aucun
+  /// site connu.
+  Future<List<LienTitreSource>> chargerLiensDuTitre(Titre titre) async {
+    final idTitre = titre.id;
+    final depot = _depotTitresSources;
+    if (depot != null && idTitre != null) {
+      final liens = await depot.chargerLiensTitre(idTitre);
+      if (liens.isNotEmpty) return liens;
+    }
+    final idSource = titre.idSource;
+    if (idTitre == null || idSource == null) return const <LienTitreSource>[];
+    return <LienTitreSource>[
+      LienTitreSource(
+        idTitre: idTitre,
+        idSource: idSource,
+        urlTitre: titre.urlTitre,
+        estPrincipale: true,
+      ),
+    ];
+  }
+
+  /// Sites du titre [idTitre] pour la section « Sites » de la fiche : nom du
+  /// site et nombre de chapitres connus de chacun, principal d'abord. Liste
+  /// vide si le titre n'existe plus. Base seulement.
+  Future<List<SiteDuTitre>> chargerSitesDuTitre(int idTitre) async {
+    final titre = await _depotTitres.chargerTitre(idTitre);
+    if (titre == null) return const <SiteDuTitre>[];
+    final liens = await chargerLiensDuTitre(titre);
+    // Une seule lecture des chapitres, comptés par site (un chapitre sans
+    // site connu vient du site principal).
+    final parSite = <int, int>{};
+    for (final chapitre in await _depotChapitres.chargerChapitres(idTitre)) {
+      final idSource = chapitre.idSource ?? titre.idSource;
+      if (idSource != null) parSite[idSource] = (parSite[idSource] ?? 0) + 1;
+    }
+    final sites = <SiteDuTitre>[];
+    for (final lien in liens) {
+      final source = await _depotSources.chargerSource(lien.idSource);
+      sites.add(
+        SiteDuTitre(
+          lien: lien,
+          source: source,
+          nomSite: source?.nom ?? _nomDomaine(lien.urlTitre),
+          nombreChapitres: parSite[lien.idSource] ?? 0,
+        ),
+      );
+    }
+    return sites;
+  }
+
+  /// Ajoute un autre site au titre [idTitre] : [urlTitre] est l'adresse du
+  /// même titre sur ce site (bouton « Ajouter un autre site » de la fiche).
+  /// Renvoie le titre relu et le nombre de chapitres ajoutés depuis ce site.
+  ///
+  /// Le site est retrouvé parmi les sites configurés par le domaine de
+  /// l'adresse. S'il n'est pas configuré, il n'est ajouté automatiquement
+  /// que s'il est reconnu par son domaine (MangaDex, Scan-Manga) ; sinon le
+  /// client doit d'abord l'ajouter dans « Sources ». Un site que
+  /// l'application ne sait pas encore lire est refusé.
+  ///
+  /// Réseau d'abord : la fiche est demandée au site pour vérifier que
+  /// l'adresse est bien celle d'un titre (une page d'accueil ou de chapitre
+  /// échoue), puis ses chapitres. Rien n'est écrit si le site ne répond pas.
+  /// L'adresse retenue est celle que le site donne pour ce titre (forme
+  /// canonique), comme pour le site principal.
+  ///
+  /// Lève une [ErreurService] (adresse déjà liée à ce titre ou à un autre,
+  /// site déjà lié, site non configuré ou illisible, titre disparu) ou une
+  /// `ErreurSource` (adresse invalide, site injoignable, page qui n'est pas
+  /// un titre).
+  ///
+  /// L'interface applique ensuite les règles de téléchargement du titre
+  /// (`ServiceTelechargement.appliquerRegles`).
+  Future<ResultatAjoutTitre> ajouterSiteAuTitre(
+    int idTitre,
+    String urlTitre,
+  ) async {
+    final depot = _exigerDepotTitresSources();
+    final uri = DetecteurTypeSite.validerUrl(urlTitre);
+    final url = urlTitre.trim();
+    final titre = await _exigerTitre(idTitre);
+    await _refuserAdresseDejaLiee(depot, url, titre);
+    final source = await _trouverOuPreparerSource(url, uri);
+    final liens = await depot.chargerLiensTitre(idTitre);
+    if (source.id != null && liens.any((l) => l.idSource == source.id)) {
+      throw ErreurService(
+        "Le site « ${source.nom} » est déjà lié à « ${titre.nom} ». Pour "
+        "changer d'adresse, retirez-le d'abord.",
+      );
+    }
+    final SourceSite adaptateur;
+    try {
+      adaptateur = await _creerAdaptateur(source, titre: titre);
+    } on ErreurSource catch (erreur) {
+      throw ErreurService(
+        "Le site « ${source.nom} » n'est pas encore lisible par "
+        "l'application.",
+        cause: erreur,
+      );
+    }
+
+    // Réseau d'abord : la fiche prouve que l'adresse est bien un titre.
+    final FicheTitre fiche;
+    final List<Chapitre> chapitres;
+    try {
+      fiche = await adaptateur.recupererFiche(url);
+      chapitres = await adaptateur.recupererChapitres(url);
+    } on ErreurSource catch (erreur) {
+      throw erreur.avecContexte(typeDetecte: source.typeSource);
+    }
+    final urlSite = fiche.titre.urlTitre.trim();
+    final urlRetenue = urlSite.isEmpty ? url : urlSite;
+    if (urlRetenue != url) {
+      await _refuserAdresseDejaLiee(depot, urlRetenue, titre);
+    }
+
+    // Base ensuite : site (s'il est nouveau), lien, puis chapitres.
+    // LIMITE : trois écritures sans transaction commune (chaque dépôt ouvre
+    // la sienne) ; si les chapitres échouent, le lien existe sans chapitres
+    // et la prochaine actualisation les ajoute.
+    try {
+      final idSource =
+          source.id ?? (await _depotSources.enregistrerSource(source)).id!;
+      await depot.ajouterSourceSecondaire(idTitre, idSource, urlRetenue);
+      final nouveaux = await _depotChapitres.enregistrerChapitres(<Chapitre>[
+        for (final chapitre in chapitres) chapitre.copierAvec(idTitre: idTitre),
+      ], idSource: idSource);
+      final estEnAttente = await _classerEnAttenteSansErreur(idTitre);
+      final relu = await _depotTitres.chargerTitre(idTitre) ?? titre;
+      return ResultatAjoutTitre(relu, nouveaux, estEnAttente: estEnAttente);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      // Messages du dépôt déjà clairs (adresse ou site déjà lié, ajouté
+      // entre-temps par un autre écran).
+      throw ErreurService(erreur.message, cause: erreur);
+    }
+  }
+
+  /// Retire le site secondaire [idSource] du titre [idTitre] et renvoie le
+  /// nombre de chapitres supprimés.
+  ///
+  /// Les chapitres non lus et non téléchargés de ce site disparaissent ; les
+  /// chapitres lus restent (l'état de lecture n'est jamais perdu). Les
+  /// archives déjà téléchargées depuis ce site suivent la règle des 24 h :
+  /// leur suppression est prévue dans [delaiSuppressionDifferee] (sauf
+  /// chapitre gardé par le client), et le client peut les garder entre-temps.
+  ///
+  /// Lève une [ErreurService] pour le site principal (en choisir d'abord un
+  /// autre avec [definirSitePrincipal]) ou un site qui n'est pas lié au
+  /// titre. L'interface applique ensuite les règles de téléchargement du
+  /// titre (`ServiceTelechargement.appliquerRegles`).
+  Future<int> retirerSiteDuTitre(int idTitre, int idSource) async {
+    final depot = _exigerDepotTitresSources();
+    final titre = await _exigerTitre(idTitre);
+    if (titre.idSource == idSource) {
+      throw const ErreurService(
+        "Le site principal d'un titre ne peut pas être retiré : choisissez "
+        "d'abord un autre site principal.",
+      );
+    }
+    final int supprimes;
+    try {
+      supprimes = await depot.retirerSourceSecondaire(idTitre, idSource);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      throw ErreurService(erreur.message, cause: erreur);
+    }
+    // Après le retrait (un retrait refusé ne doit rien programmer).
+    // LIMITE : hors de la transaction du retrait ; si ces écritures
+    // échouent, la prochaine application des règles de téléchargement les
+    // programme (les chapitres d'un site retiré y sont à supprimer).
+    final echeance = DateTime.now().toUtc().add(delaiSuppressionDifferee);
+    for (final chapitre in await _depotChapitres.chargerChapitres(
+      idTitre,
+      idSource: idSource,
+    )) {
+      final id = chapitre.id;
+      if (id == null ||
+          !chapitre.estTelecharge ||
+          chapitre.estGarde ||
+          chapitre.dateSuppressionPrevue != null) {
+        continue;
+      }
+      await _depotChapitres.planifierSuppression(id, echeance);
+    }
+    await _classerEnAttenteSansErreur(idTitre);
+    return supprimes;
+  }
+
+  /// Fait du site [idSource], déjà lié au titre [idTitre], son site
+  /// principal : la fiche (nom, couverture, résumé, catégories) est relue
+  /// sur ce site, avec ses chapitres. L'ancien principal devient secondaire
+  /// (ses chapitres restent).
+  ///
+  /// Réseau d'abord : si le nouveau site ne répond pas, rien ne change et
+  /// l'`ErreurSource` est levée. Renvoie le titre relu (sans requête si ce
+  /// site est déjà le principal). Lève une [ErreurService] si ce site n'est
+  /// pas lié au titre.
+  Future<ResultatAjoutTitre> definirSitePrincipal(
+    int idTitre,
+    int idSource,
+  ) async {
+    final depot = _exigerDepotTitresSources();
+    final titre = await _exigerTitre(idTitre);
+    LienTitreSource? lien;
+    for (final candidat in await depot.chargerLiensTitre(idTitre)) {
+      if (candidat.idSource == idSource) lien = candidat;
+    }
+    if (lien == null) {
+      throw ErreurService("Ce site n'est pas lié à « ${titre.nom} ».");
+    }
+    if (lien.estPrincipale) return ResultatAjoutTitre(titre, 0);
+    final source = await _depotSources.chargerSource(idSource);
+    if (source == null) {
+      throw const ErreurService("Ce site n'existe plus.");
+    }
+    final (fiche, chapitres) = await _recupererDepuisSite(
+      source,
+      lien.urlTitre,
+      titre: titre,
+    );
+    try {
+      await depot.definirSourcePrincipale(idTitre, idSource);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      throw ErreurService(erreur.message, cause: erreur);
+    }
+    final apres = await _depotTitres.chargerTitre(idTitre) ?? titre;
+    // LIMITE : la fiche du nouveau site principal peut changer le nom ou le
+    // type du titre. Les nouvelles archives iront alors dans un autre
+    // dossier que les anciennes ; celles d'avant la migration 4 (sans
+    // `nom_archive` en base) seraient recherchées dans le nouveau dossier
+    // et deviendraient introuvables.
+    return _ecrireDepuisSite(
+      source,
+      lien.urlTitre,
+      fiche,
+      chapitres,
+      titre: apres,
+      ancien: titre,
+    );
+  }
+
+  /// Dépôt des sites, ou [ErreurService] s'il n'a pas été fourni.
+  DepotTitresSources _exigerDepotTitresSources() {
+    final depot = _depotTitresSources;
+    if (depot == null) {
+      throw const ErreurService(
+        "Les sites multiples ne sont pas disponibles dans cette version.",
+      );
+    }
+    return depot;
+  }
+
+  /// Lève une [ErreurService] si [url] est déjà l'adresse d'un site d'un
+  /// titre (celui-ci ou un autre).
+  Future<void> _refuserAdresseDejaLiee(
+    DepotTitresSources depot,
+    String url,
+    Titre titre,
+  ) async {
+    final lien = await depot.chargerLienParUrl(url);
+    if (lien == null) return;
+    if (lien.idTitre == titre.id) {
+      throw ErreurService(
+        "Cette adresse est déjà un site de « ${titre.nom} ».",
+      );
+    }
+    final autre = await _depotTitres.chargerTitre(lien.idTitre);
+    throw ErreurService(
+      "Cette adresse est déjà celle du titre « ${autre?.nom ?? '?'} » dans "
+      'votre bibliothèque.',
+    );
+  }
+
+  /// Site configuré pour [url] ; sinon, pour un site reconnu par son domaine
+  /// (MangaDex, Scan-Manga), une source **non enregistrée** (sans `id`),
+  /// écrite seulement après la lecture réussie du titre. Lève une
+  /// [ErreurService] pour un site inconnu.
+  Future<Source> _trouverOuPreparerSource(String url, Uri uri) async {
+    final existante = await _serviceAjoutSite.trouverSourcePourUrl(url);
+    if (existante != null) return existante;
+    final type = DetecteurTypeSite.verifierDomaine(uri);
+    if (type == null) {
+      // La détection d'un autre site demande de télécharger sa page
+      // d'accueil et de laisser le client corriger le type : c'est le rôle
+      // de l'écran d'ajout de site.
+      throw const ErreurService(
+        "Ce site n'est pas encore configuré : ajoutez-le d'abord dans "
+        '« Sources », puis réessayez.',
+      );
+    }
+    for (final parDefaut in sourcesParDefaut) {
+      if (parDefaut.typeSource == type) return parDefaut.versSource();
+    }
+    return Source(
+      nom: ServiceAjoutSite.proposerNom(uri),
+      urlBase: ServiceAjoutSite.calculerUrlBase(uri),
+      typeSource: type,
+    );
+  }
+
+  /// Nom de domaine d'une adresse, sans `www.` (repli d'affichage).
+  static String _nomDomaine(String url) {
+    final uri = Uri.tryParse(url);
+    return uri == null || uri.host.isEmpty
+        ? url
+        : ServiceAjoutSite.proposerNom(uri);
+  }
+
+  /// Titre dont [url] est l'adresse d'un site **secondaire**, ou `null`
+  /// (adresse inconnue, site principal, ou dépôt des sites absent).
+  Future<Titre?> _chargerTitreLieEnSecondaire(String url) async {
+    final lien = await _depotTitresSources?.chargerLienParUrl(url);
+    if (lien == null || lien.estPrincipale) return null;
+    return _depotTitres.chargerTitre(lien.idTitre);
+  }
+
+  /// Ajout d'un titre déjà présent par l'un de ses sites secondaires : il
+  /// est placé dans [idsListes] et renvoyé tel quel, sans requête au site.
+  Future<ResultatAjoutTitre> _renvoyerTitreExistant(
+    Titre titre,
+    List<int> idsListes,
+  ) async {
+    final idTitre = titre.id!;
+    for (final idListe in idsListes) {
+      await _depotListes.ajouterTitre(idListe, idTitre);
+    }
+    final estEnAttente = await _classerEnAttenteSansErreur(idTitre);
+    final relu = await _depotTitres.chargerTitre(idTitre) ?? titre;
+    return ResultatAjoutTitre(
+      relu,
+      0,
+      estEnAttente: estEnAttente,
+      estDejaPresent: true,
+    );
   }
 
   /// Recherche des titres sur un site configuré (résultats non enregistrés).
@@ -401,33 +975,98 @@ class ServiceBibliotheque {
     );
   }
 
-  Future<ResultatAjoutTitre> _enregistrerDepuisSource(
-    Source source,
-    String urlTitre, {
-    List<int> idsListes = const <int>[],
-    Titre? titre,
-  }) async {
-    final idSource = source.id;
-    if (idSource == null) {
-      throw ErreurService('Le site « ${source.nom} » n\'est pas enregistré.');
-    }
-    // Langues demandées au site : celles propres au titre (actualisation),
-    // celles de la source (si réglées) puis celles du réglage général. Un
-    // site sans langues recevrait sinon les chapitres de toutes les langues
-    // (russe, japonais…). FabriqueSources lit les langues dans
-    // `Source.langueParDefaut` : on lui passe une copie.
+  /// Adaptateur du site [source], réglé sur les langues utiles.
+  ///
+  /// Langues demandées au site : celles propres au titre (actualisation),
+  /// celles de la source (si réglées) puis celles du réglage général. Un
+  /// site sans langues recevrait sinon les chapitres de toutes les langues
+  /// (russe, japonais…). FabriqueSources lit les langues dans
+  /// `Source.langueParDefaut` : on lui passe une copie. Lève une
+  /// `ErreurSource` si le type du site n'a pas encore d'adaptateur.
+  Future<SourceSite> _creerAdaptateur(Source source, {Titre? titre}) async {
     final general = await chargerLanguesGenerales();
     final langues = <String>{
       ...languesPreferees(source, general: general, titre: titre),
       ...languesPreferees(source, general: general),
       ...general,
     }.join(',');
-    final adaptateur = _fabriqueSources.creer(
-      source.copierAvec(langueParDefaut: langues),
-    );
+    return _fabriqueSources.creer(source.copierAvec(langueParDefaut: langues));
+  }
 
+  /// Fiche et chapitres de [urlTitre] sur [source] (réseau seulement).
+  Future<(FicheTitre, List<Chapitre>)> _recupererDepuisSite(
+    Source source,
+    String urlTitre, {
+    Titre? titre,
+  }) async {
+    try {
+      final adaptateur = await _creerAdaptateur(source, titre: titre);
+      final fiche = await adaptateur.recupererFiche(urlTitre);
+      final chapitres = await adaptateur.recupererChapitres(urlTitre);
+      return (fiche, chapitres);
+    } on ErreurSource catch (erreur) {
+      // Le type du site sert au rapport d'erreur exportable (étape 6).
+      throw erreur.avecContexte(typeDetecte: source.typeSource);
+    }
+  }
+
+  /// Ajout ou actualisation depuis le site **principal** : fiche et
+  /// chapitres. [classer] : recalculer « En attente » à la fin.
+  Future<ResultatAjoutTitre> _enregistrerDepuisSource(
+    Source source,
+    String urlTitre, {
+    List<int> idsListes = const <int>[],
+    Titre? titre,
+    bool classer = true,
+  }) async {
+    if (source.id == null) {
+      throw ErreurService('Le site « ${source.nom} » n\'est pas enregistré.');
+    }
     // Réseau d'abord, base ensuite : si le site ne répond pas, rien n'est
-    // écrit. Côté base, les écritures se font dans l'ordre d'importance pour le
+    // écrit.
+    final (fiche, chapitres) = await _recupererDepuisSite(
+      source,
+      urlTitre,
+      titre: titre,
+    );
+    if (titre == null) {
+      // Ajout : l'adresse canonique donnée par le site peut être celle d'un
+      // site secondaire d'un titre existant (adresse collée sous une autre
+      // forme) ; le recréer échouerait sur l'unicité des adresses.
+      final existant = await _chargerTitreLieEnSecondaire(
+        fiche.titre.urlTitre.trim(),
+      );
+      if (existant != null) return _renvoyerTitreExistant(existant, idsListes);
+    }
+    return _ecrireDepuisSite(
+      source,
+      urlTitre,
+      fiche,
+      chapitres,
+      idsListes: idsListes,
+      titre: titre,
+      classer: classer,
+    );
+  }
+
+  /// Écrit en base ce qui a été lu sur le site principal [source].
+  ///
+  /// [titre] : titre déjà enregistré (actualisation, changement de site
+  /// principal), mis à jour par son identifiant sans changer son adresse ;
+  /// `null` pour un ajout. [ancien] : état d'avant, pour savoir si la
+  /// couverture du site a changé (par défaut [titre]).
+  Future<ResultatAjoutTitre> _ecrireDepuisSite(
+    Source source,
+    String urlTitre,
+    FicheTitre fiche,
+    List<Chapitre> chapitres, {
+    List<int> idsListes = const <int>[],
+    Titre? titre,
+    Titre? ancien,
+    bool classer = true,
+  }) async {
+    final idSource = source.id!;
+    // Côté base, les écritures se font dans l'ordre d'importance pour le
     // client : le titre, puis ses listes (pour qu'un titre ajouté soit
     // toujours visible dans Favoris / Suivis), puis les chapitres. La date de
     // vérification n'est écrite qu'en dernier : si une étape échoue, la
@@ -435,24 +1074,25 @@ class ServiceBibliotheque {
     // LIMITE : ces écritures ne forment pas une seule transaction (les dépôts
     // ouvrent chacun la leur) ; un échec au milieu laisse un titre sans
     // chapitres, rattrapé à l'actualisation suivante.
-    final FicheTitre fiche;
-    final List<Chapitre> chapitres;
-    try {
-      fiche = await adaptateur.recupererFiche(urlTitre);
-      chapitres = await adaptateur.recupererChapitres(urlTitre);
-    } on ErreurSource catch (erreur) {
-      // Le type du site sert au rapport d'erreur exportable (étape 6).
-      throw erreur.avecContexte(typeDetecte: source.typeSource);
-    }
 
     // État avant l'écriture : sert à savoir si la couverture du site a
     // changé (pour ne pas la retélécharger à chaque actualisation).
-    final ancien = titre ?? await _depotTitres.chargerTitreParUrl(urlTitre);
+    final avant =
+        ancien ?? titre ?? await _depotTitres.chargerTitreParUrl(urlTitre);
 
     // Le niveau de contenu vient de la fiche (MangaDex : `contentRating`) ;
-    // `enregistrerTitre` l'écrit avec le reste de la fiche.
+    // `enregistrerTitre` l'écrit avec le reste de la fiche. Pour un titre
+    // connu, l'identifiant et l'adresse enregistrés sont imposés : une
+    // adresse donnée sous une autre forme par le site ne doit ni créer un
+    // second titre, ni déplacer le site principal.
     final enregistre = await _depotTitres.enregistrerTitre(
-      fiche.titre.copierAvec(idSource: idSource),
+      titre == null
+          ? fiche.titre.copierAvec(idSource: idSource)
+          : fiche.titre.copierAvec(
+              id: titre.id,
+              idSource: idSource,
+              urlTitre: urlTitre,
+            ),
       categories: fiche.categories,
     );
     final idTitre = enregistre.id!;
@@ -463,6 +1103,7 @@ class ServiceBibliotheque {
       chapitres
           .map((chapitre) => chapitre.copierAvec(idTitre: idTitre))
           .toList(),
+      idSource: idSource,
     );
     await _depotTitres.enregistrerDateVerification(
       idTitre,
@@ -471,9 +1112,11 @@ class ServiceBibliotheque {
     // Classement et couverture après les écritures essentielles, sans
     // jamais faire échouer l'ajout : le classement est refait à chaque
     // vérification, et la couverture à l'affichage suivant.
-    final estEnAttente = await _classerEnAttenteSansErreur(idTitre);
+    final estEnAttente = classer
+        ? await _classerEnAttenteSansErreur(idTitre)
+        : false;
     final relu = await _depotTitres.chargerTitre(idTitre) ?? enregistre;
-    await _mettreAJourCouvertureLocale(ancien, relu, source);
+    await _mettreAJourCouvertureLocale(avant, relu, source);
     return ResultatAjoutTitre(relu, nouveaux, estEnAttente: estEnAttente);
   }
 
@@ -662,6 +1305,9 @@ class ServiceBibliotheque {
           sources[titre.idSource],
           general: general,
           titre: titre,
+          // Une requête de base par titre : le dépôt des sites n'a pas de
+          // lecture groupée, et l'onglet ne compte que les titres suivis.
+          plusieursSites: await _aPlusieursSites(id),
         ),
     };
     // Les titres n'ont pas tous les mêmes langues : une requête par jeu.

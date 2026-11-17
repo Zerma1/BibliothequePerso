@@ -27,8 +27,12 @@ void main() {
 
   setUp(() => bibliotheque = FauxServiceBibliotheque());
 
-  void taille(WidgetTester tester, {double largeur = 1000}) {
-    tester.view.physicalSize = Size(largeur, 1400);
+  void taille(
+    WidgetTester tester, {
+    double largeur = 1000,
+    double hauteur = 1400,
+  }) {
+    tester.view.physicalSize = Size(largeur, hauteur);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
   }
@@ -286,7 +290,8 @@ void main() {
       final telechargement = FauxServiceTelechargement(bibliotheque)
         ..ajouterChapitreTelecharge(1);
       await telechargement.annulerSuppression(1);
-      taille(tester);
+      // Plus haut : la section « Sites » (étape 8) repousse les chapitres.
+      taille(tester, hauteur: 2200);
       await tester.pumpWidget(
         envelopper(
           ChangeNotifierProvider<EtatTitre>(

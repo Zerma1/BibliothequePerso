@@ -1051,9 +1051,7 @@ void main() {
             ),
           ),
         );
-        expect(requetes.map((r) => r.url.path), <String>[
-          '/chapter/$idVizEn',
-        ]);
+        expect(requetes.map((r) => r.url.path), <String>['/chapter/$idVizEn']);
       });
 
       test('vide ou null : chapitre interne, rien de journalisé', () async {

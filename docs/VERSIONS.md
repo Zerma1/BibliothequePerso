@@ -1,5 +1,26 @@
 # Journal des versions
 
+## 0.1.0-test.3 — version de test (2026-11-17)
+
+Nouveau :
+- **Plusieurs sites pour un même titre** : section « Sites » sur la fiche, bouton « Ajouter un
+  autre site » (adresse du même titre sur l'autre site), « Retirer » (les chapitres non lus de
+  ce site sont retirés, les chapitres téléchargés passent au rouge 24 h), « Définir comme site
+  principal ». Nom du site sous chaque chapitre et filtre par site. Une seule version par
+  numéro : votre langue préférée, puis une version téléchargeable, puis le site principal.
+- **Scan-Manga** : suivi des titres (fiche, catégories, couverture, tous les chapitres) ; les
+  chapitres se lisent sur le site (« Lire sur Scan-Manga »), le site cachant volontairement ses
+  images. Pas de recherche dans l'application : collez l'adresse du titre.
+- **Sources par défaut** : MangaDex et Scan-Manga présents dès le premier lancement (une source
+  que vous supprimez n'est pas recréée).
+- Ajout d'un titre déjà présent (même par un autre site) : sa fiche s'ouvre au lieu d'un doublon.
+
+Corrigé :
+- Changer de site principal ne change plus vos langues et ne programme aucune suppression.
+- Le menu du type de site ne déborde plus sur un écran de téléphone.
+
+Mise à jour d'une base existante : automatique (migration 7), aucune donnée perdue.
+
 ## 0.1.0-test.2 — version de test (2026-11-16)
 
 Corrections de vos retours sur la 0.1.0-test.1 et étape 6.

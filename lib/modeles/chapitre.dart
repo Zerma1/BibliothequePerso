@@ -21,6 +21,7 @@ class Chapitre {
     this.dateSuppressionPrevue,
     this.estGarde = false,
     this.urlExterne,
+    this.idSource,
   });
 
   static const String _entite = 'Chapitre';
@@ -89,6 +90,16 @@ class Chapitre {
   /// jamais téléchargeable.
   final String? urlExterne;
 
+  /// Identifiant de la source (site) d'où vient ce chapitre (étape 8 : un
+  /// titre peut être suivi sur plusieurs sites).
+  ///
+  /// `null` signifie « site principal du titre » : c'est le cas d'un
+  /// chapitre pas encore enregistré, ou d'une ligne lue sans cette colonne.
+  /// À l'insertion, `DepotChapitres` remplace `null` par la source
+  /// principale du titre ; une ligne lue en base porte donc toujours sa
+  /// source réelle.
+  final int? idSource;
+
   /// `true` si le chapitre est hébergé sur un site externe ([urlExterne]
   /// non vide) : il n'a ni pages à lire dans l'application ni archive.
   bool get estExterne {
@@ -113,6 +124,7 @@ class Chapitre {
       'date_suppression_prevue': dateVersMillisecondes(dateSuppressionPrevue),
       'est_garde': booleenVersEntier(estGarde),
       'url_externe': urlExterne,
+      'id_source': idSource,
     };
   }
 
@@ -144,6 +156,9 @@ class Chapitre {
       // Colonne absente (requête partielle) : chapitre hébergé, comme les
       // lignes antérieures à la migration 6.
       urlExterne: map.lireTexteOptionnel('url_externe', _entite),
+      // Colonne absente (requête partielle, base avant la migration 7) :
+      // site principal du titre.
+      idSource: map.lireEntierOptionnel('id_source', _entite),
     );
   }
 
@@ -176,6 +191,7 @@ class Chapitre {
     DateTime? dateSuppressionPrevue,
     bool? estGarde,
     String? urlExterne,
+    int? idSource,
     bool effacerNomArchive = false,
     bool effacerDateSuppressionPrevue = false,
     bool effacerUrlExterne = false,
@@ -197,6 +213,7 @@ class Chapitre {
           : dateSuppressionPrevue ?? this.dateSuppressionPrevue,
       estGarde: estGarde ?? this.estGarde,
       urlExterne: effacerUrlExterne ? null : urlExterne ?? this.urlExterne,
+      idSource: idSource ?? this.idSource,
     );
   }
 
@@ -217,7 +234,8 @@ class Chapitre {
             other.nomArchive == nomArchive &&
             other.dateSuppressionPrevue == dateSuppressionPrevue &&
             other.estGarde == estGarde &&
-            other.urlExterne == urlExterne;
+            other.urlExterne == urlExterne &&
+            other.idSource == idSource;
   }
 
   @override
@@ -236,11 +254,13 @@ class Chapitre {
     dateSuppressionPrevue,
     estGarde,
     urlExterne,
+    idSource,
   );
 
   @override
   String toString() =>
-      'Chapitre(id: $id, idTitre: $idTitre, numero: $numero, nom: $nom, '
+      'Chapitre(id: $id, idTitre: $idTitre, idSource: $idSource, '
+      'numero: $numero, nom: $nom, '
       'langue: $langue, estLu: $estLu, estTelecharge: $estTelecharge, '
       'nomArchive: $nomArchive, estGarde: $estGarde, '
       'urlExterne: $urlExterne)';

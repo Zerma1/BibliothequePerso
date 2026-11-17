@@ -22,6 +22,7 @@ import '../widgets/image_couverture.dart';
 import '../widgets/indicateur_hors_ligne.dart';
 import '../widgets/messages.dart';
 import '../widgets/pastille_categorie.dart';
+import '../widgets/section_sites_titre.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
 import 'ecran_lecteur.dart';
@@ -58,10 +59,16 @@ class EcranTitre extends StatelessWidget {
     if (!context.mounted) {
       return;
     }
+    final sansReponse = etat.sitesSansReponse;
     afficherResultat(
       context,
       resultat,
-      succes: Textes.actualisationTerminee(resultat.donnee ?? 0),
+      succes: sansReponse.isEmpty
+          ? Textes.actualisationTerminee(resultat.donnee ?? 0)
+          : Textes.actualisationSitesSansReponse(
+              resultat.donnee ?? 0,
+              sansReponse,
+            ),
     );
   }
 
@@ -220,6 +227,10 @@ class EcranTitre extends StatelessWidget {
                 ),
               ),
             ),
+            // Filtre par site au-dessus de la liste, seulement quand le titre
+            // a plusieurs sites (inutile sinon).
+            if (etat.aPlusieursSites)
+              SliverToBoxAdapter(child: _FiltreSite(etat: etat)),
             if (groupes.isEmpty)
               const SliverToBoxAdapter(
                 child: Padding(
@@ -387,6 +398,8 @@ class _EnTete extends StatelessWidget {
                   ),
             ],
           ),
+          const SizedBox(height: espacementGrand),
+          SectionSitesTitre(etat: etat),
           const SizedBox(height: espacementGrand),
           _SectionLanguesTitre(etat: etat),
         ],
@@ -677,6 +690,10 @@ class _LegendeChapitres extends StatelessWidget {
             const LegendeHorsLigne(),
             const SizedBox(height: espacementPetit),
           ],
+          if (etat.aPlusieursSites) ...<Widget>[
+            Text(Textes.legendeSiteChapitre, style: theme.textTheme.bodySmall),
+            const SizedBox(height: espacementPetit),
+          ],
           // Mêmes proportions que les lignes (_ColonnesChapitre) : chaque
           // intitulé tombe au-dessus de sa colonne, quelle que soit la
           // largeur de l'écran.
@@ -699,6 +716,47 @@ class _LegendeChapitres extends StatelessWidget {
           ),
           const Divider(height: espacementPetit),
         ],
+      ),
+    );
+  }
+}
+
+/// Filtre « Tous les sites / nom du site » au-dessus de la liste des chapitres.
+class _FiltreSite extends StatelessWidget {
+  const _FiltreSite({required this.etat});
+
+  final EtatTitre etat;
+
+  @override
+  Widget build(BuildContext context) {
+    // Puces dans un Wrap : elles passent à la ligne sur un écran étroit,
+    // quel que soit le nombre de sites.
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        espacementMoyen,
+        0,
+        espacementMoyen,
+        espacementPetit,
+      ),
+      child: Semantics(
+        label: Textes.filtreSite,
+        child: Wrap(
+          spacing: espacementPetit,
+          runSpacing: espacementPetit / 2,
+          children: <Widget>[
+            ChoiceChip(
+              label: const Text(Textes.tousLesSites),
+              selected: etat.idSiteFiltre == null,
+              onSelected: (_) => etat.filtrerParSite(null),
+            ),
+            for (final site in etat.sites)
+              ChoiceChip(
+                label: Text(site.nomSite),
+                selected: etat.idSiteFiltre == site.idSource,
+                onSelected: (_) => etat.filtrerParSite(site.idSource),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -995,6 +1053,8 @@ class _LigneChapitre extends StatelessWidget {
     );
     final reste = horsLigne.tempsAvantSuppression(etat.maintenant);
     final nomSite = etat.nomSiteExterneDe(chapitre);
+    // Site d'origine, seulement quand le titre en a plusieurs.
+    final siteOrigine = etat.aPlusieursSites ? etat.nomSiteDe(chapitre) : null;
     return InkWell(
       onTap: () => _surAppui(context),
       child: Ink(
@@ -1028,6 +1088,13 @@ class _LigneChapitre extends StatelessWidget {
                     fontWeight: estLu || estSecondaire ? null : FontWeight.w600,
                   ),
                 ),
+                if (siteOrigine != null)
+                  Text(
+                    Textes.chapitreDuSite(siteOrigine),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: styleDetail,
+                  ),
                 // Mention sous le nom, visible même sans la colonne
                 // hors-ligne : le client sait d'emblée où se lit ce chapitre.
                 if (nomSite != null)

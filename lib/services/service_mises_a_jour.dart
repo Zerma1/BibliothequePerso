@@ -26,16 +26,27 @@ class ResultatVerificationTitre {
     this.nombreNouveauxChapitres = 0,
     this.erreur,
     this.estAnnonce = true,
+    this.erreursParSite = const <int, Object>{},
   });
 
   /// Titre vérifié.
   final Titre titre;
 
-  /// Chapitres trouvés qui n'étaient pas encore connus.
+  /// Chapitres trouvés qui n'étaient pas encore connus (tous sites
+  /// confondus).
   final int nombreNouveauxChapitres;
 
   /// Erreur rencontrée (site injoignable…), `null` si tout s'est bien passé.
+  ///
+  /// Étape 8 : si **un** des sites du titre a échoué, c'est son erreur (celle
+  /// du site principal en priorité), même si d'autres sites ont répondu et
+  /// apporté des nouveautés ([nombreNouveauxChapitres]) : le client doit
+  /// savoir qu'un site ne répond plus.
   final Object? erreur;
+
+  /// Erreur de chaque site en échec, par identifiant de source (vide si
+  /// tous les sites ont répondu).
+  final Map<int, Object> erreursParSite;
 
   /// `false` pour un titre vérifié en silence : seulement planifié (liste
   /// « Planifié », éventuellement « En attente »), ni favori ni suivi. Ses
@@ -207,20 +218,39 @@ class ServiceMisesAJour {
     } catch (erreur) {
       debugPrint('Classement « En attente » impossible : $erreur');
     }
-    final (titres, idsAnnonces) = await _chargerTitresAVerifier(
+    final (titres, idsAnnonces, idsActifs) = await _chargerTitresAVerifier(
       complete: complete,
     );
 
-    // Regroupement par source : chaque groupe est traité titre par titre.
-    final parSource = <int, List<Titre>>{};
+    // Étape 8 : une tâche par site d'un titre (principal et secondaires),
+    // regroupées par site : chaque groupe est traité tâche par tâche, ce qui
+    // garde « un seul titre à la fois par source » même quand un titre a
+    // plusieurs sites. Seuls les sites actifs sont interrogés.
+    final parSource = <int, List<(_CumulTitre, int)>>{};
+    final cumuls = <_CumulTitre>[];
     for (final titre in titres) {
-      final idSource = titre.idSource;
-      if (idSource != null) {
-        parSource.putIfAbsent(idSource, () => <Titre>[]).add(titre);
+      final cumul = _CumulTitre(titre);
+      try {
+        for (final lien in await _serviceBibliotheque.chargerLiensDuTitre(
+          titre,
+        )) {
+          if (!idsActifs.contains(lien.idSource)) continue;
+          if (lien.estPrincipale) cumul.idSourcePrincipale = lien.idSource;
+          cumul.nombreSites++;
+          parSource
+              .putIfAbsent(lien.idSource, () => <(_CumulTitre, int)>[])
+              .add((cumul, lien.idSource));
+        }
+      } catch (erreur) {
+        // Base illisible pour ce titre : noté dans le rapport, les autres
+        // titres continuent.
+        cumul.erreurs[titre.idSource ?? 0] = erreur;
+        cumuls.add(cumul);
+        continue;
       }
+      if (cumul.nombreSites > 0) cumuls.add(cumul);
     }
 
-    final resultats = <ResultatVerificationTitre>[];
     final groupes = parSource.values.toList();
     var prochainGroupe = 0;
 
@@ -230,13 +260,8 @@ class ServiceMisesAJour {
     Future<void> travailleur() async {
       while (prochainGroupe < groupes.length) {
         final groupe = groupes[prochainGroupe++];
-        for (final titre in groupe) {
-          resultats.add(
-            await _verifierTitre(
-              titre,
-              estAnnonce: idsAnnonces.contains(titre.id),
-            ),
-          );
+        for (final (cumul, idSource) in groupe) {
+          await _verifierSite(cumul, idSource);
         }
       }
     }
@@ -247,6 +272,10 @@ class ServiceMisesAJour {
     await Future.wait(
       List<Future<void>>.generate(nombreTravailleurs, (_) => travailleur()),
     );
+    final resultats = <ResultatVerificationTitre>[
+      for (final cumul in cumuls)
+        cumul.versResultat(estAnnonce: idsAnnonces.contains(cumul.titre.id)),
+    ];
 
     final fin = _maintenant();
     // Les dates sont enregistrées en base (et non en mémoire) pour être
@@ -320,10 +349,10 @@ class ServiceMisesAJour {
     return (await _depotTitres.chargerTitres(idListe: liste!.id)).isNotEmpty;
   }
 
-  /// Titres à vérifier dont la source est active (listes [listesVerifiees],
-  /// ou « En attente » seulement), et identifiants des titres annoncés
-  /// (favoris ou suivis).
-  Future<(List<Titre>, Set<int>)> _chargerTitresAVerifier({
+  /// Titres à vérifier (listes [listesVerifiees], ou « En attente »
+  /// seulement), identifiants des titres annoncés (favoris ou suivis) et
+  /// identifiants des sources actives (seuls leurs sites sont interrogés).
+  Future<(List<Titre>, Set<int>, Set<int>)> _chargerTitresAVerifier({
     required bool complete,
   }) async {
     Future<List<Titre>> titresDe(String nom) async {
@@ -348,31 +377,64 @@ class ServiceMisesAJour {
         .where((source) => source.estActive && source.id != null)
         .map((source) => source.id!)
         .toSet();
-    final titres = parId.values
-        .where((titre) => idsActifs.contains(titre.idSource))
-        .toList();
-    return (titres, idsAnnonces);
+    // Un titre dont aucun site n'est actif est écarté plus tard (ses sites
+    // ne sont connus qu'à ce moment-là).
+    return (parId.values.toList(), idsAnnonces, idsActifs);
   }
 
-  Future<ResultatVerificationTitre> _verifierTitre(
-    Titre titre, {
-    required bool estAnnonce,
-  }) async {
+  /// Vérifie le site [idSource] du titre de [cumul] et ajoute le résultat
+  /// au cumul du titre.
+  Future<void> _verifierSite(_CumulTitre cumul, int idSource) async {
     try {
-      final resultat = await _serviceBibliotheque.actualiserTitre(titre);
-      return ResultatVerificationTitre(
-        titre: resultat.titre,
-        nombreNouveauxChapitres: resultat.nombreNouveauxChapitres,
-        estAnnonce: estAnnonce,
+      final resultat = await _serviceBibliotheque.actualiserSiteDuTitre(
+        cumul.titre,
+        idSource,
       );
+      cumul.nombreNouveaux += resultat.nombreNouveauxChapitres;
+      // Le titre relu après le site principal porte la fiche à jour ; sinon
+      // le dernier relu.
+      if (idSource == cumul.idSourcePrincipale || cumul.titreRelu == null) {
+        cumul.titreRelu = resultat.titre;
+      }
     } catch (erreur) {
-      // Un site en panne ne doit pas bloquer la vérification des autres
-      // titres : l'erreur est gardée dans le rapport (PLAYBOOK.md section 6).
-      return ResultatVerificationTitre(
-        titre: titre,
-        erreur: erreur,
-        estAnnonce: estAnnonce,
-      );
+      // Un site en panne ne doit bloquer ni les autres sites du titre, ni
+      // les autres titres : l'erreur est gardée dans le rapport (PLAYBOOK.md
+      // section 6).
+      cumul.erreurs[idSource] = erreur;
     }
+  }
+}
+
+/// Résultats des sites d'un même titre pendant une vérification.
+class _CumulTitre {
+  _CumulTitre(this.titre);
+
+  /// Titre tel que chargé avant la vérification.
+  final Titre titre;
+
+  /// Site principal du titre parmi les sites interrogés, s'il est actif.
+  int? idSourcePrincipale;
+
+  /// Nombre de sites interrogés.
+  int nombreSites = 0;
+
+  /// Nouveaux chapitres, tous sites confondus.
+  int nombreNouveaux = 0;
+
+  /// Titre relu après une actualisation réussie.
+  Titre? titreRelu;
+
+  /// Erreurs par site.
+  final Map<int, Object> erreurs = <int, Object>{};
+
+  ResultatVerificationTitre versResultat({required bool estAnnonce}) {
+    final erreurPrincipale = erreurs[idSourcePrincipale];
+    return ResultatVerificationTitre(
+      titre: titreRelu ?? titre,
+      nombreNouveauxChapitres: nombreNouveaux,
+      erreur: erreurPrincipale ?? erreurs.values.firstOrNull,
+      erreursParSite: Map<int, Object>.unmodifiable(erreurs),
+      estAnnonce: estAnnonce,
+    );
   }
 }

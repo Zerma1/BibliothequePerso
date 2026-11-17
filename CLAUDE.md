@@ -96,6 +96,8 @@ cause et solution). Toute erreur inattendue ou récurrente est confiée à `anal
   `*.mangadex.network`) envoie le User-Agent de l'application : avec un User-Agent de
   navigateur, MangaDex renvoie une page anti-robot HTML (code 200) au lieu de l'image (E10).
   Un essai réel d'image vérifie le type des octets, pas seulement leur présence.
+- `dart format` seulement sur les fichiers qu'on a modifiés, jamais sur un dossier entier
+  (sinon des fichiers d'autres agents sont reformatés : E12).
 - Le cache pub réel est `C:\Users\bapti\AppData\Local\Pub\Cache` (et non `D:\dev\pub-cache`
   comme l'indique le README). Le projet étant sur D:, le cache Kotlin incrémental plante entre
   les deux disques : d'où `kotlin.incremental=false` dans `android/gradle.properties`.

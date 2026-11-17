@@ -5,6 +5,7 @@ import '../modeles/source.dart';
 import 'client_http_poli.dart';
 import 'erreur_source.dart';
 import 'source_mangadex.dart';
+import 'source_scan_manga.dart';
 import 'source_site.dart';
 
 /// Crée l'adaptateur [SourceSite] qui correspond au type d'une [Source].
@@ -51,6 +52,10 @@ class FabriqueSources {
               : preferees,
           niveauxContenuRecherche: niveauxContenuRecherche,
         );
+      case TypeSource.scanManga:
+        // Site francophone : chapitres en « fr » sauf suffixe contraire dans
+        // leur adresse ; pas de filtre de langue ni de niveau de contenu.
+        return SourceScanManga(_client);
       case TypeSource.madara:
       case TypeSource.mangaThemesia:
       case TypeSource.generique:

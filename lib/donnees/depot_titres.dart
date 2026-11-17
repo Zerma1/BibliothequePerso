@@ -10,6 +10,13 @@ import '../modeles/titre_alternatif.dart';
 import 'depot_categories.dart';
 
 /// Accès aux tables `titres`, `titres_alternatifs` et `titres_categories`.
+///
+/// Étape 8 : `titres.id_source` et `titres.url_titre` désignent le site
+/// **principal** du titre ; ils sont redondants avec la ligne principale de
+/// `titres_sources`, tenue à jour par les déclencheurs de la migration 7.
+/// Les sites secondaires sont gérés par `DepotTitresSources` ;
+/// [chargerTitreParUrl] et le filtre `idSource` de [chargerTitres] ne
+/// regardent que le site principal.
 class DepotTitres {
   /// Crée le dépôt sur une base déjà ouverte.
   const DepotTitres(this._baseDeDonnees);

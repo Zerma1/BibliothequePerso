@@ -7,6 +7,7 @@ import 'package:bibliotheque_perso/donnees/depot_listes.dart';
 import 'package:bibliotheque_perso/donnees/depot_parametres.dart';
 import 'package:bibliotheque_perso/donnees/depot_sources.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres.dart';
+import 'package:bibliotheque_perso/donnees/depot_titres_sources.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
@@ -41,6 +42,7 @@ class _ServiceSimule extends ServiceBibliotheque {
           DetecteurTypeSite(_client),
         ),
         client: _client,
+        depotTitresSources: DepotTitresSources(base),
       );
 
   static final _client = creerClientTest(
@@ -50,7 +52,13 @@ class _ServiceSimule extends ServiceBibliotheque {
 
   final Map<String, int> nouveauxParTitre = <String, int>{};
   final Set<String> titresEnErreur = <String>{};
+
+  /// Sites en panne (identifiants de source), tous titres confondus.
+  final Set<int> sitesEnErreur = <int>{};
   final List<String> ordreAppels = <String>[];
+
+  /// Appels par site : « nom du titre@idSource ».
+  final List<String> appelsParSite = <String>[];
   final Map<int, int> enCoursParSource = <int, int>{};
   int enCoursTotal = 0;
   int maximumObserveTotal = 0;
@@ -58,9 +66,13 @@ class _ServiceSimule extends ServiceBibliotheque {
   Completer<void>? verrou;
 
   @override
-  Future<ResultatAjoutTitre> actualiserTitre(Titre titre) async {
-    ordreAppels.add(titre.nom);
-    final idSource = titre.idSource!;
+  Future<ResultatAjoutTitre> actualiserSiteDuTitre(
+    Titre titre,
+    int idSource,
+  ) async {
+    // Le nom n'est noté qu'une fois par titre (site principal ou unique).
+    if (idSource == titre.idSource) ordreAppels.add(titre.nom);
+    appelsParSite.add('${titre.nom}@$idSource');
     enCoursTotal++;
     enCoursParSource[idSource] = (enCoursParSource[idSource] ?? 0) + 1;
     if (enCoursTotal > maximumObserveTotal) maximumObserveTotal = enCoursTotal;
@@ -71,7 +83,8 @@ class _ServiceSimule extends ServiceBibliotheque {
     await Future<void>.delayed(Duration.zero);
     enCoursTotal--;
     enCoursParSource[idSource] = enCoursParSource[idSource]! - 1;
-    if (titresEnErreur.contains(titre.nom)) {
+    if (titresEnErreur.contains(titre.nom) ||
+        sitesEnErreur.contains(idSource)) {
       throw ErreurSource(titre.urlTitre, 'site injoignable');
     }
     return ResultatAjoutTitre(titre, nouveauxParTitre[titre.nom] ?? 0);
@@ -227,6 +240,80 @@ void main() {
       expect(service.estEnCours, isFalse);
     },
   );
+
+  group('plusieurs sites pour un titre (étape 8)', () {
+    test('chaque site du titre est vérifié et les nouveautés sont '
+        'additionnées', () async {
+      final principal = await creerSource('a.test');
+      final secondaire = await creerSource('b.test');
+      final titre = await creerTitre(principal, 'double');
+      await DepotTitresSources(
+        base,
+      ).ajouterSourceSecondaire(titre.id!, secondaire, 'https://b.test/double');
+      bibliotheque.nouveauxParTitre['double'] = 2;
+
+      final rapport = await service.verifierTitresSuivis();
+
+      expect(
+        bibliotheque.appelsParSite,
+        unorderedEquals(<String>['double@$principal', 'double@$secondaire']),
+      );
+      expect(rapport.resultats, hasLength(1));
+      expect(rapport.nombreNouveauxChapitres, 4);
+    });
+
+    test("un site en panne n'empêche pas les autres et son erreur est "
+        'gardée', () async {
+      final principal = await creerSource('a.test');
+      final secondaire = await creerSource('b.test');
+      final titre = await creerTitre(principal, 'double');
+      await DepotTitresSources(
+        base,
+      ).ajouterSourceSecondaire(titre.id!, secondaire, 'https://b.test/double');
+      bibliotheque.nouveauxParTitre['double'] = 3;
+      bibliotheque.sitesEnErreur.add(secondaire);
+
+      final rapport = await service.verifierTitresSuivis();
+      final resultat = rapport.resultats.single;
+
+      expect(resultat.nombreNouveauxChapitres, 3);
+      expect(resultat.erreursParSite.keys, <int>[secondaire]);
+      expect(resultat.erreur, isA<ErreurSource>());
+    });
+
+    test("un site secondaire désactivé n'est pas interrogé", () async {
+      final principal = await creerSource('a.test');
+      final inactif = await creerSource('b.test', estActive: false);
+      final titre = await creerTitre(principal, 'double');
+      await DepotTitresSources(base)
+          .ajouterSourceSecondaire(titre.id!, inactif, 'https://b.test/double');
+
+      await service.verifierTitresSuivis();
+
+      expect(bibliotheque.appelsParSite, <String>['double@$principal']);
+    });
+
+    test('un seul titre à la fois par site, même partagé entre deux '
+        'titres', () async {
+      final a = await creerSource('a.test');
+      final b = await creerSource('b.test');
+      final depotLiens = DepotTitresSources(base);
+      for (var i = 0; i < 3; i++) {
+        final titre = await creerTitre(a, 't$i');
+        await depotLiens.ajouterSourceSecondaire(
+          titre.id!,
+          b,
+          'https://b.test/t$i',
+        );
+      }
+
+      final rapport = await service.verifierTitresSuivis();
+
+      expect(bibliotheque.appelsParSite, hasLength(6));
+      expect(bibliotheque.maximumObserveParSource, 1);
+      expect(rapport.resultats, hasLength(3));
+    });
+  });
 
   group('listes Planifié et En attente', () {
     Future<void> ajouterChapitreFr(Titre titre) =>

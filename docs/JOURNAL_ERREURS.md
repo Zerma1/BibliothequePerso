@@ -184,3 +184,16 @@ erreur qui semble déjà vue.
 - **Prévention** : toute action qui place un titre en Favoris / Suivis ou ajoute des chapitres
   à un titre de ces listes applique les règles ; à tester côté état (`reglesAppliquees`).
 - **Statut** : résolu le 2026-11-16 (règles appliquées après l'ajout d'un titre et après une actualisation) — livré dans 0.1.0-test.2.
+
+### E12 — `dart format` lancé sur des dossiers entiers par les agents
+- **Date(s)** : 2026-11-16, 2026-11-17 (3 occurrences : interface, services)
+- **Symptôme** : après le travail d'un agent, des fichiers hors de son périmètre apparaissent
+  modifiés (espaces, retours à la ligne, virgules finales), sans changement de code.
+- **Cause racine** : `dart format lib test` (ou `lib/services test/services`) reformate tous les
+  fichiers du dossier, y compris ceux écrits par d'autres agents avec une mise en forme différente.
+- **Solution appliquée** : vérification que seule la mise en forme change (comparaison sans
+  espaces ni virgules), puis commit séparé « Mise en forme dart format ». Pas d'annulation
+  destructive (`git checkout --`).
+- **Prévention** : `dart format` uniquement sur les fichiers que l'agent a modifiés
+  (`dart format <fichier1> <fichier2>`), jamais sur un dossier entier.
+- **Statut** : contourné.

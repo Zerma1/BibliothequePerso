@@ -17,6 +17,7 @@ import '../donnees/depot_listes.dart';
 import '../donnees/depot_sources.dart';
 import '../donnees/depot_telechargements.dart';
 import '../donnees/depot_titres.dart';
+import '../donnees/depot_titres_sources.dart';
 import '../donnees/erreur_stockage.dart';
 import '../donnees/stockage_telechargements.dart';
 import '../modeles/chapitre.dart';
@@ -84,7 +85,9 @@ class ServiceTelechargement {
     String? identifiantVerrou,
     Duration dureeVerrou = dureeVerrouParDefaut,
     DateTime Function()? horloge,
-  }) : _identifiantVerrou = identifiantVerrou ?? _genererIdentifiant(),
+    DepotTitresSources? depotTitresSources,
+  }) : _depotTitresSources = depotTitresSources,
+       _identifiantVerrou = identifiantVerrou ?? _genererIdentifiant(),
        _dureeVerrou = dureeVerrou,
        _horloge = horloge ?? DateTime.now,
        _depotTelechargements = depotTelechargements,
@@ -108,6 +111,11 @@ class ServiceTelechargement {
   final ClientHttpPoli _client;
   final ServiceParametres _serviceParametres;
   final SignalementMangaDex _signalement;
+
+  /// Sites de chaque titre (étape 8). Facultatif pour ne pas casser les
+  /// appelants existants : sans lui, tous les chapitres sont considérés
+  /// comme venant d'un site lié, et seul le site principal est connu.
+  final DepotTitresSources? _depotTitresSources;
 
   final String _identifiantVerrou;
   final Duration _dureeVerrou;
@@ -448,16 +456,25 @@ class ServiceTelechargement {
     final source = await _depotSources.chargerSource(idSource);
     final listes = await _depotListes.chargerListesDuTitre(idTitre);
     final noms = listes.map((liste) => liste.nom).toSet();
+    final idsSourcesLiees = await _chargerIdsSourcesLiees(idTitre, idSource);
     final politique = PolitiqueTelechargement(
       reglages: await _serviceParametres.chargerReglagesTelechargement(),
       // Même résolution que ServiceBibliotheque.languesPourTitre : langues
-      // propres au titre, sinon de la source si réglées, sinon réglage
-      // général du client.
+      // propres au titre, sinon de la source si réglées (titre à un seul
+      // site), sinon réglage général du client. Pour un titre à plusieurs
+      // sites, changer de site principal ne doit pas changer ses langues
+      // (relecture B1 : archives anglaises effacées).
       languesPreferees: ServiceBibliotheque.languesPreferees(
         source,
         general: await _serviceParametres.chargerLangues(),
         titre: titre,
+        plusieursSites: (idsSourcesLiees?.length ?? 1) > 1,
       ),
+      // Étape 8 : une version par numéro, le site principal départageant
+      // deux versions équivalentes ; les chapitres d'un site retiré ne sont
+      // plus suivis (leurs archives passent en suppression différée).
+      idSourcePrincipale: idSource,
+      idsSourcesLiees: idsSourcesLiees,
     );
     final chapitres = await _depotChapitres.chargerChapitres(idTitre);
     final plan = politique.calculer(
@@ -466,6 +483,18 @@ class ServiceTelechargement {
       estSuivi: noms.contains(nomListeSuivis),
     );
     return (plan: plan, chapitres: chapitres);
+  }
+
+  /// Sites liés au titre (principal compris), ou `null` sans dépôt des
+  /// sites (pas de filtre par site).
+  Future<Set<int>?> _chargerIdsSourcesLiees(
+    int idTitre,
+    int idSourcePrincipale,
+  ) async {
+    final depot = _depotTitresSources;
+    if (depot == null) return null;
+    final liens = await depot.chargerLiensTitre(idTitre);
+    return <int>{idSourcePrincipale, for (final lien in liens) lien.idSource};
   }
 
   Future<PlanTelechargement> _appliquerRegles(
@@ -858,7 +887,10 @@ class ServiceTelechargement {
     final idTitre = chapitre?.idTitre;
     if (chapitre == null || idTitre == null) return null;
     final titre = await _depotTitres.chargerTitre(idTitre);
-    final idSource = titre?.idSource;
+    // Étape 8 : le contenu d'un chapitre se demande au site d'où il vient
+    // (un site secondaire peut être d'un autre type que le principal) ; un
+    // chapitre sans site connu vient du site principal.
+    final idSource = chapitre.idSource ?? titre?.idSource;
     if (titre == null || idSource == null) return null;
     final source = await _depotSources.chargerSource(idSource);
     if (source == null) return null;

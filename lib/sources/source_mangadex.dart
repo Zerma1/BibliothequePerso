@@ -53,6 +53,7 @@ import 'couverture_site.dart';
 import 'erreur_source.dart';
 import 'lecture_json.dart';
 import 'rapport_erreur_source.dart';
+import 'sites_externes.dart' as sites_externes;
 import 'source_site.dart';
 
 /// Lecture de MangaDex par son API JSON (le HTML du site est construit en
@@ -815,22 +816,14 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
   /// Nom lisible du site d'un chapitre externe, pour le bouton
   /// « Lire sur `site` » : « MANGA Plus » pour `mangaplus.shueisha.co.jp`,
   /// « VIZ » pour `viz.com` (deux éditeurs vus dans le flux réel de Ruri
-  /// Dragon), sinon le nom de domaine en minuscules sans `www.`. Renvoie le
-  /// texte reçu tel quel s'il ne contient pas d'hôte.
-  static String nomSiteExterne(String urlExterne) {
-    final hote = Uri.tryParse(urlExterne.trim())?.host.toLowerCase() ?? '';
-    if (hote.isEmpty) {
-      return urlExterne.trim();
-    }
-    final domaine = hote.startsWith('www.') ? hote.substring(4) : hote;
-    return _nomsSitesExternes[domaine] ?? domaine;
-  }
-
-  /// Noms commerciaux des sites externes connus (domaine sans `www.`).
-  static const Map<String, String> _nomsSitesExternes = <String, String>{
-    'mangaplus.shueisha.co.jp': 'MANGA Plus',
-    'viz.com': 'VIZ',
-  };
+  /// Dragon), « Scan-Manga » pour `scan-manga.com`, sinon le nom de domaine
+  /// en minuscules sans `www.`. Renvoie le texte reçu tel quel s'il ne
+  /// contient pas d'hôte.
+  ///
+  /// Gardée pour les appelants existants ; la table des noms est commune à
+  /// tous les adaptateurs (`sites_externes.dart`).
+  static String nomSiteExterne(String urlExterne) =>
+      sites_externes.nomSiteExterne(urlExterne);
 
   /// Construit un [Chapitre] depuis un objet `Chapter` de l'API (api.yaml,
   /// schéma `ChapterAttributes`), ou `null` si le chapitre n'a aucune page

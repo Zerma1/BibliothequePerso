@@ -20,8 +20,8 @@ void main() {
     await base.close();
   });
 
-  test('la version du schéma est 6 et correspond à la base ouverte', () async {
-    expect(versionSchema, 6);
+  test('la version du schéma est 7 et correspond à la base ouverte', () async {
+    expect(versionSchema, 7);
     expect(await base.getVersion(), versionSchema);
   });
 
@@ -686,6 +686,384 @@ void main() {
     } finally {
       await dossier.delete(recursive: true);
     }
+  });
+
+  test('la migration 6 → 7 ne perd rien et remplit titres_sources et '
+      'chapitres.id_source', () async {
+    final dossier = await Directory.systemTemp.createTemp('migration7_test_');
+    final chemin = p.join(dossier.path, 'version6.db');
+    try {
+      final version6 = await databaseFactoryFfi.openDatabase(
+        chemin,
+        options: OpenDatabaseOptions(
+          version: 6,
+          onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+          onCreate: (db, version) => appliquerMigrations(db, 0, 6),
+        ),
+      );
+      final idMangaDex = await version6.insert('sources', <String, Object?>{
+        'nom': 'MangaDex',
+        'url_base': 'https://mangadex.org',
+        'type_source': 'mangaDex',
+      });
+      final idScanManga = await version6.insert('sources', <String, Object?>{
+        'nom': 'Scan-Manga',
+        'url_base': 'https://www.scan-manga.com',
+        'type_source': 'scanManga',
+      });
+      final idRuri = await version6.insert('titres', <String, Object?>{
+        'id_source': idMangaDex,
+        'url_titre': 'https://mangadex.org/title/ruri',
+        'nom': 'Ruri Dragon',
+        'type_titre': 'manga',
+        'langues_preferees': 'fr,en',
+        'niveau_contenu': 'safe',
+        'couverture_choisie': 'https://exemple.org/vol2.jpg',
+      });
+      final idSolo = await version6.insert('titres', <String, Object?>{
+        'id_source': idScanManga,
+        'url_titre': 'https://www.scan-manga.com/solo',
+        'nom': 'Solo Leveling',
+        'type_titre': 'manhwa',
+      });
+      await version6.insert('titres_alternatifs', <String, Object?>{
+        'id_titre': idRuri,
+        'nom': 'Ruri Doragon',
+        'langue': 'ja',
+      });
+      final idCategorie = await version6.insert('categories', <String, Object?>{
+        'nom': 'comédie',
+      });
+      await version6.insert('titres_categories', <String, Object?>{
+        'id_titre': idRuri,
+        'id_categorie': idCategorie,
+      });
+      // Chapitre lu et téléchargé, gardé, avec suppression prévue.
+      final idLu = await version6.insert('chapitres', <String, Object?>{
+        'id_titre': idRuri,
+        'url_chapitre': 'https://mangadex.org/chapter/1',
+        'nom': 'Chapitre 1',
+        'numero': 1.0,
+        'langue': 'fr',
+        'est_lu': 1,
+        'est_telecharge': 1,
+        'nom_archive': 'manga/Ruri Dragon/ch1.fr.zip',
+        'date_suppression_prevue': 1000,
+        'est_garde': 1,
+        'date_detection': 5,
+      });
+      // Chapitre externe non lu.
+      await version6.insert('chapitres', <String, Object?>{
+        'id_titre': idRuri,
+        'url_chapitre': 'https://mangadex.org/chapter/2',
+        'nom': 'Chapitre 2',
+        'numero': 2.0,
+        'url_externe': 'https://editeur.example/ruri/2',
+      });
+      final idSoloCh = await version6.insert('chapitres', <String, Object?>{
+        'id_titre': idSolo,
+        'url_chapitre': 'https://www.scan-manga.com/solo/1',
+        'nom': 'Chapitre 1',
+        'numero': 1.0,
+      });
+      await version6.insert('telechargements', <String, Object?>{
+        'id_chapitre': idLu,
+        'statut': 'termine',
+        'nombre_pages_total': 12,
+        'nombre_pages_faites': 12,
+        'date_ajout': 1,
+        'date_maj': 2,
+      });
+      await version6.insert('telechargements', <String, Object?>{
+        'id_chapitre': idSoloCh,
+        'statut': 'en_attente',
+        'date_ajout': 3,
+        'date_maj': 3,
+      });
+      final idListeClient = await version6.insert('listes', <String, Object?>{
+        'nom': 'Lus en 2026',
+        'ordre': 4,
+      });
+      final favoris = (await version6.query(
+        'listes',
+        where: 'nom = ?',
+        whereArgs: <Object?>[nomListeFavoris],
+      )).single;
+      await version6.insert('titres_listes', <String, Object?>{
+        'id_titre': idRuri,
+        'id_liste': favoris['id'],
+      });
+      await version6.insert('titres_listes', <String, Object?>{
+        'id_titre': idSolo,
+        'id_liste': idListeClient,
+      });
+      await version6.insert('parametres', <String, Object?>{
+        'cle': 'langue',
+        'valeur': 'fr',
+      });
+
+      // Instantané de toutes les tables existantes avant la mise à niveau.
+      const tables = <String>[
+        'sources',
+        'titres',
+        'titres_alternatifs',
+        'categories',
+        'titres_categories',
+        'chapitres',
+        'telechargements',
+        'listes',
+        'titres_listes',
+        'parametres',
+      ];
+      final avant = <String, List<Map<String, Object?>>>{
+        for (final table in tables)
+          table: await version6.query(table, orderBy: 'rowid'),
+      };
+      expect(await version6.getVersion(), 6);
+      await version6.close();
+
+      final avantMigration = DateTime.now().toUtc().millisecondsSinceEpoch;
+      final version7 = await ouvrirBaseDeDonnees(
+        chemin: chemin,
+        fabrique: databaseFactoryFfi,
+      );
+      try {
+        expect(await version7.getVersion(), versionSchema);
+
+        // Rien de perdu : chaque ligne de chaque table est identique, à la
+        // nouvelle colonne chapitres.id_source près.
+        for (final table in tables) {
+          final apres = await version7.query(table, orderBy: 'rowid');
+          final comparables = table == 'chapitres'
+              ? <Map<String, Object?>>[
+                  for (final ligne in apres)
+                    Map<String, Object?>.of(ligne)..remove('id_source'),
+                ]
+              : apres;
+          expect(comparables, avant[table], reason: 'table $table');
+        }
+
+        // chapitres.id_source = source principale du titre.
+        final chapitres = await version7.query('chapitres', orderBy: 'id');
+        expect(
+          chapitres.map((c) => (c['id_titre'], c['id_source'])),
+          <(Object?, Object?)>[
+            (idRuri, idMangaDex),
+            (idRuri, idMangaDex),
+            (idSolo, idScanManga),
+          ],
+        );
+
+        // Une ligne principale par titre, copiée de titres.
+        final liens = await version7.query('titres_sources', orderBy: 'id');
+        expect(
+          liens.map(
+            (l) => (
+              l['id_titre'],
+              l['id_source'],
+              l['url_titre'],
+              l['est_principale'],
+            ),
+          ),
+          <(Object?, Object?, Object?, Object?)>[
+            (idRuri, idMangaDex, 'https://mangadex.org/title/ruri', 1),
+            (idSolo, idScanManga, 'https://www.scan-manga.com/solo', 1),
+          ],
+        );
+        for (final lien in liens) {
+          expect(lien['date_ajout'], greaterThanOrEqualTo(avantMigration));
+        }
+
+        // Index et déclencheurs créés.
+        final objets = await version7.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type IN ('index', 'trigger') "
+          'AND name IN (?, ?, ?, ?, ?, ?)',
+          <Object?>[
+            'index_titres_sources_principale',
+            'index_titres_sources_id_source',
+            'index_chapitres_titre_source',
+            'declencheur_titres_source_insertion',
+            'declencheur_titres_source_modification',
+            'declencheur_chapitres_source',
+          ],
+        );
+        expect(objets, hasLength(6));
+
+        // Clés étrangères cohérentes après le remplissage.
+        expect(await version7.rawQuery('PRAGMA foreign_key_check'), isEmpty);
+      } finally {
+        await version7.close();
+      }
+    } finally {
+      await dossier.delete(recursive: true);
+    }
+  });
+
+  group('migration 7 : contraintes et déclencheurs', () {
+    late int idMangaDex;
+    late int idScanManga;
+    late int idTitre;
+
+    setUp(() async {
+      idMangaDex = await base.insert('sources', <String, Object?>{
+        'nom': 'MangaDex',
+        'url_base': 'https://mangadex.org',
+        'type_source': 'mangaDex',
+      });
+      idScanManga = await base.insert('sources', <String, Object?>{
+        'nom': 'Scan-Manga',
+        'url_base': 'https://www.scan-manga.com',
+        'type_source': 'scanManga',
+      });
+      idTitre = await base.insert('titres', <String, Object?>{
+        'id_source': idMangaDex,
+        'url_titre': 'https://mangadex.org/title/abc',
+        'nom': 'Titre',
+        'type_titre': 'manga',
+      });
+    });
+
+    Map<String, Object?> lien(
+      int idSource,
+      String url, {
+      int? titre,
+      int principale = 0,
+    }) => <String, Object?>{
+      'id_titre': titre ?? idTitre,
+      'id_source': idSource,
+      'url_titre': url,
+      'est_principale': principale,
+      'date_ajout': 0,
+    };
+
+    test('un titre inséré reçoit sa ligne principale', () async {
+      final ligne = (await base.query('titres_sources')).single;
+      expect(ligne['id_titre'], idTitre);
+      expect(ligne['id_source'], idMangaDex);
+      expect(ligne['url_titre'], 'https://mangadex.org/title/abc');
+      expect(ligne['est_principale'], 1);
+      expect(ligne['date_ajout'], isA<int>());
+    });
+
+    test('changer le site principal dans titres met à jour la ligne '
+        'principale', () async {
+      await base.update(
+        'titres',
+        <String, Object?>{
+          'id_source': idScanManga,
+          'url_titre': 'https://www.scan-manga.com/abc',
+        },
+        where: 'id = ?',
+        whereArgs: <Object?>[idTitre],
+      );
+      final ligne = (await base.query('titres_sources')).single;
+      expect(ligne['id_source'], idScanManga);
+      expect(ligne['url_titre'], 'https://www.scan-manga.com/abc');
+      expect(ligne['est_principale'], 1);
+    });
+
+    test('un chapitre inséré sans source reçoit celle du titre', () async {
+      await base.insert('chapitres', <String, Object?>{
+        'id_titre': idTitre,
+        'url_chapitre': 'https://mangadex.org/chapter/1',
+        'nom': 'Chapitre 1',
+        'numero': 1.0,
+      });
+      await base.insert('chapitres', <String, Object?>{
+        'id_titre': idTitre,
+        'id_source': idScanManga,
+        'url_chapitre': 'https://www.scan-manga.com/abc/1',
+        'nom': 'Chapitre 1',
+        'numero': 1.0,
+      });
+      final sources = (await base.query(
+        'chapitres',
+        orderBy: 'id',
+      )).map((c) => c['id_source']);
+      expect(sources, <Object?>[idMangaDex, idScanManga]);
+    });
+
+    test('url_titre est unique, tous titres confondus', () async {
+      await expectLater(
+        base.insert(
+          'titres_sources',
+          lien(idScanManga, 'https://mangadex.org/title/abc'),
+        ),
+        throwsA(isA<DatabaseException>()),
+      );
+      // Un nouveau titre ne peut pas reprendre l'adresse secondaire d'un
+      // autre titre (le déclencheur échoue, l'insertion est annulée).
+      await base.insert(
+        'titres_sources',
+        lien(idScanManga, 'https://www.scan-manga.com/abc'),
+      );
+      await expectLater(
+        base.insert('titres', <String, Object?>{
+          'id_source': idScanManga,
+          'url_titre': 'https://www.scan-manga.com/abc',
+          'nom': 'Doublon',
+          'type_titre': 'manga',
+        }),
+        throwsA(isA<DatabaseException>()),
+      );
+      expect(await base.query('titres'), hasLength(1));
+    });
+
+    test('un site n\'est lié qu\'une fois à un titre', () async {
+      await expectLater(
+        base.insert(
+          'titres_sources',
+          lien(idMangaDex, 'https://mangadex.org/title/autre'),
+        ),
+        throwsA(isA<DatabaseException>()),
+      );
+    });
+
+    test('un seul site principal par titre', () async {
+      await expectLater(
+        base.insert(
+          'titres_sources',
+          lien(idScanManga, 'https://www.scan-manga.com/abc', principale: 1),
+        ),
+        throwsA(isA<DatabaseException>()),
+      );
+    });
+
+    test('est_principale n\'accepte que 0 ou 1', () async {
+      await expectLater(
+        base.insert(
+          'titres_sources',
+          lien(idScanManga, 'https://www.scan-manga.com/abc', principale: 2),
+        ),
+        throwsA(isA<DatabaseException>()),
+      );
+    });
+
+    test('source inexistante refusée, source liée non supprimable, titre '
+        'supprimé en cascade', () async {
+      await expectLater(
+        base.insert('titres_sources', lien(999, 'https://exemple.org/abc')),
+        throwsA(isA<DatabaseException>()),
+      );
+      await base.insert(
+        'titres_sources',
+        lien(idScanManga, 'https://www.scan-manga.com/abc'),
+      );
+      await expectLater(
+        base.delete(
+          'sources',
+          where: 'id = ?',
+          whereArgs: <Object?>[idScanManga],
+        ),
+        throwsA(isA<DatabaseException>()),
+      );
+      await base.delete(
+        'titres',
+        where: 'id = ?',
+        whereArgs: <Object?>[idTitre],
+      );
+      expect(await base.query('titres_sources'), isEmpty);
+    });
   });
 
   test('nom_archive est unique, mais plusieurs NULL sont permis', () async {

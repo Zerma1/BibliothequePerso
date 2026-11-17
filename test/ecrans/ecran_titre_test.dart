@@ -445,10 +445,7 @@ void main() {
       await afficherAvecTelechargements(tester);
 
       // Mention sous le nom et icône « lien externe » dans la colonne.
-      expect(
-        find.text(Textes.publieSur('MANGA Plus')),
-        findsOneWidget,
-      );
+      expect(find.text(Textes.publieSur('MANGA Plus')), findsOneWidget);
       expect(
         find.byTooltip(Textes.infoBulleHorsLigne(EtatHorsLigne.externe)),
         findsOneWidget,
@@ -462,10 +459,7 @@ void main() {
       await tester.tap(find.textContaining("Chez l'éditeur"));
       await tester.pumpAndSettle();
 
-      expect(
-        find.text(Textes.lireSur('MANGA Plus')),
-        findsOneWidget,
-      );
+      expect(find.text(Textes.lireSur('MANGA Plus')), findsOneWidget);
       expect(find.text(Textes.telecharger), findsNothing);
       expect(find.text(Textes.ouvrirSurLeSite), findsNWidgets(1));
       expect(find.byType(EcranLecteur), findsNothing);

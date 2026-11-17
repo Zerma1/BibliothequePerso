@@ -9,6 +9,7 @@ import 'package:bibliotheque_perso/donnees/depot_parametres.dart';
 import 'package:bibliotheque_perso/donnees/depot_sources.dart';
 import 'package:bibliotheque_perso/donnees/depot_telechargements.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres.dart';
+import 'package:bibliotheque_perso/donnees/depot_titres_sources.dart';
 import 'package:bibliotheque_perso/donnees/stockage_telechargements.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
@@ -17,6 +18,7 @@ import 'package:bibliotheque_perso/modeles/telechargement.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/services/politique_telechargement.dart';
+import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
 import 'package:bibliotheque_perso/services/service_telechargement.dart';
 import 'package:bibliotheque_perso/services/verrou_telechargement.dart';
@@ -1352,6 +1354,293 @@ void main() {
       expect((await chapitre(1)).estTelecharge, isFalse);
       final verrou = await parametres.chargerVerrouTelechargement();
       expect(verrou!.proprietaire, 'tache-de-fond');
+    });
+  });
+
+  group('plusieurs sites pour un titre (étape 8)', () {
+    test("le chapitre d'un site secondaire est téléchargé avec l'adaptateur "
+        'de son site, pas celui du site principal', () async {
+      // Site principal sans adaptateur (Madara) : seul le site du chapitre
+      // (MangaDex) permet de le télécharger.
+      final madara = await depotSources.enregistrerSource(
+        const Source(
+          nom: 'Madara',
+          urlBase: 'https://madara.test',
+          typeSource: TypeSource.madara,
+        ),
+      );
+      final autre = await depotTitres.enregistrerTitre(
+        Titre(
+          idSource: madara.id,
+          urlTitre: 'https://madara.test/manga/autre',
+          nom: 'Autre titre',
+        ),
+      );
+      await DepotTitresSources(base).ajouterSourceSecondaire(
+        autre.id!,
+        titre.idSource!,
+        'https://mangadex.org/title/autre',
+      );
+      await depotChapitres.enregistrerChapitres(<Chapitre>[
+        Chapitre(
+          idTitre: autre.id,
+          urlChapitre: 'https://mangadex.org/chapter/$_uuidChapitre?site=2',
+          nom: 'Chapitre 1',
+          numero: 1,
+          langue: 'fr',
+        ),
+      ], idSource: titre.idSource);
+      final chapitreSecondaire = (await depotChapitres.chargerChapitres(
+        autre.id!,
+      )).single;
+
+      await service.telechargerChapitre(chapitreSecondaire.id!);
+      await service.lancerTraitement();
+
+      final ligne = await depotTelechargements.chargerParChapitre(
+        chapitreSecondaire.id!,
+      );
+      expect(ligne!.statut, StatutTelechargement.termine);
+    });
+
+    test("l'archive d'un site retiré passe en suppression différée, même "
+        'pour un titre ni favori ni suivi', () async {
+      final depotLiens = DepotTitresSources(base);
+      final avecSites = ServiceTelechargement(
+        depotTelechargements: depotTelechargements,
+        depotChapitres: depotChapitres,
+        depotTitres: depotTitres,
+        depotListes: depotListes,
+        depotSources: depotSources,
+        stockage: stockage,
+        fabriqueSources: FabriqueSources(client),
+        client: client,
+        serviceParametres: parametres,
+        identifiantVerrou: 'application',
+        depotTitresSources: depotLiens,
+      );
+      addTearDown(avecSites.fermer);
+      final scan = await depotSources.enregistrerSource(
+        const Source(
+          nom: 'Scan-Manga',
+          urlBase: 'https://www.scan-manga.com',
+          typeSource: TypeSource.scanManga,
+        ),
+      );
+      await depotLiens.ajouterSourceSecondaire(
+        titre.id!,
+        scan.id!,
+        'https://www.scan-manga.com/titre.html',
+      );
+      await depotChapitres.enregistrerChapitres(<Chapitre>[
+        Chapitre(
+          idTitre: titre.id,
+          urlChapitre: 'https://www.scan-manga.com/lecture/31',
+          nom: 'Chapitre 31',
+          numero: 31,
+          langue: 'fr',
+        ),
+      ], idSource: scan.id);
+      final chapitreScan = (await depotChapitres.chargerChapitres(
+        titre.id!,
+        idSource: scan.id,
+      )).single;
+      await depotChapitres.enregistrerArchive(chapitreScan.id!, 'scan.zip');
+
+      // Site encore lié : un téléchargement manuel est conservé.
+      await avecSites.appliquerRegles(titre.id!);
+      expect(
+        (await depotChapitres.chargerChapitre(chapitreScan.id!))!
+            .dateSuppressionPrevue,
+        isNull,
+      );
+
+      await depotLiens.retirerSourceSecondaire(titre.id!, scan.id!);
+      final plan = await avecSites.appliquerRegles(titre.id!);
+
+      expect(plan.idsASupprimer, <int>[chapitreScan.id!]);
+      expect(
+        (await depotChapitres.chargerChapitre(chapitreScan.id!))!
+            .dateSuppressionPrevue,
+        isNotNull,
+      );
+    });
+
+    // Relecture B1 : les langues d'un titre à plusieurs sites ne dépendent
+    // pas de son site principal. Scan-Manga est créé ici avec « fr », comme
+    // dans les installations d'avant la correction.
+    group('langues indépendantes du site principal', () {
+      late DepotTitresSources depotLiens;
+      late ServiceTelechargement avecSites;
+      late Source scan;
+
+      setUp(() async {
+        depotLiens = DepotTitresSources(base);
+        avecSites = ServiceTelechargement(
+          depotTelechargements: depotTelechargements,
+          depotChapitres: depotChapitres,
+          depotTitres: depotTitres,
+          depotListes: depotListes,
+          depotSources: depotSources,
+          stockage: stockage,
+          fabriqueSources: FabriqueSources(client),
+          client: client,
+          serviceParametres: parametres,
+          identifiantVerrou: 'application',
+          depotTitresSources: depotLiens,
+        );
+        addTearDown(avecSites.fermer);
+        scan = await depotSources.enregistrerSource(
+          const Source(
+            nom: 'Scan-Manga',
+            urlBase: 'https://www.scan-manga.com',
+            typeSource: TypeSource.scanManga,
+            langueParDefaut: 'fr',
+          ),
+        );
+        // La file ne tourne pas : seul le plan des règles compte ici.
+        await bloquerFile();
+      });
+
+      test("passer d'un site MangaDex à Scan-Manga comme principal ne "
+          'programme pas la suppression des archives anglaises', () async {
+        await parametres.enregistrerLangues(<String>['fr', 'en']);
+        await depotChapitres.enregistrerChapitres(<Chapitre>[
+          for (var n = 31; n <= 32; n++)
+            Chapitre(
+              idTitre: titre.id,
+              urlChapitre: 'https://mangadex.org/chapter/$_uuidChapitre?en=$n',
+              nom: 'Chapter $n',
+              numero: n.toDouble(),
+              langue: 'en',
+            ),
+        ]);
+        final anglais = (await depotChapitres.chargerChapitres(titre.id!))
+            .where((c) => c.langue == 'en')
+            .toList();
+        for (final chapitre in anglais) {
+          await depotChapitres.enregistrerArchive(
+            chapitre.id!,
+            'en-${chapitre.numero}.zip',
+          );
+        }
+        await depotListes.ajouterTitre(
+          await idListe(nomListeFavoris),
+          titre.id!,
+        );
+        await depotLiens.ajouterSourceSecondaire(
+          titre.id!,
+          scan.id!,
+          'https://www.scan-manga.com/titre.html',
+        );
+        await depotChapitres.enregistrerChapitres(<Chapitre>[
+          Chapitre(
+            idTitre: titre.id,
+            urlChapitre: 'https://www.scan-manga.com/lecture/1',
+            nom: 'Chapitre 1',
+            numero: 1,
+            langue: 'fr',
+          ),
+        ], idSource: scan.id);
+
+        // « Définir comme principal » (écriture en base faite par
+        // ServiceBibliotheque.definirSitePrincipal), puis les règles.
+        await depotLiens.definirSourcePrincipale(titre.id!, scan.id!);
+        final plan = await avecSites.appliquerRegles(titre.id!);
+
+        expect(plan.idsASupprimer, isEmpty);
+        for (final chapitre in anglais) {
+          final relu = await depotChapitres.chargerChapitre(chapitre.id!);
+          expect(relu!.estTelecharge, isTrue);
+          expect(relu.dateSuppressionPrevue, isNull);
+        }
+      });
+
+      test('un titre ajouté depuis Scan-Manga télécharge les chapitres '
+          'anglais de MangaDex ajouté en second site', () async {
+        await parametres.enregistrerLangues(<String>['fr', 'en']);
+        final depuisScan = await depotTitres.enregistrerTitre(
+          Titre(
+            idSource: scan.id,
+            urlTitre: 'https://www.scan-manga.com/autre.html',
+            nom: 'Titre Scan-Manga',
+          ),
+        );
+        await depotChapitres.enregistrerChapitres(<Chapitre>[
+          Chapitre(
+            idTitre: depuisScan.id,
+            urlChapitre: 'https://www.scan-manga.com/lecture/autre/1',
+            nom: 'Chapitre 1',
+            numero: 1,
+            langue: 'fr',
+          ),
+        ], idSource: scan.id);
+        await depotListes.ajouterTitre(
+          await idListe(nomListeFavoris),
+          depuisScan.id!,
+        );
+        await depotLiens.ajouterSourceSecondaire(
+          depuisScan.id!,
+          titre.idSource!,
+          'https://mangadex.org/title/autre',
+        );
+        await depotChapitres.enregistrerChapitres(<Chapitre>[
+          for (var n = 2; n <= 3; n++)
+            Chapitre(
+              idTitre: depuisScan.id,
+              urlChapitre: 'https://mangadex.org/chapter/$_uuidChapitre?b=$n',
+              nom: 'Chapter $n',
+              numero: n.toDouble(),
+              langue: 'en',
+            ),
+        ], idSource: titre.idSource);
+        final anglais = (await depotChapitres.chargerChapitres(depuisScan.id!))
+            .where((c) => c.langue == 'en')
+            .map((c) => c.id!)
+            .toSet();
+
+        final plan = await avecSites.appliquerRegles(depuisScan.id!);
+
+        expect(anglais, hasLength(2));
+        expect(plan.idsATelecharger.toSet().containsAll(anglais), isTrue);
+      });
+
+      test("un titre à un seul site garde les langues de sa source", () {
+        const sourceFr = Source(
+          nom: 'Scan-Manga',
+          urlBase: 'https://www.scan-manga.com',
+          typeSource: TypeSource.scanManga,
+          langueParDefaut: 'fr',
+        );
+        expect(
+          ServiceBibliotheque.languesPreferees(
+            sourceFr,
+            general: const <String>['fr', 'en'],
+          ),
+          <String>['fr'],
+        );
+        expect(
+          ServiceBibliotheque.languesPreferees(
+            sourceFr,
+            general: const <String>['fr', 'en'],
+            plusieursSites: true,
+          ),
+          <String>['fr', 'en'],
+        );
+        expect(
+          ServiceBibliotheque.languesPreferees(
+            sourceFr,
+            general: const <String>['fr', 'en'],
+            titre: Titre(
+              urlTitre: 'https://www.scan-manga.com/x.html',
+              nom: 'X',
+              languesPreferees: 'en',
+            ),
+            plusieursSites: true,
+          ),
+          <String>['en'],
+        );
+      });
     });
   });
 }

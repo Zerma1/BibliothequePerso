@@ -82,18 +82,26 @@ class DepotSources {
 
   /// Supprime une source.
   ///
-  /// Lève une [ErreurBaseDeDonnees] si des titres en dépendent encore : la
-  /// clé étrangère `titres.id_source` est en `ON DELETE RESTRICT` pour ne
-  /// jamais effacer une partie de la bibliothèque par accident.
+  /// Lève une [ErreurBaseDeDonnees] si des titres en dépendent encore (comme
+  /// site principal ou secondaire), ou si des chapitres venant de ce site
+  /// sont encore enregistrés (chapitres lus ou téléchargés gardés après le
+  /// retrait du site d'un titre) : les clés étrangères `titres.id_source`,
+  /// `titres_sources.id_source` et `chapitres.id_source` sont en `ON DELETE
+  /// RESTRICT` pour ne jamais effacer une partie de la bibliothèque par
+  /// accident.
   Future<void> supprimerSource(int id) async {
     // Vérification explicite dans la même transaction que la suppression :
     // le message d'erreur est clair, et la contrainte RESTRICT reste en
     // filet de sécurité.
     await _baseDeDonnees.transaction((txn) async {
+      // titres_sources contient aussi le site principal de chaque titre
+      // (migration 7) : un seul comptage couvre les deux cas. Servi par
+      // l'index index_titres_sources_id_source.
       final nombreTitres =
           Sqflite.firstIntValue(
             await txn.rawQuery(
-              'SELECT COUNT(*) FROM titres WHERE id_source = ?',
+              'SELECT COUNT(DISTINCT id_titre) FROM titres_sources '
+              'WHERE id_source = ?',
               <Object?>[id],
             ),
           ) ??
@@ -102,6 +110,22 @@ class DepotSources {
         throw ErreurBaseDeDonnees(
           'Impossible de supprimer la source n°$id : $nombreTitres titre(s) en '
           'dépendent encore. Supprimez d\'abord ces titres.',
+        );
+      }
+      // LIMITE : pas d'index avec id_source en tête sur chapitres, la
+      // requête parcourt la table ; la suppression d'un site est rare.
+      final nombreChapitres =
+          Sqflite.firstIntValue(
+            await txn.rawQuery(
+              'SELECT COUNT(*) FROM chapitres WHERE id_source = ?',
+              <Object?>[id],
+            ),
+          ) ??
+          0;
+      if (nombreChapitres > 0) {
+        throw ErreurBaseDeDonnees(
+          'Impossible de supprimer la source n°$id : $nombreChapitres '
+          'chapitre(s) lus ou téléchargés viennent encore de ce site.',
         );
       }
       await txn.delete('sources', where: 'id = ?', whereArgs: <Object?>[id]);

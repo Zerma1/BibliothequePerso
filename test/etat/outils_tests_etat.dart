@@ -25,6 +25,7 @@ import 'package:bibliotheque_perso/main.dart';
 import 'package:bibliotheque_perso/modeles/categorie.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
+import 'package:bibliotheque_perso/modeles/lien_titre_source.dart';
 import 'package:bibliotheque_perso/modeles/liste_lecture.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/telechargement.dart';
@@ -390,11 +391,187 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
     );
   }
 
+  /// Derniers filtres de site reçus par [chargerChapitres].
+  final List<int?> filtresSiteDemandes = <int?>[];
+
   @override
-  Future<List<Chapitre>> chargerChapitres(int idTitre) async {
+  Future<List<Chapitre>> chargerChapitres(int idTitre, {int? idSource}) async {
     await _lire();
-    return List<Chapitre>.of(chapitresParTitre[idTitre] ?? const <Chapitre>[]);
+    filtresSiteDemandes.add(idSource);
+    final titre = titres.where((t) => t.id == idTitre).firstOrNull;
+    return <Chapitre>[
+      for (final chapitre in chapitresParTitre[idTitre] ?? const <Chapitre>[])
+        // Même règle que le dépôt : un chapitre sans site connu vient du site
+        // principal.
+        if (idSource == null ||
+            (chapitre.idSource ?? titre?.idSource) == idSource)
+          chapitre,
+    ];
   }
+
+  // ------------------------------------------- Étape 8 : sites d'un titre
+
+  /// Sites secondaires par identifiant de titre (le principal vient de
+  /// `Titre.idSource` / `Titre.urlTitre`).
+  final Map<int, List<LienTitreSource>> sitesSecondaires =
+      <int, List<LienTitreSource>>{};
+
+  /// Erreur levée par [ajouterSiteAuTitre], [retirerSiteDuTitre] et
+  /// [definirSitePrincipal], si définie.
+  Object? erreurSites;
+
+  /// Chapitres ajoutés par [ajouterSiteAuTitre] (recopiés avec le titre et
+  /// le site ajouté).
+  List<Chapitre> chapitresSiteAjoute = <Chapitre>[];
+
+  /// Erreurs par site renvoyées par [actualiserTitre].
+  Map<int, Object> erreursParSiteActualisation = <int, Object>{};
+
+  /// Si défini, [ajouterTitreDepuisUrl] renvoie ce titre comme déjà présent
+  /// (adresse d'un site secondaire).
+  int? idTitreDejaPresent;
+
+  /// Journal des appels aux méthodes des sites (« ajouter:1:url »…).
+  final List<String> journalSites = <String>[];
+
+  /// Ajoute un site secondaire de test au titre [idTitre].
+  void ajouterSiteDeTest(int idTitre, int idSource, String url) {
+    (sitesSecondaires[idTitre] ??= <LienTitreSource>[]).add(
+      LienTitreSource(idTitre: idTitre, idSource: idSource, urlTitre: url),
+    );
+  }
+
+  Titre? _titreParId(int idTitre) =>
+      titres.where((t) => t.id == idTitre).firstOrNull;
+
+  @override
+  Future<List<LienTitreSource>> chargerLiensDuTitre(Titre titre) async {
+    final idTitre = titre.id;
+    final actuel = idTitre == null ? null : _titreParId(idTitre);
+    final idSource = actuel?.idSource ?? titre.idSource;
+    if (idTitre == null || idSource == null) {
+      return const <LienTitreSource>[];
+    }
+    return <LienTitreSource>[
+      LienTitreSource(
+        idTitre: idTitre,
+        idSource: idSource,
+        urlTitre: actuel?.urlTitre ?? titre.urlTitre,
+        estPrincipale: true,
+      ),
+      ...?sitesSecondaires[idTitre],
+    ];
+  }
+
+  @override
+  Future<List<SiteDuTitre>> chargerSitesDuTitre(int idTitre) async {
+    await _lire();
+    final titre = _titreParId(idTitre);
+    if (titre == null) return const <SiteDuTitre>[];
+    final chapitres = chapitresParTitre[idTitre] ?? const <Chapitre>[];
+    return <SiteDuTitre>[
+      for (final lien in await chargerLiensDuTitre(titre))
+        SiteDuTitre(
+          lien: lien,
+          source: sources.where((s) => s.id == lien.idSource).firstOrNull,
+          nomSite:
+              sources.where((s) => s.id == lien.idSource).firstOrNull?.nom ??
+              Uri.parse(lien.urlTitre).host,
+          nombreChapitres: chapitres
+              .where((c) => (c.idSource ?? titre.idSource) == lien.idSource)
+              .length,
+        ),
+    ];
+  }
+
+  @override
+  Future<ResultatAjoutTitre> ajouterSiteAuTitre(
+    int idTitre,
+    String urlTitre,
+  ) async {
+    journalSites.add('ajouter:$idTitre:$urlTitre');
+    final erreur = erreurSites;
+    if (erreur != null) throw erreur;
+    final titre = _titreParId(idTitre);
+    if (titre == null) throw const ErreurService("Ce titre n'existe plus.");
+    final uri = Uri.parse(urlTitre.trim());
+    var source = sources.where((s) => s.urlBase.contains(uri.host)).firstOrNull;
+    if (source == null) {
+      source = Source(
+        id: sources.length + 100,
+        nom: uri.host,
+        urlBase: 'https://${uri.host}',
+        typeSource: TypeSource.generique,
+      );
+      sources.add(source);
+    }
+    ajouterSiteDeTest(idTitre, source.id!, urlTitre.trim());
+    final ajoutes = <Chapitre>[
+      for (final chapitre in chapitresSiteAjoute)
+        chapitre.copierAvec(idTitre: idTitre, idSource: source.id),
+    ];
+    (chapitresParTitre[idTitre] ??= <Chapitre>[]).addAll(ajoutes);
+    return ResultatAjoutTitre(titre, ajoutes.length);
+  }
+
+  @override
+  Future<int> retirerSiteDuTitre(int idTitre, int idSource) async {
+    journalSites.add('retirer:$idTitre:$idSource');
+    final erreur = erreurSites;
+    if (erreur != null) throw erreur;
+    final titre = _titreParId(idTitre);
+    if (titre?.idSource == idSource) {
+      throw const ErreurService(
+        "Le site principal d'un titre ne peut pas être retiré.",
+      );
+    }
+    sitesSecondaires[idTitre]?.removeWhere((l) => l.idSource == idSource);
+    final chapitres = chapitresParTitre[idTitre];
+    if (chapitres == null) return 0;
+    final avant = chapitres.length;
+    chapitres.removeWhere(
+      (c) => c.idSource == idSource && !c.estLu && !c.estTelecharge,
+    );
+    return avant - chapitres.length;
+  }
+
+  @override
+  Future<ResultatAjoutTitre> definirSitePrincipal(
+    int idTitre,
+    int idSource,
+  ) async {
+    journalSites.add('principal:$idTitre:$idSource');
+    final erreur = erreurSites;
+    if (erreur != null) throw erreur;
+    final index = titres.indexWhere((t) => t.id == idTitre);
+    if (index < 0) throw const ErreurService("Ce titre n'existe plus.");
+    final ancien = titres[index];
+    final secondaires = sitesSecondaires[idTitre] ?? <LienTitreSource>[];
+    final lien = secondaires.where((l) => l.idSource == idSource).firstOrNull;
+    if (lien == null) {
+      throw const ErreurService("Ce site n'est pas lié à ce titre.");
+    }
+    secondaires
+      ..remove(lien)
+      ..add(
+        LienTitreSource(
+          idTitre: idTitre,
+          idSource: ancien.idSource!,
+          urlTitre: ancien.urlTitre,
+        ),
+      );
+    titres[index] = ancien.copierAvec(
+      idSource: idSource,
+      urlTitre: lien.urlTitre,
+    );
+    return ResultatAjoutTitre(titres[index], 0);
+  }
+
+  @override
+  Future<ResultatAjoutTitre> actualiserSiteDuTitre(
+    Titre titre,
+    int idSource,
+  ) async => ResultatAjoutTitre(titre, 0);
 
   /// Langues du réglage général renvoyées par [chargerLanguesGenerales].
   List<String> languesGenerales = <String>['fr', 'en'];
@@ -474,6 +651,17 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
     if (erreur != null) {
       throw erreur;
     }
+    final dejaPresent = idTitreDejaPresent;
+    if (dejaPresent != null) {
+      for (final idListe in idsListes) {
+        (listesParTitre[dejaPresent] ??= <int>{}).add(idListe);
+      }
+      return ResultatAjoutTitre(
+        _titreParId(dejaPresent)!,
+        0,
+        estDejaPresent: true,
+      );
+    }
     final titre = ajouterTitreDeTest(
       'Titre ajouté ${titres.length + 1}',
       idsListes: idsListes.toSet(),
@@ -488,7 +676,11 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
     if (erreur != null) {
       throw erreur;
     }
-    return ResultatAjoutTitre(titre, nombreNouveaux);
+    return ResultatAjoutTitre(
+      titre,
+      nombreNouveaux,
+      erreursParSite: Map<int, Object>.of(erreursParSiteActualisation),
+    );
   }
 
   @override
@@ -1037,6 +1229,20 @@ class FauxServiceTelechargement implements ServiceTelechargement {
 class FauxServiceParametres implements ServiceParametres {
   /// Réglages « enregistrés ».
   ReglagesTelechargement reglages = const ReglagesTelechargement();
+
+  /// Sources par défaut déjà proposées.
+  Set<String> sourcesParDefautProposees = <String>{};
+
+  @override
+  Future<Set<String>> chargerSourcesParDefautProposees() async =>
+      Set<String>.of(sourcesParDefautProposees);
+
+  @override
+  Future<void> enregistrerSourcesParDefautProposees(
+    Iterable<String> identifiants,
+  ) async {
+    sourcesParDefautProposees = identifiants.toSet();
+  }
 
   /// Erreur levée par la lecture, si définie.
   Object? erreurLecture;

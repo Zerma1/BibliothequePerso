@@ -9,6 +9,7 @@ import '../modeles/source.dart';
 import 'client_http_poli.dart';
 import 'erreur_source.dart';
 import 'source_mangadex.dart';
+import 'source_scan_manga.dart';
 
 /// Détermine le [TypeSource] d'un site : d'abord par le domaine, puis en
 /// analysant le HTML de la page d'accueil.
@@ -40,9 +41,15 @@ class DetecteurTypeSite {
   ///
   /// `mangadex.org` (et `www.mangadex.org`) → [TypeSource.mangaDex] : le HTML
   /// de MangaDex est construit en JavaScript, l'analyser n'apprendrait rien.
+  ///
+  /// `scan-manga.com` (et `www.scan-manga.com`) → [TypeSource.scanManga] :
+  /// adaptateur dédié, aucune requête vers la page d'accueil.
   static TypeSource? verifierDomaine(Uri uri) {
     if (SourceMangaDex.estHoteMangaDex(uri.host)) {
       return TypeSource.mangaDex;
+    }
+    if (SourceScanManga.estHoteScanManga(uri.host)) {
+      return TypeSource.scanManga;
     }
     return null;
   }

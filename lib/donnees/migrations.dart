@@ -25,6 +25,7 @@ const List<Migration> migrations = <Migration>[
   _migration4,
   _migration5,
   _migration6,
+  _migration7,
 ];
 
 /// Version actuelle du schéma (nombre de migrations).
@@ -448,4 +449,146 @@ Future<void> _migration6(DatabaseExecutor executeur) async {
   // avec le chapitre, et la mise à jour par enregistrerChapitres passe par
   // l'index UNIQUE de url_chapitre).
   await executeur.execute('ALTER TABLE chapitres ADD COLUMN url_externe TEXT');
+}
+
+/// Migration 7 (étape 8, tâche M1) : plusieurs sites pour un même titre.
+///
+/// - Table `titres_sources` : tous les sites d'un titre, dont le principal,
+///   remplie avec le site actuel (`titres.id_source`, `titres.url_titre`) de
+///   chaque titre existant.
+/// - Colonne `chapitres.id_source` : site d'origine de chaque chapitre,
+///   remplie avec la source principale de son titre.
+///
+/// Compatibilité : `titres.id_source` et `titres.url_titre` restent le site
+/// principal. Ils deviennent **redondants** avec la ligne
+/// `est_principale = 1` de `titres_sources`, gardés pour ne casser aucun
+/// appel existant (`DepotTitres`, filtre par source, contrôle RESTRICT de
+/// suppression d'une source). Des déclencheurs SQL maintiennent les deux en
+/// accord, quel que soit le chemin d'écriture.
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration7(DatabaseExecutor executeur) async {
+  const creationTitresSources = <String>[
+    // id_titre ON DELETE CASCADE : les sites d'un titre supprimé n'ont plus
+    // de sens. id_source ON DELETE RESTRICT, comme titres.id_source :
+    // supprimer un site ne doit pas effacer en silence une partie de la
+    // bibliothèque.
+    // url_titre UNIQUE (tous titres confondus) : une même adresse ne peut
+    // désigner qu'un seul titre, sinon les chapitres d'un site seraient
+    // enregistrés sous deux titres ; l'index créé sert aussi à retrouver un
+    // titre par l'URL de n'importe lequel de ses sites.
+    // UNIQUE (id_titre, id_source) : un site n'est lié qu'une fois à un
+    // titre ; l'index créé (id_titre en tête) sert au chargement des sites
+    // d'un titre.
+    // est_principale : booléen 0/1 (CHECK) ; l'unicité du principal est
+    // assurée par l'index partiel ci-dessous.
+    // date_ajout : millisecondes UTC, NOT NULL (remplie par la migration,
+    // les déclencheurs et le dépôt) ; sert à l'ordre d'affichage.
+    '''
+    CREATE TABLE titres_sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id_titre INTEGER NOT NULL REFERENCES titres (id) ON DELETE CASCADE,
+      id_source INTEGER NOT NULL REFERENCES sources (id) ON DELETE RESTRICT,
+      url_titre TEXT NOT NULL UNIQUE,
+      est_principale INTEGER NOT NULL DEFAULT 0
+        CHECK (est_principale IN (0, 1)),
+      date_ajout INTEGER NOT NULL,
+      UNIQUE (id_titre, id_source)
+    )
+    ''',
+    // Index UNIQUE partiel : au plus un site principal par titre. Seules
+    // les lignes principales sont indexées (une par titre).
+    'CREATE UNIQUE INDEX index_titres_sources_principale '
+        'ON titres_sources (id_titre) WHERE est_principale = 1',
+    // Index sur la clé étrangère id_source : SQLite n'en crée pas, et il
+    // sert au contrôle RESTRICT et au comptage des titres d'une source avant
+    // sa suppression (DepotSources.supprimerSource).
+    'CREATE INDEX index_titres_sources_id_source '
+        'ON titres_sources (id_source)',
+  ];
+  const suite = <String>[
+    // id_source des chapitres : NULL autorisé (ADD COLUMN ne peut pas
+    // ajouter NOT NULL sans valeur par défaut) ; NULL signifie « site
+    // principal du titre ». Les lignes existantes sont remplies plus bas et
+    // les nouvelles par le déclencheur declencheur_chapitres_source. ON
+    // DELETE RESTRICT (même raison que plus haut). La clé étrangère est
+    // permise par ADD COLUMN car la valeur par défaut est NULL.
+    'ALTER TABLE chapitres ADD COLUMN id_source INTEGER '
+        'REFERENCES sources (id) ON DELETE RESTRICT',
+    // Remplissage : la source principale actuelle du titre, seule source
+    // connue jusqu'ici. Aucune valeur extérieure : pas de paramètre.
+    'UPDATE chapitres SET id_source = '
+        '(SELECT t.id_source FROM titres t WHERE t.id = chapitres.id_titre) '
+        'WHERE id_source IS NULL',
+    // Index composite (id_titre, id_source) : couvre le chargement des
+    // chapitres d'un titre filtrés par site et la suppression des chapitres
+    // d'un site retiré. LIMITE : il ne sert pas au contrôle RESTRICT d'une
+    // suppression de source (id_source n'est pas en tête), opération rare
+    // qui parcourt alors la table.
+    'CREATE INDEX index_chapitres_titre_source '
+        'ON chapitres (id_titre, id_source)',
+    // Déclencheur : tout titre inséré reçoit sa ligne principale dans
+    // titres_sources (DepotTitres.enregistrerTitre et les insertions
+    // directes restent ainsi valables sans modification). Une URL déjà
+    // utilisée comme site secondaire d'un autre titre fait échouer
+    // l'insertion (contrainte UNIQUE), donc toute la transaction.
+    // Date : secondes UTC de SQLite × 1000 (strftime('%s') existe sur
+    // toutes les versions de SQLite, contrairement à unixepoch()).
+    '''
+    CREATE TRIGGER declencheur_titres_source_insertion
+    AFTER INSERT ON titres
+    BEGIN
+      INSERT INTO titres_sources
+        (id_titre, id_source, url_titre, est_principale, date_ajout)
+      VALUES (NEW.id, NEW.id_source, NEW.url_titre, 1,
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+    END
+    ''',
+    // Déclencheur : si le site principal change dans titres (mise à jour du
+    // titre ou DepotTitresSources.definirSourcePrincipale), la ligne
+    // principale de titres_sources suit. La clause WHEN évite toute
+    // écriture quand rien ne change (cas normal d'une actualisation).
+    '''
+    CREATE TRIGGER declencheur_titres_source_modification
+    AFTER UPDATE OF id_source, url_titre ON titres
+    WHEN OLD.id_source IS NOT NEW.id_source
+      OR OLD.url_titre IS NOT NEW.url_titre
+    BEGIN
+      UPDATE titres_sources
+      SET id_source = NEW.id_source, url_titre = NEW.url_titre
+      WHERE id_titre = NEW.id AND est_principale = 1;
+    END
+    ''',
+    // Déclencheur : un chapitre inséré sans source (appels antérieurs à
+    // l'étape 8) reçoit la source principale de son titre. La colonne n'est
+    // donc jamais NULL en pratique, et le filtre par site peut utiliser
+    // l'index sans traiter NULL à part.
+    '''
+    CREATE TRIGGER declencheur_chapitres_source
+    AFTER INSERT ON chapitres
+    WHEN NEW.id_source IS NULL
+    BEGIN
+      UPDATE chapitres
+      SET id_source = (SELECT t.id_source FROM titres t
+                       WHERE t.id = NEW.id_titre)
+      WHERE id = NEW.id;
+    END
+    ''',
+  ];
+
+  for (final instruction in creationTitresSources) {
+    await executeur.execute(instruction);
+  }
+  // Une ligne principale par titre existant, avant la création des
+  // déclencheurs. titres.url_titre étant déjà UNIQUE, les contraintes de la
+  // nouvelle table ne peuvent pas échouer.
+  await executeur.rawInsert(
+    'INSERT INTO titres_sources '
+    '(id_titre, id_source, url_titre, est_principale, date_ajout) '
+    'SELECT id, id_source, url_titre, ?, ? FROM titres',
+    <Object?>[1, DateTime.now().toUtc().millisecondsSinceEpoch],
+  );
+  for (final instruction in suite) {
+    await executeur.execute(instruction);
+  }
 }

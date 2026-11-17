@@ -713,4 +713,127 @@ void main() {
       expect(politique.estTelechargeable(chapitres.single), isFalse);
     });
   });
+
+  group('plusieurs sites pour un titre (étape 8)', () {
+    // Site principal : 1 ; sites secondaires : 2 et 3 (3 retiré du titre).
+    const multiSites = PolitiqueTelechargement(
+      languesPreferees: <String>['fr', 'en'],
+      idSourcePrincipale: 1,
+      idsSourcesLiees: <int>{1, 2},
+    );
+
+    Chapitre version(
+      int id,
+      double numero,
+      int idSource, {
+      String langue = 'fr',
+      bool externe = false,
+      bool estTelecharge = false,
+      DateTime? datePublication,
+    }) => Chapitre(
+      id: id,
+      urlChapitre: 'https://site$idSource.test/$id',
+      nom: 'Chapitre $numero',
+      numero: numero,
+      langue: langue,
+      idSource: idSource,
+      estTelecharge: estTelecharge,
+      datePublication: datePublication,
+      urlExterne: externe ? 'https://externe.test/$id' : null,
+    );
+
+    test('une seule version par numéro : la langue préférée passe avant le '
+        'site principal', () {
+      final chapitres = <Chapitre>[
+        version(1, 1, 1, langue: 'en'),
+        version(2, 1, 2),
+      ];
+      final plan = multiSites.calculer(
+        chapitres,
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(plan.idsATelecharger, <int>[2]);
+    });
+
+    test('à langue égale, la version hébergée passe avant la version '
+        'externe du site principal', () {
+      final plan = multiSites.calculer(
+        <Chapitre>[version(1, 1, 1, externe: true), version(2, 1, 2)],
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(plan.idsATelecharger, <int>[2]);
+    });
+
+    test('à langue et hébergement égaux, le site principal passe avant la '
+        'version plus ancienne du site secondaire', () {
+      final chapitres = <Chapitre>[
+        version(1, 1, 2, datePublication: DateTime.utc(2020)),
+        version(2, 1, 1, datePublication: DateTime.utc(2024)),
+      ];
+      expect(multiSites.choisirVersions(chapitres).single.chapitre.id, 2);
+    });
+
+    test('entre deux sites secondaires équivalents, la plus ancienne', () {
+      const sansPrincipal = PolitiqueTelechargement(
+        languesPreferees: <String>['fr'],
+        idSourcePrincipale: 9,
+      );
+      final chapitres = <Chapitre>[
+        version(1, 1, 2, datePublication: DateTime.utc(2024)),
+        version(2, 1, 3, datePublication: DateTime.utc(2020)),
+      ];
+      expect(sansPrincipal.choisirVersions(chapitres).single.chapitre.id, 2);
+    });
+
+    test("une version déjà téléchargée d'un site secondaire n'est pas "
+        'retéléchargée depuis le principal', () {
+      final plan = multiSites.calculer(
+        <Chapitre>[version(1, 1, 2, estTelecharge: true), version(2, 1, 1)],
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(plan.idsATelecharger, isEmpty);
+      expect(plan.idsVoulus, <int>{1});
+      expect(plan.idsASupprimer, isEmpty);
+    });
+
+    test("un site retiré n'est jamais retenu et ses archives sont à "
+        'supprimer, même pour un titre ni favori ni suivi', () {
+      final chapitres = <Chapitre>[
+        version(1, 1, 3, estTelecharge: true),
+        version(2, 1, 1, langue: 'en'),
+        version(3, 2, 3),
+      ];
+      final favori = multiSites.calculer(
+        chapitres,
+        estFavori: true,
+        estSuivi: false,
+      );
+      expect(favori.idsATelecharger, <int>[2]);
+      expect(favori.idsASupprimer, <int>[1]);
+      expect(multiSites.estTelechargeable(chapitres[2]), isFalse);
+
+      final niFavoriNiSuivi = multiSites.calculer(
+        chapitres,
+        estFavori: false,
+        estSuivi: false,
+      );
+      expect(niFavoriNiSuivi.idsATelecharger, isEmpty);
+      expect(niFavoriNiSuivi.idsASupprimer, <int>[1]);
+    });
+
+    test('sans sites connus, un chapitre sans site vient du principal', () {
+      const chapitre = Chapitre(
+        id: 1,
+        urlChapitre: 'https://ancien.test/1',
+        nom: 'Chapitre 1',
+        numero: 1,
+        langue: 'fr',
+      );
+      expect(multiSites.estDuSitePrincipal(chapitre), isTrue);
+      expect(multiSites.estDeSiteRetire(chapitre), isFalse);
+    });
+  });
 }
