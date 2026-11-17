@@ -35,6 +35,8 @@ import '../sources/couverture_site.dart';
 import '../sources/detecteur_type_site.dart';
 import '../sources/erreur_source.dart';
 import '../sources/fabrique_sources.dart';
+import '../sources/lisibilite_site.dart';
+import '../sources/protection_anti_robot.dart' show messageProtectionAntiRobot;
 import '../sources/source_mangadex.dart';
 import '../sources/source_site.dart';
 import '../sources/source_webtoons.dart';
@@ -44,6 +46,10 @@ import 'erreur_service.dart';
 import 'service_ajout_site.dart';
 import 'service_parametres.dart';
 import 'service_sources_par_defaut.dart';
+
+// Type rendu par [ServiceBibliotheque.diagnostiquerSite] : réexporté pour
+// que l'interface n'ait pas à importer `lib/sources` (sens des dépendances).
+export '../sources/lisibilite_site.dart' show DiagnosticLisibilite;
 
 /// Résultat de l'ajout (ou de l'actualisation) d'un titre.
 class ResultatAjoutTitre {
@@ -113,6 +119,10 @@ class SiteDuTitre {
 
   /// `true` pour le site principal (fiche, couverture, résumé).
   bool get estPrincipal => lien.estPrincipale;
+
+  /// `true` pour un **lien seul** (tâche T4) : site seulement ouvert dans le
+  /// navigateur, l'application n'y lit aucun chapitre.
+  bool get estLienSeul => lien.estLienSeul;
 }
 
 /// Ligne de l'onglet « Mises à jour » : un titre et sa dernière parution
@@ -353,12 +363,15 @@ class ServiceBibliotheque {
     );
   }
 
-  /// `true` si le titre [idTitre] a plus d'un site (sans dépôt des sites :
-  /// un seul).
+  /// `true` si le titre [idTitre] a plus d'un site **lu** (sans dépôt des
+  /// sites : un seul).
   Future<bool> _aPlusieursSites(int? idTitre) async {
     final depot = _depotTitresSources;
     if (depot == null || idTitre == null) return false;
-    return (await depot.chargerLiensTitre(idTitre)).length > 1;
+    // Un lien seul ne fournit aucun chapitre : il ne change pas les langues
+    // retenues pour le titre (tâche T4).
+    final liens = await depot.chargerLiensTitre(idTitre);
+    return liens.where((lien) => !lien.estLienSeul).length > 1;
   }
 
   /// Enregistre les langues propres à un titre ([langues] `null` ou vide :
@@ -462,7 +475,8 @@ class ServiceBibliotheque {
   /// `ResultatAjoutTitre.erreursParSite`. Si **aucun** site n'a répondu, la
   /// première erreur est levée (comme avant l'étape 8). Les sites
   /// secondaires d'une source désactivée sont ignorés ; le site principal
-  /// est toujours interrogé (actualisation demandée par le client).
+  /// est toujours interrogé (actualisation demandée par le client). Les
+  /// liens seuls (tâche T4) ne sont jamais interrogés.
   Future<ResultatAjoutTitre> actualiserTitre(Titre titre) async {
     final idTitre = titre.id;
     if (idTitre == null) {
@@ -478,6 +492,10 @@ class ServiceBibliotheque {
     var nouveaux = 0;
     var reussis = 0;
     for (final lien in liens) {
+      // Lien seul : le client l'a enregistré parce que l'application ne sait
+      // pas lire ce site ; l'interroger ne ferait qu'une erreur de plus et
+      // une requête inutile (PLAYBOOK.md section 10).
+      if (lien.estLienSeul) continue;
       try {
         final source = await _depotSources.chargerSource(lien.idSource);
         if (source == null) {
@@ -524,7 +542,8 @@ class ServiceBibliotheque {
   /// Sert à `ServiceMisesAJour`, qui regroupe les requêtes par site pour
   /// n'interroger qu'un titre à la fois par site. Lève une [ErreurService] si
   /// ce site n'est pas lié au titre, et laisse passer `ErreurSource` (site
-  /// injoignable) et `ErreurBaseDeDonnees`.
+  /// injoignable) et `ErreurBaseDeDonnees`. Pour un lien seul (tâche T4),
+  /// renvoie le titre tel quel, sans requête.
   Future<ResultatAjoutTitre> actualiserSiteDuTitre(
     Titre titre,
     int idSource,
@@ -536,6 +555,7 @@ class ServiceBibliotheque {
     if (lien == null) {
       throw ErreurService("Ce site n'est plus lié à « ${titre.nom} ».");
     }
+    if (lien.estLienSeul) return ResultatAjoutTitre(titre, 0);
     final source = await _depotSources.chargerSource(idSource);
     if (source == null) {
       throw ErreurService('Le site de « ${titre.nom} » n\'existe plus.');
@@ -663,9 +683,8 @@ class ServiceBibliotheque {
   ///
   /// Le site est retrouvé parmi les sites configurés par le domaine de
   /// l'adresse. S'il n'est pas configuré, il n'est ajouté automatiquement
-  /// que s'il est reconnu par son domaine (MangaDex, Scan-Manga) ; sinon le
-  /// client doit d'abord l'ajouter dans « Sources ». Un site que
-  /// l'application ne sait pas encore lire est refusé.
+  /// que s'il est reconnu par son domaine (MangaDex, Scan-Manga, WEBTOON) ;
+  /// sinon le client doit d'abord l'ajouter dans « Sources ».
   ///
   /// Réseau d'abord : la fiche est demandée au site pour vérifier que
   /// l'adresse est bien celle d'un titre (une page d'accueil ou de chapitre
@@ -673,23 +692,35 @@ class ServiceBibliotheque {
   /// L'adresse retenue est celle que le site donne pour ce titre (forme
   /// canonique), comme pour le site principal.
   ///
+  /// [lienSeul] à `true` (tâche T4, « Ajouter quand même comme simple
+  /// lien ») : **aucune requête** au site. L'adresse est enregistrée telle
+  /// quelle comme lien seul (ouverte dans le navigateur, aucun chapitre lu).
+  /// Le site est retrouvé parmi les sites configurés, sinon créé d'après le
+  /// domaine (type reconnu par le domaine, à défaut générique). Renvoie le
+  /// titre relu et 0 chapitre.
+  ///
   /// Lève une [ErreurService] (adresse déjà liée à ce titre ou à un autre,
-  /// site déjà lié, site non configuré ou illisible, titre disparu) ou une
-  /// `ErreurSource` (adresse invalide, site injoignable, page qui n'est pas
-  /// un titre).
+  /// site déjà lié, site non configuré ou réglages illisibles, titre
+  /// disparu) ou une `ErreurSource` (adresse invalide, site injoignable,
+  /// protection anti-robot, page qui n'est pas un titre ou sans chapitre).
+  /// [peutAjouterCommeLienSeul] dit si l'interface peut alors proposer de
+  /// réessayer avec [lienSeul].
   ///
   /// L'interface applique ensuite les règles de téléchargement du titre
   /// (`ServiceTelechargement.appliquerRegles`).
   Future<ResultatAjoutTitre> ajouterSiteAuTitre(
     int idTitre,
-    String urlTitre,
-  ) async {
+    String urlTitre, {
+    bool lienSeul = false,
+  }) async {
     final depot = _exigerDepotTitresSources();
     final uri = DetecteurTypeSite.validerUrl(urlTitre);
     final url = urlTitre.trim();
     final titre = await _exigerTitre(idTitre);
     await _refuserAdresseDejaLiee(depot, url, titre);
-    final source = await _trouverOuPreparerSource(url, uri);
+    final source = lienSeul
+        ? await _trouverOuPreparerSourceLienSeul(url, uri)
+        : await _trouverOuPreparerSource(url, uri);
     final liens = await depot.chargerLiensTitre(idTitre);
     if (source.id != null && liens.any((l) => l.idSource == source.id)) {
       throw ErreurService(
@@ -697,14 +728,20 @@ class ServiceBibliotheque {
         "changer d'adresse, retirez-le d'abord.",
       );
     }
+    if (lienSeul) return _enregistrerLienSeul(depot, titre, source, url);
+
     final SourceSite adaptateur;
     try {
       adaptateur = await _creerAdaptateur(source, titre: titre);
     } on ErreurSource catch (erreur) {
+      // Depuis l'adaptateur générique (T2), tous les types ont un
+      // adaptateur : seule une configuration illisible (sélecteurs JSON d'un
+      // site générique) peut encore échouer ici.
       throw ErreurService(
-        "Le site « ${source.nom} » n'est pas encore lisible par "
-        "l'application.",
+        "Les réglages du site « ${source.nom} » sont illisibles : "
+        "corrigez-les dans « Sources ». (${erreur.message})",
         cause: erreur,
+        ajoutLienSeulPossible: true,
       );
     }
 
@@ -773,23 +810,7 @@ class ServiceBibliotheque {
       throw ErreurService(erreur.message, cause: erreur);
     }
     // Après le retrait (un retrait refusé ne doit rien programmer).
-    // LIMITE : hors de la transaction du retrait ; si ces écritures
-    // échouent, la prochaine application des règles de téléchargement les
-    // programme (les chapitres d'un site retiré y sont à supprimer).
-    final echeance = DateTime.now().toUtc().add(delaiSuppressionDifferee);
-    for (final chapitre in await _depotChapitres.chargerChapitres(
-      idTitre,
-      idSource: idSource,
-    )) {
-      final id = chapitre.id;
-      if (id == null ||
-          !chapitre.estTelecharge ||
-          chapitre.estGarde ||
-          chapitre.dateSuppressionPrevue != null) {
-        continue;
-      }
-      await _depotChapitres.planifierSuppression(id, echeance);
-    }
+    await _planifierSuppressionArchivesDuSite(idTitre, idSource);
     await _classerEnAttenteSansErreur(idTitre);
     return supprimes;
   }
@@ -817,6 +838,14 @@ class ServiceBibliotheque {
       throw ErreurService("Ce site n'est pas lié à « ${titre.nom} ».");
     }
     if (lien.estPrincipale) return ResultatAjoutTitre(titre, 0);
+    if (lien.estLienSeul) {
+      // Refusé avant toute requête : le dépôt le refuserait aussi, mais
+      // seulement après une lecture inutile d'un site qu'on sait illisible.
+      throw const ErreurService(
+        "Ce site est un simple lien : l'application ne sait pas le lire, il "
+        'ne peut donc pas devenir le site principal.',
+      );
+    }
     final source = await _depotSources.chargerSource(idSource);
     if (source == null) {
       throw const ErreurService("Ce site n'existe plus.");
@@ -894,8 +923,16 @@ class ServiceBibliotheque {
       throw const ErreurService(
         "Ce site n'est pas encore configuré : ajoutez-le d'abord dans "
         '« Sources », puis réessayez.',
+        ajoutLienSeulPossible: true,
       );
     }
+    return _preparerSourceParDomaine(uri, type);
+  }
+
+  /// Source **non enregistrée** pour le domaine de [uri] et le [type] : la
+  /// source par défaut de ce type si elle existe (nom et adresse
+  /// officiels), sinon une source nommée d'après le domaine.
+  static Source _preparerSourceParDomaine(Uri uri, TypeSource type) {
     for (final parDefaut in sourcesParDefaut) {
       if (parDefaut.typeSource == type) return parDefaut.versSource();
     }
@@ -905,6 +942,240 @@ class ServiceBibliotheque {
       typeSource: type,
     );
   }
+
+  /// Comme [_trouverOuPreparerSource], mais pour un lien seul (tâche T4) :
+  /// un site inconnu n'est pas refusé. Son type ne peut pas être détecté
+  /// sans requête (rien n'est demandé au site) : il est créé **générique**,
+  /// type que le client peut corriger dans « Sources » le jour où il veut
+  /// le lire.
+  Future<Source> _trouverOuPreparerSourceLienSeul(String url, Uri uri) async {
+    final existante = await _serviceAjoutSite.trouverSourcePourUrl(url);
+    if (existante != null) return existante;
+    return _preparerSourceParDomaine(
+      uri,
+      DetecteurTypeSite.verifierDomaine(uri) ?? TypeSource.generique,
+    );
+  }
+
+  /// Écritures d'un lien seul (voir [ajouterSiteAuTitre]) : le site s'il est
+  /// nouveau, puis le lien. Aucun chapitre, donc ni classement « En
+  /// attente » à refaire ni règle de téléchargement concernée.
+  Future<ResultatAjoutTitre> _enregistrerLienSeul(
+    DepotTitresSources depot,
+    Titre titre,
+    Source source,
+    String url,
+  ) async {
+    final idTitre = titre.id!;
+    // LIMITE : deux écritures sans transaction commune (chaque dépôt ouvre
+    // la sienne) ; si le lien échoue, le site créé reste dans « Sources »
+    // sans titre, et le client peut le supprimer.
+    try {
+      final idSource =
+          source.id ?? (await _depotSources.enregistrerSource(source)).id!;
+      await depot.ajouterSourceSecondaire(
+        idTitre,
+        idSource,
+        url,
+        lienSeul: true,
+      );
+    } on ErreurBaseDeDonnees catch (erreur) {
+      throw ErreurService(erreur.message, cause: erreur);
+    }
+    final relu = await _depotTitres.chargerTitre(idTitre) ?? titre;
+    return ResultatAjoutTitre(relu, 0);
+  }
+
+  /// `true` si l'échec [erreur] de [ajouterSiteAuTitre] permet de proposer
+  /// au client « Ajouter quand même comme simple lien » (tâche T4) : site
+  /// illisible (protection anti-robot, page sans chapitre, site injoignable,
+  /// erreur HTTP), non configuré, ou aux réglages illisibles. `false` pour
+  /// une adresse invalide ou un refus qui resterait vrai pour un lien seul
+  /// (adresse ou site déjà lié, titre disparu). Fonction pure.
+  static bool peutAjouterCommeLienSeul(Object erreur) {
+    if (erreur is ErreurService) return erreur.ajoutLienSeulPossible;
+    if (erreur is ErreurSource) {
+      // Une adresse invalide lève aussi une ErreurSource : un lien seul ne
+      // la rendrait pas plus valide. Toute autre ErreurSource vient de la
+      // lecture du site, après validation de l'adresse.
+      final uri = Uri.tryParse(erreur.url.trim());
+      return uri != null &&
+          (uri.scheme == 'http' || uri.scheme == 'https') &&
+          uri.host.isNotEmpty;
+    }
+    return false;
+  }
+
+  /// Passe le site secondaire [idSource] du titre [idTitre] en lien seul
+  /// ([lienSeul] à `true`) ou de nouveau en site lu (`false`, par exemple
+  /// quand un site redevient lisible). Renvoie le nombre de chapitres
+  /// supprimés. Base seulement (aucune requête).
+  ///
+  /// Passage en lien seul : comme un retrait du site
+  /// ([retirerSiteDuTitre]), ses chapitres non lus, non téléchargés et non
+  /// gardés disparaissent, les lus restent, et ses archives suivent la règle
+  /// des 24 h. Passage en site lu : aucun chapitre n'est touché ; ils
+  /// arrivent à la prochaine actualisation ([actualiserTitre]).
+  ///
+  /// Lève une [ErreurService] pour le site principal (un lien seul ne peut
+  /// pas l'être) ou un site qui n'est pas lié au titre. L'interface applique
+  /// ensuite les règles de téléchargement du titre
+  /// (`ServiceTelechargement.appliquerRegles`).
+  Future<int> marquerLienSeul(int idTitre, int idSource, bool lienSeul) async {
+    final depot = _exigerDepotTitresSources();
+    await _exigerTitre(idTitre);
+    final int supprimes;
+    try {
+      supprimes = await depot.marquerLienSeul(idTitre, idSource, lienSeul);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      throw ErreurService(erreur.message, cause: erreur);
+    }
+    if (lienSeul) {
+      await _planifierSuppressionArchivesDuSite(idTitre, idSource);
+      await _classerEnAttenteSansErreur(idTitre);
+    }
+    return supprimes;
+  }
+
+  /// Programme dans [delaiSuppressionDifferee] la suppression des archives
+  /// du site [idSource] du titre (site retiré ou devenu lien seul), sauf
+  /// chapitre gardé par le client ou suppression déjà prévue.
+  Future<void> _planifierSuppressionArchivesDuSite(
+    int idTitre,
+    int idSource,
+  ) async {
+    // LIMITE : hors de la transaction du dépôt ; si ces écritures échouent,
+    // la prochaine application des règles de téléchargement les programme
+    // (les chapitres d'un site retiré ou d'un lien seul y sont à supprimer).
+    final echeance = DateTime.now().toUtc().add(delaiSuppressionDifferee);
+    for (final chapitre in await _depotChapitres.chargerChapitres(
+      idTitre,
+      idSource: idSource,
+    )) {
+      final id = chapitre.id;
+      if (id == null ||
+          !chapitre.estTelecharge ||
+          chapitre.estGarde ||
+          chapitre.dateSuppressionPrevue != null) {
+        continue;
+      }
+      await _depotChapitres.planifierSuppression(id, echeance);
+    }
+  }
+
+  /// Diagnostic de lisibilité de la page [url] (tâche T3, aide « critères
+  /// de lecture ») : protection anti-robot, raisons pour lesquelles la page
+  /// ne serait pas lue, remarques.
+  ///
+  /// **Une requête au plus** (via `ClientHttpPoli`, délai par domaine
+  /// compris) ; aucune pour une adresse invalide ou un site reconnu par son
+  /// domaine (MangaDex, Scan-Manga, WEBTOON : adaptateur dédié). Les
+  /// critères appliqués sont ceux de l'adaptateur générique ; pour un site
+  /// Madara ou MangaThemesia (configuré ou reconnu dans la page), seules la
+  /// protection et les erreurs HTTP comptent. Ne lève jamais : un site
+  /// injoignable donne un diagnostic avec la raison « injoignable ».
+  Future<DiagnosticLisibilite> diagnostiquerSite(String url) async {
+    final Uri uri;
+    try {
+      uri = DetecteurTypeSite.validerUrl(url);
+    } on ErreurSource catch (erreur) {
+      return DiagnosticLisibilite(raisons: <String>[erreur.message]);
+    }
+    Source? source;
+    try {
+      source = await _serviceAjoutSite.trouverSourcePourUrl(url);
+    } catch (erreur) {
+      // Base illisible : le diagnostic se fait sans les réglages du site.
+      debugPrint('Diagnostic de $url : site configuré illisible : $erreur');
+    }
+    final type = source?.typeSource ?? DetecteurTypeSite.verifierDomaine(uri);
+    if (type != null && estTypeAAdaptateurParDomaine(type)) {
+      return DiagnosticLisibilite(
+        raisons: const <String>[],
+        remarques: <String>[
+          'Site reconnu (${nomTypeSource(type)}) : il est lu par un '
+              'adaptateur dédié, les critères des sites génériques ne '
+              "s'appliquent pas.",
+        ],
+      );
+    }
+    final String html;
+    try {
+      html = await _client.recupererTexte(uri);
+    } on ErreurSource catch (erreur) {
+      return diagnosticDepuisErreur(erreur, uri);
+    } catch (erreur) {
+      if (erreur is Error) rethrow;
+      return DiagnosticLisibilite(
+        raisons: <String>['Le site est injoignable : $erreur'],
+      );
+    }
+    final typeLu = type ?? DetecteurTypeSite.detecterDepuisHtml(html);
+    if (typeLu != TypeSource.generique) {
+      // Madara / MangaThemesia : leurs listes de chapitres ne suivent pas
+      // les critères génériques (chargées à part chez Madara) ; la page a
+      // été reçue sans défi ni erreur, c'est tout ce qu'on peut vérifier.
+      return DiagnosticLisibilite(
+        raisons: const <String>[],
+        remarques: <String>[
+          'Site de type ${nomTypeSource(typeLu)} : il est lu par un '
+              'adaptateur dédié, les critères des sites génériques ne '
+              "s'appliquent pas.",
+        ],
+      );
+    }
+    return verifierLisibilite(
+      html,
+      uri,
+      configurationSelecteurs: source?.configurationSelecteurs,
+    );
+  }
+
+  /// Diagnostic d'une page qui n'a pas pu être récupérée ([erreur] du
+  /// client HTTP) : protection anti-robot, erreur HTTP ou site injoignable.
+  /// Fonction pure, exposée pour les tests.
+  @visibleForTesting
+  static DiagnosticLisibilite diagnosticDepuisErreur(
+    ErreurSource erreur,
+    Uri uri,
+  ) {
+    if (erreur.protectionAntiRobot) {
+      return DiagnosticLisibilite(
+        raisons: <String>[
+          "${messageProtectionAntiRobot(uri.host)}. L'application ne "
+              'contourne pas ces protections : lisez ce site dans le '
+              'navigateur.',
+        ],
+        protectionAntiRobot: true,
+      );
+    }
+    final code = erreur.codeStatut;
+    if (code != null) {
+      // Même formulation que le diagnostic d'une page reçue.
+      return verifierLisibilite('', uri, codeStatut: code);
+    }
+    return DiagnosticLisibilite(
+      raisons: <String>['Le site est injoignable : ${erreur.message}.'],
+    );
+  }
+
+  /// `true` si le [type] désigne un site reconnu par son domaine, lu par un
+  /// adaptateur dédié sans analyse de sa page (MangaDex, Scan-Manga,
+  /// WEBTOON). Fonction pure.
+  static bool estTypeAAdaptateurParDomaine(TypeSource type) =>
+      type == TypeSource.mangaDex ||
+      type == TypeSource.scanManga ||
+      type == TypeSource.webtoons;
+
+  /// Nom lisible d'un type de site (messages du diagnostic). Fonction pure.
+  static String nomTypeSource(TypeSource type) => switch (type) {
+    TypeSource.mangaDex => 'MangaDex',
+    TypeSource.scanManga => 'Scan-Manga',
+    TypeSource.webtoons => 'WEBTOON',
+    TypeSource.madara => 'WordPress Madara',
+    TypeSource.mangaThemesia => 'WordPress MangaThemesia',
+    TypeSource.generique => 'générique',
+  };
 
   /// Nom de domaine d'une adresse, sans `www.` (repli d'affichage).
   static String _nomDomaine(String url) {

@@ -1,6 +1,9 @@
 // Étape 8 (tâche M2) : plusieurs sites pour un même titre, côté
 // ServiceBibliotheque. Base en mémoire ; les sites sont des adaptateurs
-// simulés (aucune requête réseau, le client HTTP répond toujours 404).
+// simulés (aucune requête réseau : le client HTTP simulé sert quelques
+// pages enregistrées et répond 404 ailleurs).
+import 'dart:convert';
+
 import 'package:bibliotheque_perso/donnees/depot_categories.dart';
 import 'package:bibliotheque_perso/donnees/depot_chapitres.dart';
 import 'package:bibliotheque_perso/donnees/depot_listes.dart';
@@ -94,6 +97,14 @@ Chapitre _chapitre(String url, double numero, {String langue = 'fr'}) =>
       langue: langue,
     );
 
+/// Page HTML encodée en UTF-8, comme un vrai site.
+http.Response _pageHtml(String corps, {int statut = 200}) =>
+    http.Response.bytes(
+      utf8.encode(corps),
+      statut,
+      headers: <String, String>{'content-type': 'text/html; charset=utf-8'},
+    );
+
 void main() {
   late Database base;
   late DepotSources depotSources;
@@ -104,6 +115,10 @@ void main() {
   late _SiteSimule mangaDex;
   late _SiteSimule scanManga;
   late Source sourceMangaDex;
+  // Pages servies par le client HTTP simulé (adresse → réponse) ; toute
+  // autre adresse répond 404. Les requêtes reçues sont notées.
+  late Map<String, http.Response> pages;
+  late List<String> requetes;
 
   setUp(() async {
     base = await ouvrirBaseDeTest();
@@ -111,10 +126,12 @@ void main() {
     depotChapitres = DepotChapitres(base);
     depotLiens = DepotTitresSources(base);
     depotListes = DepotListes(base);
-    final ClientHttpPoli client = creerClientTest(
-      (http.Request requete) async => http.Response('introuvable', 404),
-      HorlogeFactice(),
-    );
+    pages = <String, http.Response>{};
+    requetes = <String>[];
+    final ClientHttpPoli client = creerClientTest((http.Request requete) async {
+      requetes.add(requete.url.toString());
+      return pages[requete.url.toString()] ?? http.Response('introuvable', 404);
+    }, HorlogeFactice());
     mangaDex = _SiteSimule()
       ..fiches[_urlPrincipale] = FicheTitre(
         titre: Titre(urlTitre: _urlPrincipale, nom: 'Titre MangaDex'),
@@ -238,33 +255,90 @@ void main() {
       );
     });
 
-    test("refuse un site inconnu non configuré, et un site que "
-        "l'application ne sait pas lire, sans rien écrire", () async {
+    test("refuse un site inconnu non configuré, et une page générique sans "
+        "chapitre, sans rien écrire et en permettant l'ajout comme simple "
+        'lien', () async {
       final titre = await ajouterTitrePrincipal();
-      await expectLater(
-        service.ajouterSiteAuTitre(titre.id!, 'https://inconnu.test/titre/1'),
-        throwsA(isA<ErreurService>()),
+      Object? erreurInconnu;
+      try {
+        await service.ajouterSiteAuTitre(
+          titre.id!,
+          'https://inconnu.test/titre/1',
+        );
+      } catch (erreur) {
+        erreurInconnu = erreur;
+      }
+      expect(erreurInconnu, isA<ErreurService>());
+      expect(
+        ServiceBibliotheque.peutAjouterCommeLienSeul(erreurInconnu!),
+        isTrue,
       );
+
       await depotSources.enregistrerSource(
         const Source(
-          // Le type générique est le seul encore sans adaptateur (Madara est
-          // lisible depuis l'étape 7).
           nom: 'Generique',
-          urlBase: 'https://madara.test',
+          urlBase: 'https://generique.test',
           typeSource: TypeSource.generique,
         ),
       );
-      await expectLater(
-        service.ajouterSiteAuTitre(titre.id!, 'https://madara.test/manga/x'),
-        throwsA(
-          isA<ErreurService>().having(
-            (e) => e.message,
-            'message',
-            contains('pas encore lisible'),
-          ),
+      pages['https://generique.test/oeuvre/x'] = _pageHtml(
+        '<html><head><title>X</title></head><body><h1>X</h1>'
+        '<p>Une page sans aucun lien de chapitre.</p></body></html>',
+      );
+      Object? erreurGenerique;
+      try {
+        await service.ajouterSiteAuTitre(
+          titre.id!,
+          'https://generique.test/oeuvre/x',
+        );
+      } catch (erreur) {
+        erreurGenerique = erreur;
+      }
+      expect(
+        erreurGenerique,
+        isA<ErreurSource>().having(
+          (e) => e.message,
+          'message',
+          contains('Aucun lien de chapitre'),
         ),
       );
+      expect(
+        ServiceBibliotheque.peutAjouterCommeLienSeul(erreurGenerique!),
+        isTrue,
+      );
       expect(await depotLiens.chargerLiensTitre(titre.id!), hasLength(1));
+    });
+
+    test('des réglages génériques illisibles donnent un message clair, sans '
+        'requête', () async {
+      final titre = await ajouterTitrePrincipal();
+      await depotSources.enregistrerSource(
+        const Source(
+          nom: 'Mal réglé',
+          urlBase: 'https://mal-regle.test',
+          typeSource: TypeSource.generique,
+          configurationSelecteurs: '{pas du json',
+        ),
+      );
+      Object? erreur;
+      try {
+        await service.ajouterSiteAuTitre(
+          titre.id!,
+          'https://mal-regle.test/oeuvre/x',
+        );
+      } catch (e) {
+        erreur = e;
+      }
+      expect(
+        erreur,
+        isA<ErreurService>().having(
+          (e) => e.message,
+          'message',
+          contains('réglages du site « Mal réglé » sont illisibles'),
+        ),
+      );
+      expect(ServiceBibliotheque.peutAjouterCommeLienSeul(erreur!), isTrue);
+      expect(requetes, isEmpty);
     });
 
     test("un site en panne ou une adresse qui n'est pas un titre n'écrit "
@@ -286,6 +360,280 @@ void main() {
       expect(await sourceScanManga(), isNull);
       expect(await depotLiens.chargerLiensTitre(titre.id!), hasLength(1));
       expect(await depotChapitres.chargerChapitres(titre.id!), hasLength(2));
+    });
+  });
+
+  group('liens seuls (T4)', () {
+    test("un site inconnu est enregistré comme simple lien générique, sans "
+        'aucune requête', () async {
+      final titre = await ajouterTitrePrincipal();
+      requetes.clear();
+
+      final resultat = await service.ajouterSiteAuTitre(
+        titre.id!,
+        ' https://protege.test/oeuvre/x ',
+        lienSeul: true,
+      );
+
+      expect(resultat.nombreNouveauxChapitres, 0);
+      expect(resultat.titre.id, titre.id);
+      expect(requetes, isEmpty);
+      final source = await depotSources.chargerSourceParUrl(
+        'https://protege.test',
+      );
+      expect(source, isNotNull);
+      expect(source!.typeSource, TypeSource.generique);
+      expect(source.nom, 'protege.test');
+      final liens = await depotLiens.chargerLiensTitre(titre.id!);
+      expect(liens, hasLength(2));
+      expect(liens.last.urlTitre, 'https://protege.test/oeuvre/x');
+      expect(liens.last.estLienSeul, isTrue);
+
+      final sites = await service.chargerSitesDuTitre(titre.id!);
+      expect(sites.map((s) => s.estLienSeul), <bool>[false, true]);
+      expect(sites.last.nombreChapitres, 0);
+    });
+
+    test(
+      'un site reconnu par son domaine garde son type, sans le lire',
+      () async {
+        final titre = await ajouterTitrePrincipal();
+
+        await service.ajouterSiteAuTitre(
+          titre.id!,
+          _urlScanManga,
+          lienSeul: true,
+        );
+
+        expect(scanManga.appels, isEmpty);
+        expect((await sourceScanManga())!.typeSource, TypeSource.scanManga);
+        expect(
+          await depotChapitres.chargerChapitres(
+            titre.id!,
+            idSource: (await sourceScanManga())!.id,
+          ),
+          isEmpty,
+        );
+      },
+    );
+
+    test("l'actualisation et la vérification d'un site n'interrogent jamais "
+        'un lien seul', () async {
+      final titre = await ajouterTitrePrincipal();
+      await service.ajouterSiteAuTitre(
+        titre.id!,
+        _urlScanManga,
+        lienSeul: true,
+      );
+      final idScan = (await sourceScanManga())!.id!;
+      mangaDex.appels.clear();
+
+      final resultat = await service.actualiserTitre(titre);
+      final parSite = await service.actualiserSiteDuTitre(titre, idScan);
+
+      expect(resultat.aDesErreursDeSite, isFalse);
+      expect(parSite.nombreNouveauxChapitres, 0);
+      expect(scanManga.appels, isEmpty);
+      expect(mangaDex.appels, hasLength(2));
+    });
+
+    test(
+      'un lien seul ne peut pas devenir le site principal, sans requête',
+      () async {
+        final titre = await ajouterTitrePrincipal();
+        await service.ajouterSiteAuTitre(
+          titre.id!,
+          _urlScanManga,
+          lienSeul: true,
+        );
+        final idScan = (await sourceScanManga())!.id!;
+
+        await expectLater(
+          service.definirSitePrincipal(titre.id!, idScan),
+          throwsA(isA<ErreurService>()),
+        );
+        expect(scanManga.appels, isEmpty);
+      },
+    );
+
+    test(
+      'marquer un site lu comme lien seul supprime ses chapitres non lus '
+      'et prévoit la suppression de ses archives, puis il redevient lu',
+      () async {
+        final titre = await ajouterTitrePrincipal();
+        await service.ajouterSiteAuTitre(titre.id!, _urlScanManga);
+        final idScan = (await sourceScanManga())!.id!;
+        final chapitresScan = await depotChapitres.chargerChapitres(
+          titre.id!,
+          idSource: idScan,
+        );
+        await depotChapitres.marquerLu(chapitresScan[0].id!);
+        await depotChapitres.enregistrerArchive(chapitresScan[1].id!, 'a.zip');
+
+        final supprimes = await service.marquerLienSeul(
+          titre.id!,
+          idScan,
+          true,
+        );
+
+        expect(supprimes, 1);
+        final restants = await depotChapitres.chargerChapitres(
+          titre.id!,
+          idSource: idScan,
+        );
+        expect(restants, hasLength(2));
+        expect(restants[1].dateSuppressionPrevue, isNotNull);
+        expect(
+          (await service.chargerSitesDuTitre(titre.id!)).last.estLienSeul,
+          isTrue,
+        );
+
+        expect(await service.marquerLienSeul(titre.id!, idScan, false), 0);
+        expect(
+          (await service.chargerSitesDuTitre(titre.id!)).last.estLienSeul,
+          isFalse,
+        );
+      },
+    );
+
+    test('refuse de marquer le site principal comme lien seul', () async {
+      final titre = await ajouterTitrePrincipal();
+      await expectLater(
+        service.marquerLienSeul(titre.id!, sourceMangaDex.id!, true),
+        throwsA(isA<ErreurService>()),
+      );
+    });
+
+    test("peutAjouterCommeLienSeul : oui pour un site illisible ou protégé, "
+        'non pour une adresse invalide ou déjà liée', () async {
+      const protection = ErreurSource(
+        'https://protege.test/oeuvre/x',
+        'protection',
+        codeStatut: 403,
+        protectionAntiRobot: true,
+      );
+      expect(ServiceBibliotheque.peutAjouterCommeLienSeul(protection), isTrue);
+
+      final titre = await ajouterTitrePrincipal();
+      Object? invalide;
+      try {
+        await service.ajouterSiteAuTitre(titre.id!, 'pas une adresse');
+      } catch (erreur) {
+        invalide = erreur;
+      }
+      expect(invalide, isA<ErreurSource>());
+      expect(ServiceBibliotheque.peutAjouterCommeLienSeul(invalide!), isFalse);
+
+      Object? dejaLie;
+      try {
+        await service.ajouterSiteAuTitre(titre.id!, _urlPrincipale);
+      } catch (erreur) {
+        dejaLie = erreur;
+      }
+      expect(dejaLie, isA<ErreurService>());
+      expect(ServiceBibliotheque.peutAjouterCommeLienSeul(dejaLie!), isFalse);
+    });
+  });
+
+  group('diagnostiquerSite (T3)', () {
+    test(
+      'une page générique avec des liens de chapitres est lisible',
+      () async {
+        pages['https://generique.test/oeuvre/x'] = _pageHtml(
+          '<html><head><title>X</title></head><body><h1>X</h1><ul>'
+          '<li><a href="/oeuvre/x/chapter-1/">Chapter 1</a></li>'
+          '<li><a href="/oeuvre/x/chapter-2/">Chapter 2</a></li>'
+          '</ul></body></html>',
+        );
+
+        final diagnostic = await service.diagnostiquerSite(
+          'https://generique.test/oeuvre/x',
+        );
+
+        expect(diagnostic.estLisible, isTrue);
+        expect(diagnostic.nombreLiensChapitres, 2);
+        expect(requetes, <String>['https://generique.test/oeuvre/x']);
+      },
+    );
+
+    test('une page sans chapitre donne sa raison', () async {
+      pages['https://generique.test/oeuvre/x'] = _pageHtml(
+        '<html><head><title>X</title></head><body><h1>X</h1>'
+        '<p>Rien à lire ici, seulement du texte.</p></body></html>',
+      );
+
+      final diagnostic = await service.diagnostiquerSite(
+        'https://generique.test/oeuvre/x',
+      );
+
+      expect(diagnostic.estLisible, isFalse);
+      expect(diagnostic.raisons.single, contains('Aucun lien de chapitre'));
+    });
+
+    test('reconnaît une protection anti-robot sans la contourner', () async {
+      pages['https://protege.test/oeuvre/x'] = _pageHtml(
+        '<html><head><title>Just a moment...</title></head><body>'
+        '<script src="/cdn-cgi/challenge-platform/h/b"></script>'
+        '</body></html>',
+        statut: 403,
+      );
+
+      final diagnostic = await service.diagnostiquerSite(
+        'https://protege.test/oeuvre/x',
+      );
+
+      expect(diagnostic.protectionAntiRobot, isTrue);
+      expect(diagnostic.estLisible, isFalse);
+      expect(diagnostic.raisons.single, contains('protection anti-robot'));
+      // Une seule requête : aucune nouvelle tentative sur un défi.
+      expect(requetes, hasLength(1));
+    });
+
+    test('une erreur HTTP donne son code, sans lever', () async {
+      final diagnostic = await service.diagnostiquerSite(
+        'https://generique.test/absent',
+      );
+
+      expect(diagnostic.estLisible, isFalse);
+      expect(diagnostic.raisons.single, contains('404'));
+    });
+
+    test('un site injoignable donne la raison « injoignable », sans lever', () {
+      final diagnostic = ServiceBibliotheque.diagnosticDepuisErreur(
+        const ErreurSource('https://loin.test/', 'Connexion refusée'),
+        Uri.parse('https://loin.test/'),
+      );
+
+      expect(diagnostic.estLisible, isFalse);
+      expect(diagnostic.raisons.single, contains('injoignable'));
+    });
+
+    test('une adresse invalide ou un site à adaptateur dédié ne font aucune '
+        'requête', () async {
+      final invalide = await service.diagnostiquerSite('pas une adresse');
+      final mangaDexDiagnostic = await service.diagnostiquerSite(
+        'https://mangadex.org/title/abc',
+      );
+
+      expect(invalide.estLisible, isFalse);
+      expect(mangaDexDiagnostic.estLisible, isTrue);
+      expect(mangaDexDiagnostic.remarques.single, contains('MangaDex'));
+      expect(requetes, isEmpty);
+    });
+
+    test("un thème Madara reconnu dans la page n'est pas jugé sur les "
+        'critères génériques', () async {
+      pages['https://madara.test/manga/x/'] = _pageHtml(
+        '<html><head><title>X</title></head><body>'
+        '<div class="wp-manga-section">X</div></body></html>',
+      );
+
+      final diagnostic = await service.diagnostiquerSite(
+        'https://madara.test/manga/x/',
+      );
+
+      expect(diagnostic.estLisible, isTrue);
+      expect(diagnostic.remarques.single, contains('Madara'));
     });
   });
 
