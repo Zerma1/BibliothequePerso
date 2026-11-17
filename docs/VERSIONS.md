@@ -3,7 +3,32 @@
 > **Note sur la numérotation (2026-11-17)** : la 0.1.0 a été publiée sur `main` le 2026-11-16.
 > Les versions de test suivantes, appelées par erreur « 0.1.0-test.2 » à « 0.1.0-test.4 »,
 > apportaient de nouvelles fonctionnalités et préparaient donc la **0.2.0**. Leurs étiquettes
-> restent telles quelles ; la prochaine version de test est la **0.2.0-test.1**.
+> restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
+> chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
+
+## 0.2.0-test — version de test (2026-11-17)
+
+Reprend tout ce qu'apportaient les versions 0.1.0-test.2 à 0.1.0-test.4, plus :
+
+Nouveau :
+- **Site en « simple lien »** : quand un site ne peut pas être lu, « Ajouter quand même comme
+  simple lien » l'ajoute au titre pour l'ouvrir dans le navigateur (aucun chapitre lu ni
+  téléchargé, jamais vérifié). Sur un site lu : « Garder comme simple lien » ; sur un simple
+  lien : « Essayer de le lire » (il redevient simple lien si le site reste illisible).
+- **« Pourquoi ce site n'est pas lisible ? »** : diagnostic d'un site à la demande (une seule
+  requête), avec les raisons.
+- **Critères de lecture** (aide repliable sous l'adresse d'un site) et **réglages avancés
+  (sélecteurs CSS)** pour les sites génériques.
+- **Sites génériques à liens explicites** : un site dont les pages listent simplement les
+  chapitres par des liens peut être lu sans réglage.
+- Version affichée : **v0.2.0**.
+
+Changé :
+- L'application s'annonce honnêtement (« BibliothequePerso/0.1 (usage personnel) ») auprès de
+  tous les sites. Un site qui bloque les programmes automatiques (protection anti-robot) est
+  reconnu et signalé clairement ; l'application ne contourne jamais ces protections.
+- Windows : les liens « Lire sur … » s'ouvrent toujours dans le navigateur par défaut.
+- Compilation automatique : les étiquettes `vX.Y.Z-test` sont publiées en pre-release.
 
 ## 0.1.0-test.4 — version de test (2026-11-17)
 
