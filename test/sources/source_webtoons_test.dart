@@ -165,6 +165,16 @@ void main() {
       expect(SourceWebtoons.convertirDate('13 xyz 2026'), isNull);
     });
 
+    test('jour absent du mois : null (pas de débordement en mars)', () {
+      expect(SourceWebtoons.convertirDate('31 févr. 2025'), isNull);
+      expect(SourceWebtoons.convertirDate('Feb 29, 2025'), isNull);
+      expect(SourceWebtoons.convertirDate('Apr 31, 2024'), isNull);
+      expect(
+        SourceWebtoons.convertirDate('Feb 29, 2024'),
+        DateTime.utc(2024, 2, 29),
+      );
+    });
+
     test('nomSiteExterne : WEBTOON', () {
       expect(
         nomSiteExterne(

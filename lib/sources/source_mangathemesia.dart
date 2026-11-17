@@ -35,8 +35,8 @@ import '../modeles/titre_alternatif.dart';
 import 'client_http_poli.dart';
 import 'constantes_sources.dart';
 import 'erreur_source.dart';
+import 'outils_sources.dart';
 import 'outils_wordpress.dart';
-import 'source_mangadex.dart';
 import 'source_site.dart';
 
 /// Lecture d'un site MangaThemesia : recherche, fiche, chapitres et images.
@@ -395,7 +395,7 @@ class SourceMangaThemesia implements SourceSite {
       // Numéro : `data-num` du li (« 4.5 ») ; repli : nom puis adresse.
       final dataNum = ligne.attributes['data-num']?.trim() ?? '';
       final numero = RegExp(r'^\d+(?:[.,]\d+)?$').hasMatch(dataNum)
-          ? SourceMangaDex.convertirNumero(dataNum)
+          ? OutilsSources.convertirNumero(dataNum)
           : OutilsWordPress.numeroChapitre(nom, adresse);
       final texteDate = lien.querySelector('.chapterdate')?.text ?? '';
       chapitres.add(
@@ -419,7 +419,9 @@ class SourceMangaThemesia implements SourceSite {
   /// `<noscript>` du thème, ou images directement dans la page).
   ///
   /// Lève une [ErreurSource] si le lecteur marque le chapitre protégé
-  /// (`"protected": true`) ou si aucune image n'est en clair.
+  /// (`protected` à `true`, `1`, `"1"` ou `!0`, cherché dans le texte brut
+  /// du script avant tout décodage ou repli) ou si aucune image n'est en
+  /// clair.
   ///
   /// LIMITE : des sites minifient leurs scripts dans un attribut
   /// `src="data:text/javascript;base64,…"` ; ce script n'est pas décodé :
@@ -427,14 +429,18 @@ class SourceMangaThemesia implements SourceSite {
   static ContenuChapitre analyserContenu(String html, Uri urlChapitre) {
     final document = parse(html);
     final referer = OutilsWordPress.racineSite(urlChapitre);
+    // PLAYBOOK §10 : la marque de protection est cherchée dans le texte brut
+    // du script AVANT tout décodage JSON et tout repli `#readerarea img` /
+    // `<noscript>` : un objet écrit en JavaScript non strict (clés sans
+    // guillemets, `!0`) échoue au décodage, et le repli lirait alors les
+    // images d'un chapitre protégé.
+    if (_lecteurMarqueProtege(document)) {
+      throw _erreurProtege(urlChapitre);
+    }
     final lecteur = _objetLecteur(document, urlChapitre);
     if (lecteur != null) {
-      if (lecteur['protected'] == true) {
-        throw ErreurSource(
-          urlChapitre.toString(),
-          'Chapitre protégé par le site (lecteur MangaThemesia) : à lire sur '
-          'le site',
-        );
+      if (_valeurProtegee(lecteur['protected'])) {
+        throw _erreurProtege(urlChapitre);
       }
       final images = _imagesLecteur(lecteur, urlChapitre);
       if (images.isNotEmpty) {
@@ -540,6 +546,38 @@ class SourceMangaThemesia implements SourceSite {
     return null;
   }
 
+  /// Marque de protection dans le texte d'un script : clé `protected` (avec
+  /// ou sans guillemets) valant `true`, `1`, `"1"`, `'1'` ou `!0` (forme
+  /// minifiée de `true`). Le regard arrière écarte `unprotected` ou
+  /// `is_protected` ; le regard avant écarte `10` ou `true_value`.
+  static final RegExp _motifProtege = RegExp(
+    r'''(?<![\w$])["']?protected["']?\s*:\s*(?:true|1|"1"|'1'|!0)(?![\w$])''',
+  );
+
+  /// Indique si un script en clair qui appelle `ts_reader.run(` porte la
+  /// marque de protection ([_motifProtege]), sans décoder son objet.
+  static bool _lecteurMarqueProtege(Document document) {
+    for (final script in document.querySelectorAll('script')) {
+      final texte = script.text;
+      if (texte.contains(_appelLecteur) && _motifProtege.hasMatch(texte)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Indique si la valeur JSON de `protected` marque un chapitre protégé :
+  /// `true`, `1` ou `"1"`.
+  static bool _valeurProtegee(Object? valeur) =>
+      valeur == true || valeur == 1 || valeur == '1';
+
+  /// Erreur d'un chapitre protégé par le lecteur du site.
+  static ErreurSource _erreurProtege(Uri urlChapitre) => ErreurSource(
+    urlChapitre.toString(),
+    'Chapitre protégé par le site (lecteur MangaThemesia) : à lire sur '
+    'le site',
+  );
+
   /// Objet JSON passé à `ts_reader.run(…)` dans un script en clair de la
   /// page, ou `null` s'il n'y en a pas ou s'il est illisible.
   static Map<String, Object?>? _objetLecteur(Document document, Uri url) {
@@ -561,7 +599,8 @@ class SourceMangaThemesia implements SourceSite {
         }
       } on FormatException {
         // Objet écrit en JavaScript et non en JSON strict : on passe au
-        // repli `#readerarea img`.
+        // repli `#readerarea img`. La marque de protection a déjà été
+        // cherchée dans le texte brut (`_lecteurMarqueProtege`).
         continue;
       }
     }

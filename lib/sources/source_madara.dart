@@ -214,15 +214,19 @@ class SourceMadara implements SourceSite {
             // risque.
             nouvellesTentatives: nombreMaxNouvellesTentatives,
           );
-          final dePage = OutilsWordPress.avecExtrait(
-            reponse,
-            () => analyserChapitres(
+          final dePage = OutilsWordPress.avecExtrait(reponse, () {
+            // Les pages suivantes ne sont demandées que si la page 1 en
+            // annonçait : seule la page 1 peut être une réponse étrangère.
+            if (page == 1) {
+              verifierReponseChapitres(reponse, adresse);
+            }
+            return analyserChapitres(
               reponse,
               uri,
               langue: langue,
               maintenant: maintenant,
-            ),
-          );
+            );
+          });
           final avant = chapitres.length;
           chapitres.addAll(dePage.where((c) => urlsVues.add(c.urlChapitre)));
           // Garde-fou : une page sans chapitre nouveau arrête la lecture.
@@ -235,7 +239,7 @@ class SourceMadara implements SourceSite {
         // Seul un échec dès la première page signale un site sans ce point
         // d'accès ; un échec plus loin est une vraie erreur.
         if (chapitres.isNotEmpty ||
-            (code != 400 && code != 404 && code != 405)) {
+            !codesHttpSansAjaxChapitresMadara.contains(code)) {
           rethrow;
         }
         // Ancien point d'accès du thème (Madara 1.x) : identifiant du titre
@@ -244,8 +248,9 @@ class SourceMadara implements SourceSite {
         if (idTitre.isEmpty) {
           rethrow;
         }
+        final adresseAncienne = uri.resolve('/wp-admin/admin-ajax.php');
         final reponse = await _client.envoyerFormulaire(
-          uri.resolve('/wp-admin/admin-ajax.php'),
+          adresseAncienne,
           champs: <String, String>{
             'action': 'manga_get_chapters',
             'manga': idTitre,
@@ -256,15 +261,18 @@ class SourceMadara implements SourceSite {
         chapitres
           ..clear()
           ..addAll(
-            OutilsWordPress.avecExtrait(
-              reponse,
-              () => analyserChapitres(
+            OutilsWordPress.avecExtrait(reponse, () {
+              // Une réponse en 200 qui n'est pas une liste du thème (page
+              // de cache, anti-robot) donnerait sinon une liste vide
+              // silencieuse.
+              verifierReponseChapitres(reponse, adresseAncienne);
+              return analyserChapitres(
                 reponse,
                 uri,
                 langue: langue,
                 maintenant: maintenant,
-              ),
-            ),
+              );
+            }),
           );
       }
       return chapitres.reversed.toList();
@@ -590,6 +598,38 @@ class SourceMadara implements SourceSite {
       );
     }
     return chapitres;
+  }
+
+  /// Lève une [ErreurSource] (adresse [adresse]) si la réponse [html] d'une
+  /// demande de liste de chapitres n'est pas une liste du thème : ni
+  /// `li.wp-manga-chapter`, ni conteneur de liste connu.
+  ///
+  /// Un site peut servir en 200 une page étrangère (anti-robot, page de
+  /// cache, accueil après redirection) : sans ce contrôle, la liste serait
+  /// vide sans erreur.
+  ///
+  /// LIMITE : le message « aucun chapitre » du thème (`.no-chapter`) n'a pas
+  /// pu être vu sur une page réelle ; un titre réellement sans chapitre dont
+  /// la réponse n'a aucun des conteneurs reconnus lève donc une erreur.
+  static void verifierReponseChapitres(String html, Uri adresse) {
+    final document = parse(html);
+    // `li.wp-manga-chapter` : un chapitre. `.page-content-listing` et
+    // `.listing-chapters_wrap` enveloppent la réponse de `ajax/chapters/`
+    // (réponse réelle enregistrée), `.version-chap` est la liste elle-même,
+    // `.no-chapter` le message d'un titre sans chapitre.
+    if (document.querySelector(
+          'li.wp-manga-chapter, .page-content-listing, '
+          '.listing-chapters_wrap, .version-chap, .no-chapter',
+        ) !=
+        null) {
+      return;
+    }
+    throw ErreurSource(
+      adresse.toString(),
+      "La réponse reçue n'est pas une liste de chapitres Madara (ni "
+      'li.wp-manga-chapter ni conteneur de liste du thème : page anti-robot '
+      'ou structure inattendue)',
+    );
   }
 
   /// Indique si la réponse [html] de la page [numeroPage] de

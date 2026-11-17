@@ -121,6 +121,12 @@ const Duration dureeCachePageWordPress = Duration(minutes: 1);
 /// chapitres suivants ne sont pas listés.
 const int nombreMaxPagesChapitresMadara = 50;
 
+/// Codes HTTP par lesquels un site Madara signale qu'il n'a pas le point
+/// d'accès `POST <fiche>ajax/chapters/` (400 Bad Request, 404 Not Found,
+/// 405 Method Not Allowed) : `SourceMadara` passe alors à l'ancien appel
+/// `admin-ajax.php`.
+const Set<int> codesHttpSansAjaxChapitresMadara = <int>{400, 404, 405};
+
 /// Texte dont la présence dans l'URL de base désigne un serveur MangaDex
 /// (docs/04-chapter/retrieving-chapter : signaler chaque image chargée
 /// « from a base url that doesn't contain mangadex.org »).

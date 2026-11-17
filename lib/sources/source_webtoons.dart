@@ -31,8 +31,8 @@ import '../modeles/titre.dart';
 import 'client_http_poli.dart';
 import 'constantes_sources.dart';
 import 'erreur_source.dart';
+import 'outils_sources.dart';
 import 'rapport_erreur_source.dart';
-import 'source_mangadex.dart';
 import 'source_site.dart';
 
 /// Lecture de WEBTOON : fiche et liste des épisodes depuis les pages HTML de
@@ -64,54 +64,6 @@ class SourceWebtoons implements SourceSite {
   /// Premier segment du chemin : code de langue du site (`fr`, `en`,
   /// `zh-hant`…).
   static final RegExp _motifLangue = RegExp(r'^[a-z]{2}(-[a-z]+)?$');
-
-  /// Mois abrégés ou complets (français et anglais, sans le point final) des
-  /// dates de la liste : « 13 nov. 2026 », « Dec 22, 2024 ».
-  static const Map<String, int> _mois = <String, int>{
-    'janv': 1,
-    'janvier': 1,
-    'jan': 1,
-    'january': 1,
-    'févr': 2,
-    'fevr': 2,
-    'février': 2,
-    'feb': 2,
-    'february': 2,
-    'mars': 3,
-    'mar': 3,
-    'march': 3,
-    'avr': 4,
-    'avril': 4,
-    'apr': 4,
-    'april': 4,
-    'mai': 5,
-    'may': 5,
-    'juin': 6,
-    'jun': 6,
-    'june': 6,
-    'juil': 7,
-    'juillet': 7,
-    'jul': 7,
-    'july': 7,
-    'août': 8,
-    'aout': 8,
-    'aug': 8,
-    'august': 8,
-    'sept': 9,
-    'septembre': 9,
-    'sep': 9,
-    'september': 9,
-    'oct': 10,
-    'octobre': 10,
-    'october': 10,
-    'nov': 11,
-    'novembre': 11,
-    'november': 11,
-    'déc': 12,
-    'dec': 12,
-    'décembre': 12,
-    'december': 12,
-  };
 
   // ---------------------------------------------------------------------
   // Adresses
@@ -187,37 +139,14 @@ class SourceWebtoons implements SourceSite {
   }
 
   /// Date d'un épisode telle qu'affichée dans la liste (« 13 nov. 2026 »,
-  /// « Dec 22, 2024 »), en UTC à minuit ; `null` si le format est inconnu.
+  /// « Dec 22, 2024 »), en UTC à minuit ; `null` si le format est inconnu ou
+  /// si la date n'existe pas (31 février). Voir
+  /// `OutilsSources.convertirDateAvecMois`.
   ///
   /// LIMITE : seuls les noms de mois français et anglais sont reconnus ; les
   /// listes des autres langues du site n'ont pas de date.
-  static DateTime? convertirDate(String texte) {
-    final propre = _nettoyer(texte).toLowerCase();
-    // « 13 nov. 2026 » (jour, mois, année : français)
-    final francais = RegExp(r'^(\d{1,2})\s+([^\s\d]+?)\.?\s+(\d{4})$')
-        .firstMatch(propre);
-    // « Dec 22, 2024 » (mois, jour, année : anglais)
-    final anglais = RegExp(r'^([^\s\d]+?)\.?\s+(\d{1,2}),\s*(\d{4})$')
-        .firstMatch(propre);
-    final int jour;
-    final int? mois;
-    final int annee;
-    if (francais != null) {
-      jour = int.parse(francais.group(1)!);
-      mois = _mois[francais.group(2)!];
-      annee = int.parse(francais.group(3)!);
-    } else if (anglais != null) {
-      jour = int.parse(anglais.group(2)!);
-      mois = _mois[anglais.group(1)!];
-      annee = int.parse(anglais.group(3)!);
-    } else {
-      return null;
-    }
-    if (mois == null || jour < 1 || jour > 31) {
-      return null;
-    }
-    return DateTime.utc(annee, mois, jour);
-  }
+  static DateTime? convertirDate(String texte) =>
+      OutilsSources.convertirDateAvecMois(texte);
 
   // ---------------------------------------------------------------------
   // SourceSite
@@ -475,8 +404,8 @@ class SourceWebtoons implements SourceSite {
       final rang = RegExp(r'#\s*(\d+(?:\.\d+)?)')
           .firstMatch(ligne.querySelector('.tx')?.text ?? '');
       final numero = rang != null
-          ? SourceMangaDex.convertirNumero(rang.group(1))
-          : SourceMangaDex.convertirNumero(
+          ? OutilsSources.convertirNumero(rang.group(1))
+          : OutilsSources.convertirNumero(
               ligne.attributes['data-episode-no'] ?? numeroSite,
             );
 

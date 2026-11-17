@@ -294,6 +294,65 @@ void main() {
     });
 
     test(
+      'page 1 étrangère servie en 200 : ErreurSource avec extrait, jamais une '
+      'liste vide',
+      () async {
+        final source = creerSource((requete) async {
+          if (requete.method == 'POST') {
+            return reponseHtml(
+              '<html><body><h1>Just a moment...</h1></body></html>',
+            );
+          }
+          return reponseHtml(htmlFiche);
+        });
+        await expectLater(
+          source.recupererChapitres(urlTitre),
+          throwsA(
+            isA<ErreurSource>()
+                .having((e) => e.url, 'url', '${urlTitre}ajax/chapters/?t=1')
+                .having(
+                  (e) => e.message,
+                  'message',
+                  contains("n'est pas une liste de chapitres Madara"),
+                )
+                .having(
+                  (e) => e.extraitReponse,
+                  'extraitReponse',
+                  contains('Just a moment'),
+                )
+                .having((e) => e.typeDetecte, 'typeDetecte', TypeSource.madara),
+          ),
+        );
+      },
+    );
+
+    test(
+      'conteneur du thème sans chapitre : accepté ; autre page : erreur',
+      () {
+        for (final html in <String>[
+          '<div class="page-content-listing single-page">'
+              '<div class="listing-chapters_wrap"></div></div>',
+          '<ul class="main version-chap"></ul>',
+          '<span class="no-chapter">No chapters</span>',
+        ]) {
+          SourceMadara.verifierReponseChapitres(html, Uri.parse(urlTitre));
+        }
+        // Réponse réelle : acceptée.
+        SourceMadara.verifierReponseChapitres(
+          htmlChapitres,
+          Uri.parse(urlTitre),
+        );
+        expect(
+          () => SourceMadara.verifierReponseChapitres(
+            '<p>Accueil</p>',
+            Uri.parse(urlTitre),
+          ),
+          throwsA(isA<ErreurSource>()),
+        );
+      },
+    );
+
+    test(
       'erreur serveur sur la liste : ErreurSource, jamais une liste vide',
       () async {
         final source = creerSource((requete) async {

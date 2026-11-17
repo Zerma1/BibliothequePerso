@@ -12,9 +12,8 @@ import 'package:html/dom.dart' show Document, Element, Text;
 import '../modeles/source.dart';
 import '../modeles/titre.dart';
 import 'erreur_source.dart';
+import 'outils_sources.dart';
 import 'rapport_erreur_source.dart';
-import 'source_mangadex.dart';
-import 'source_webtoons.dart';
 
 /// Fonctions d'analyse partagées par les adaptateurs de thèmes WordPress.
 abstract final class OutilsWordPress {
@@ -196,10 +195,10 @@ abstract final class OutilsWordPress {
       caseSensitive: false,
     ).firstMatch(nom);
     if (dansNom != null) {
-      return SourceMangaDex.convertirNumero(dansNom.group(1));
+      return OutilsSources.convertirNumero(dansNom.group(1));
     }
     if (RegExp(r'\d').hasMatch(nom)) {
-      return SourceMangaDex.convertirNumero(nom);
+      return OutilsSources.convertirNumero(nom);
     }
     final segments = adresse.pathSegments.where((s) => s.isNotEmpty);
     final dernier = segments.isEmpty ? '' : segments.last;
@@ -209,7 +208,7 @@ abstract final class OutilsWordPress {
     ).firstMatch(dernier);
     if (dansAdresse != null) {
       final decimale = dansAdresse.group(2);
-      return SourceMangaDex.convertirNumero(
+      return OutilsSources.convertirNumero(
         decimale == null
             ? dansAdresse.group(1)
             : '${dansAdresse.group(1)}.$decimale',
@@ -244,10 +243,14 @@ abstract final class OutilsWordPress {
   /// `null` si le format n'est pas reconnu.
   ///
   /// Formats lus : « October 11, 2017 » / « 13 nov. 2026 » (voir
-  /// `SourceWebtoons.convertirDate`), « 2017-10-11 », « 11/10/2017 » (jour
-  /// d'abord), et les dates relatives des chapitres récents (« 2 days ago »,
-  /// « il y a 3 heures », « yesterday », « hier »), calculées depuis
+  /// `OutilsSources.convertirDateAvecMois`), « 2017-10-11 », « 11/10/2017 »
+  /// (jour d'abord), et les dates relatives des chapitres récents (« 2 days
+  /// ago », « il y a 3 heures », « yesterday », « hier »), calculées depuis
   /// [maintenant]. Une date relative est approchée (un mois = 30 jours).
+  ///
+  /// Une date qui n'existe pas (31/02) ou une date relative de plus de
+  /// [_plafondDateRelative] (« 300000 years ago », texte abîmé) donne `null`
+  /// et ne lève jamais d'exception.
   ///
   /// LIMITE : les noms de mois et les dates relatives ne sont lus qu'en
   /// anglais et en français.
@@ -256,13 +259,13 @@ abstract final class OutilsWordPress {
     if (propre.isEmpty) {
       return null;
     }
-    final absolue = SourceWebtoons.convertirDate(propre);
+    final absolue = OutilsSources.convertirDateAvecMois(propre);
     if (absolue != null) {
       return absolue;
     }
     final iso = RegExp(r'^(\d{4})-(\d{1,2})-(\d{1,2})').firstMatch(propre);
     if (iso != null) {
-      return _dateValide(
+      return OutilsSources.dateValide(
         int.parse(iso.group(1)!),
         int.parse(iso.group(2)!),
         int.parse(iso.group(3)!),
@@ -270,7 +273,7 @@ abstract final class OutilsWordPress {
     }
     final barres = RegExp(r'^(\d{1,2})/(\d{1,2})/(\d{4})$').firstMatch(propre);
     if (barres != null) {
-      return _dateValide(
+      return OutilsSources.dateValide(
         int.parse(barres.group(3)!),
         int.parse(barres.group(2)!),
         int.parse(barres.group(1)!),
@@ -290,21 +293,28 @@ abstract final class OutilsWordPress {
       // Le motif est paresseux : « mois » arrive en « moi » + « s ».
       final mot = relative.group(2)!;
       final unite = _unitesRelatives[mot] ?? _unitesRelatives['${mot}s'];
-      final quantite = int.tryParse(relative.group(1)!) ?? 1;
-      if (unite != null) {
+      final nombre = relative.group(1)!;
+      final estChiffre = RegExp(r'^\d+$').hasMatch(nombre);
+      // « a day ago », « une heure » : quantité 1. Un nombre trop long pour
+      // un int (`tryParse` → null) n'est pas pris pour 1.
+      final quantite = estChiffre ? int.tryParse(nombre) : 1;
+      if (unite != null && quantite != null) {
+        // Plafond comparé en secondes AVANT la multiplication : un
+        // `Duration` trop grand déborde, et `subtract` lève une
+        // ArgumentError hors de la plage de `DateTime`.
+        final maximum = _plafondDateRelative.inSeconds ~/ unite.inSeconds;
+        if (quantite > maximum) {
+          return null;
+        }
         return maintenant.toUtc().subtract(unite * quantite);
       }
     }
     return null;
   }
 
-  /// Date UTC à minuit si elle existe, sinon `null`.
-  static DateTime? _dateValide(int annee, int mois, int jour) {
-    if (mois < 1 || mois > 12 || jour < 1 || jour > 31) {
-      return null;
-    }
-    return DateTime.utc(annee, mois, jour);
-  }
+  /// Ancienneté maximale acceptée pour une date relative : au-delà, le texte
+  /// est jugé abîmé et la date est ignorée.
+  static const Duration _plafondDateRelative = Duration(days: 365 * 100);
 
   /// Valide l'adresse [url] d'une page d'un site WordPress (titre ou
   /// chapitre) : `http`/`https`, un hôte et au moins un segment de chemin.

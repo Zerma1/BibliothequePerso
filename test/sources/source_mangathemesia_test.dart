@@ -256,6 +256,79 @@ void main() {
       }
     });
 
+    test(
+      'protégé dans un objet JavaScript non strict : ErreurSource « à lire sur '
+      'le site », sans repli sur #readerarea ni <noscript>',
+      () {
+        // Clés sans guillemets, chaînes entre apostrophes, virgule finale :
+        // jsonDecode échoue, et #readerarea / <noscript> ont des images.
+        const debut =
+            '<div id="readerarea"><img src="/visible.jpg">'
+            '<noscript><img src="/cache.jpg"></noscript></div>'
+            "<script>ts_reader.run({sources:[{source:'S',images:['/a.jpg']}],";
+        for (final marque in <String>[
+          'protected:true',
+          "'protected' : 1",
+          'protected: "1"',
+          'protected:!0',
+          '"protected":1',
+        ]) {
+          expect(
+            () => SourceMangaThemesia.analyserContenu(
+              '$debut$marque,});</script>',
+              Uri.parse(urlChapitre1),
+            ),
+            throwsA(
+              isA<ErreurSource>().having(
+                (e) => e.message,
+                'message',
+                contains('à lire sur le site'),
+              ),
+            ),
+            reason: marque,
+          );
+        }
+      },
+    );
+
+    test('protected à 1 ou "1" en JSON strict : ErreurSource', () {
+      for (final valeur in <String>['1', '"1"']) {
+        final html =
+            '<div id="readerarea"></div><script>ts_reader.run({"sources":[{'
+            '"source":"S","images":["/a.jpg"]}],"protected":$valeur});'
+            '</script>';
+        expect(
+          () => SourceMangaThemesia.analyserContenu(
+            html,
+            Uri.parse(urlChapitre1),
+          ),
+          throwsA(isA<ErreurSource>()),
+          reason: valeur,
+        );
+      }
+    });
+
+    test('non protégé (false, 0, unprotected:true) : images lues', () {
+      for (final marque in <String>[
+        'protected:false',
+        'protected:0',
+        'protected:10',
+        'unprotected:true',
+      ]) {
+        final html =
+            '<div id="readerarea"><img src="/visible.jpg"></div>'
+            "<script>ts_reader.run({sources:[],$marque});</script>";
+        expect(
+          SourceMangaThemesia.analyserContenu(
+            html,
+            Uri.parse(urlChapitre1),
+          ).urlsImages,
+          <String>['$urlBase/visible.jpg'],
+          reason: marque,
+        );
+      }
+    });
+
     test('recupererContenu : une requête sur la page du chapitre', () async {
       final urls = <String>[];
       final source = creerSource((requete) async {

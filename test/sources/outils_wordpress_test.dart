@@ -45,6 +45,51 @@ void main() {
       }
     });
 
+    test(
+      'jour absent du mois : null, sans débordement sur le mois suivant',
+      () {
+        for (final texte in <String>[
+          '31/02/2025',
+          '2025-02-29',
+          '2025-04-31',
+          '31 févr. 2025',
+          'February 30, 2024',
+        ]) {
+          expect(
+            OutilsWordPress.convertirDate(texte, maintenant),
+            isNull,
+            reason: texte,
+          );
+        }
+        // Année bissextile : le 29 février existe.
+        expect(
+          OutilsWordPress.convertirDate('29/02/2024', maintenant),
+          DateTime.utc(2024, 2, 29),
+        );
+      },
+    );
+
+    test("date relative démesurée : null, jamais d'exception", () {
+      for (final texte in <String>[
+        '300000 years ago',
+        '101 years ago',
+        'il y a 2000000 jours',
+        '99999999999999999999999 days ago',
+        '9223372036854775807 weeks ago',
+      ]) {
+        expect(
+          OutilsWordPress.convertirDate(texte, maintenant),
+          isNull,
+          reason: texte,
+        );
+      }
+      // Sous le plafond de 100 ans : lue.
+      expect(
+        OutilsWordPress.convertirDate('99 years ago', maintenant),
+        maintenant.subtract(const Duration(days: 365 * 99)),
+      );
+    });
+
     test('format inconnu : null', () {
       for (final texte in <String>['', 'bientôt', '32/13/2020', 'new']) {
         expect(
