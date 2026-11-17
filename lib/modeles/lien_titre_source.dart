@@ -15,6 +15,12 @@ import 'outils_modeles.dart';
 /// et la source sont aussi recopiées dans `titres.url_titre` et
 /// `titres.id_source`. Les autres liens sont des sites **secondaires**,
 /// consultés pour leurs chapitres.
+///
+/// Un site secondaire peut être un **lien seul** ([estLienSeul], migration
+/// 8) : site que l'application ne sait pas lire (protection anti-robot,
+/// adaptateur incapable), gardé seulement pour être ouvert dans le
+/// navigateur. Aucun chapitre n'y est lu. Le site principal n'est jamais un
+/// lien seul.
 class LienTitreSource {
   /// Crée un lien. [id] vaut `null` tant qu'il n'est pas enregistré.
   const LienTitreSource({
@@ -23,6 +29,7 @@ class LienTitreSource {
     required this.idSource,
     required this.urlTitre,
     this.estPrincipale = false,
+    this.estLienSeul = false,
     this.dateAjout,
   });
 
@@ -44,6 +51,11 @@ class LienTitreSource {
   /// `true` pour le site principal du titre (un seul par titre).
   final bool estPrincipale;
 
+  /// `true` si le site est un **lien seul** : il est seulement ouvert dans
+  /// le navigateur, l'application n'y lit aucun chapitre. Toujours `false`
+  /// pour le site principal.
+  final bool estLienSeul;
+
   /// Date (UTC) à laquelle le site a été lié au titre, si connue.
   final DateTime? dateAjout;
 
@@ -56,6 +68,7 @@ class LienTitreSource {
       'id_source': idSource,
       'url_titre': urlTitre,
       'est_principale': booleenVersEntier(estPrincipale),
+      'lien_seul': booleenVersEntier(estLienSeul),
       'date_ajout': dateVersMillisecondes(dateAjout),
     };
   }
@@ -63,6 +76,8 @@ class LienTitreSource {
   /// Construit depuis une ligne SQLite.
   ///
   /// Lève une `ErreurBaseDeDonnees` si une colonne a un type inattendu.
+  /// Colonne `lien_seul` absente (base antérieure à la migration 8) :
+  /// `false`.
   factory LienTitreSource.depuisMap(Map<String, Object?> map) {
     return LienTitreSource(
       id: map.lireEntierOptionnel('id', _entite),
@@ -70,6 +85,8 @@ class LienTitreSource {
       idSource: map.lireEntier('id_source', _entite),
       urlTitre: map.lireTexte('url_titre', _entite),
       estPrincipale: map.lireBooleen('est_principale', _entite),
+      estLienSeul:
+          map.containsKey('lien_seul') && map.lireBooleen('lien_seul', _entite),
       dateAjout: map.lireDateOptionnelle('date_ajout', _entite),
     );
   }
@@ -84,6 +101,7 @@ class LienTitreSource {
     int? idSource,
     String? urlTitre,
     bool? estPrincipale,
+    bool? estLienSeul,
     DateTime? dateAjout,
   }) {
     return LienTitreSource(
@@ -92,6 +110,7 @@ class LienTitreSource {
       idSource: idSource ?? this.idSource,
       urlTitre: urlTitre ?? this.urlTitre,
       estPrincipale: estPrincipale ?? this.estPrincipale,
+      estLienSeul: estLienSeul ?? this.estLienSeul,
       dateAjout: dateAjout ?? this.dateAjout,
     );
   }
@@ -105,15 +124,24 @@ class LienTitreSource {
             other.idSource == idSource &&
             other.urlTitre == urlTitre &&
             other.estPrincipale == estPrincipale &&
+            other.estLienSeul == estLienSeul &&
             other.dateAjout == dateAjout;
   }
 
   @override
-  int get hashCode =>
-      Object.hash(id, idTitre, idSource, urlTitre, estPrincipale, dateAjout);
+  int get hashCode => Object.hash(
+    id,
+    idTitre,
+    idSource,
+    urlTitre,
+    estPrincipale,
+    estLienSeul,
+    dateAjout,
+  );
 
   @override
   String toString() =>
       'LienTitreSource(id: $id, idTitre: $idTitre, idSource: $idSource, '
-      'urlTitre: $urlTitre, estPrincipale: $estPrincipale)';
+      'urlTitre: $urlTitre, estPrincipale: $estPrincipale, '
+      'estLienSeul: $estLienSeul)';
 }

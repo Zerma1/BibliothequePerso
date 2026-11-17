@@ -26,6 +26,7 @@ const List<Migration> migrations = <Migration>[
   _migration5,
   _migration6,
   _migration7,
+  _migration8,
 ];
 
 /// Version actuelle du schéma (nombre de migrations).
@@ -589,6 +590,52 @@ Future<void> _migration7(DatabaseExecutor executeur) async {
     <Object?>[1, DateTime.now().toUtc().millisecondsSinceEpoch],
   );
   for (final instruction in suite) {
+    await executeur.execute(instruction);
+  }
+}
+
+/// Migration 8 (tâche T4) : sites en « lien seul ».
+///
+/// Colonne `titres_sources.lien_seul` : site que l'application ne sait pas
+/// lire (protection anti-robot, adaptateur incapable), gardé seulement pour
+/// être ouvert dans le navigateur ; aucun chapitre n'y est lu. Le site
+/// principal n'est jamais un lien seul (garanti par deux déclencheurs, en
+/// plus des contrôles de `DepotTitresSources`).
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration8(DatabaseExecutor executeur) async {
+  const instructions = <String>[
+    // Booléen 0/1 (CHECK), NOT NULL DEFAULT 0 : les liens existants, tous
+    // lisibles jusqu'ici, deviennent des sites normaux. ADD COLUMN accepte
+    // NOT NULL grâce à la valeur par défaut. Pas d'index : la colonne est
+    // lue avec les sites d'un titre (index UNIQUE (id_titre, id_source)),
+    // jamais cherchée seule.
+    'ALTER TABLE titres_sources ADD COLUMN lien_seul INTEGER NOT NULL '
+        'DEFAULT 0 CHECK (lien_seul IN (0, 1))',
+    // Déclencheurs : une ligne à la fois principale et lien seul est
+    // refusée, quel que soit le chemin d'écriture. Un CHECK de table
+    // (est_principale = 0 OR lien_seul = 0) aurait demandé de recréer la
+    // table, ce que ADD COLUMN ne permet pas. Le texte d'erreur sert
+    // seulement au diagnostic : le dépôt vérifie avant d'écrire et donne un
+    // message clair.
+    '''
+    CREATE TRIGGER declencheur_titres_sources_lien_seul_insertion
+    BEFORE INSERT ON titres_sources
+    WHEN NEW.est_principale = 1 AND NEW.lien_seul = 1
+    BEGIN
+      SELECT RAISE(ABORT, 'site principal en lien seul interdit');
+    END
+    ''',
+    '''
+    CREATE TRIGGER declencheur_titres_sources_lien_seul_modification
+    BEFORE UPDATE OF est_principale, lien_seul ON titres_sources
+    WHEN NEW.est_principale = 1 AND NEW.lien_seul = 1
+    BEGIN
+      SELECT RAISE(ABORT, 'site principal en lien seul interdit');
+    END
+    ''',
+  ];
+  for (final instruction in instructions) {
     await executeur.execute(instruction);
   }
 }

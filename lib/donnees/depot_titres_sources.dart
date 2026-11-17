@@ -10,11 +10,12 @@ import '../modeles/titre.dart';
 import 'depot_chapitres.dart';
 import 'depot_titres.dart';
 
-/// Accès à la table `titres_sources` (migration 7).
+/// Accès à la table `titres_sources` (migrations 7 et 8).
 ///
 /// Chaque titre a un site **principal** (`est_principale = 1`), recopié dans
 /// `titres.id_source` / `titres.url_titre`, et zéro ou plusieurs sites
-/// **secondaires**. La ligne principale est créée et tenue à jour par des
+/// **secondaires**, dont certains peuvent être des **liens seuls**
+/// (`lien_seul = 1`, jamais pour le principal). La ligne principale est créée et tenue à jour par des
 /// déclencheurs SQL à chaque écriture dans `titres` : ce dépôt ne gère que
 /// les sites secondaires et le changement de site principal.
 class DepotTitresSources {
@@ -79,6 +80,11 @@ class DepotTitresSources {
   /// Ajoute un site secondaire au titre [idTitre] : la source [idSource], où
   /// le titre se trouve à l'adresse [urlTitre]. Renvoie le lien enregistré.
   ///
+  /// [lienSeul] à `true` enregistre un **lien seul** (migration 8) : site
+  /// que l'application ne sait pas lire (protection anti-robot, adaptateur
+  /// incapable), seulement ouvert dans le navigateur ; aucun chapitre ne
+  /// peut y être enregistré.
+  ///
   /// [dateAjout] vaut maintenant par défaut. Lève une [ArgumentError] si
   /// [urlTitre] est vide, et une [ErreurBaseDeDonnees] au message clair si :
   /// - le titre ou la source n'existe pas ;
@@ -92,6 +98,7 @@ class DepotTitresSources {
     int idSource,
     String urlTitre, {
     DateTime? dateAjout,
+    bool lienSeul = false,
   }) async {
     final url = urlTitre.trim();
     if (url.isEmpty) {
@@ -101,6 +108,7 @@ class DepotTitresSources {
       idTitre: idTitre,
       idSource: idSource,
       urlTitre: url,
+      estLienSeul: lienSeul,
       dateAjout: (dateAjout ?? DateTime.now()).toUtc(),
     );
     try {
@@ -222,7 +230,9 @@ class DepotTitresSources {
   /// transaction (le déclencheur de la migration 7 garde alors
   /// `titres_sources` en accord). Les chapitres gardent leur site d'origine.
   /// Ne fait rien si ce site est déjà le principal. Lève une
-  /// [ErreurBaseDeDonnees] si ce site n'est pas lié au titre.
+  /// [ErreurBaseDeDonnees] si ce site n'est pas lié au titre, ou s'il est un
+  /// lien seul (l'application ne sait pas le lire : le marquer d'abord comme
+  /// lisible avec [marquerLienSeul]).
   ///
   /// La fiche (nom, couverture, résumé…) n'est pas modifiée ici : la couche
   /// services la récupère depuis le nouveau site principal si besoin.
@@ -237,6 +247,13 @@ class DepotTitresSources {
         }
         if (lien.estPrincipale) {
           return;
+        }
+        if (lien.estLienSeul) {
+          throw ErreurBaseDeDonnees(
+            "Le site « ${lien.urlTitre} » est un lien seul : l'application ne "
+            'sait pas le lire, il ne peut donc pas devenir le site principal. '
+            "Marquez-le d'abord comme lisible.",
+          );
         }
         // Ordre imposé par l'index UNIQUE partiel (un seul principal) :
         // l'ancien principal est d'abord rétrogradé.
@@ -266,6 +283,60 @@ class DepotTitresSources {
       throw ErreurBaseDeDonnees(
         "Impossible de définir le site n°$idSource comme site principal du "
         'titre n°$idTitre.',
+        cause: erreur,
+      );
+    }
+  }
+
+  /// Marque le site secondaire [idSource] du titre [idTitre] comme lien seul
+  /// ([lienSeul] à `true`) ou comme site lisible (`false`), par exemple quand
+  /// un site redevient lisible. Renvoie le nombre de chapitres supprimés.
+  ///
+  /// Passage en lien seul : les chapitres de ce site non lus, non
+  /// téléchargés, non gardés et sans téléchargement en cours sont supprimés
+  /// dans la même transaction (comme pour [retirerSourceSecondaire]) ; les
+  /// autres restent, avec leur état de lecture. Passage en site lisible :
+  /// aucun chapitre n'est touché (renvoie 0). Ne fait rien (renvoie 0) si le
+  /// site est déjà dans l'état demandé.
+  ///
+  /// Lève une [ErreurBaseDeDonnees] si ce site n'est pas lié au titre, ou si
+  /// [lienSeul] vaut `true` pour le site principal (choisir d'abord un autre
+  /// site principal avec [definirSourcePrincipale]).
+  Future<int> marquerLienSeul(int idTitre, int idSource, bool lienSeul) async {
+    try {
+      return await _baseDeDonnees.transaction((txn) async {
+        final lien = await _chargerLien(txn, idTitre, idSource);
+        if (lien == null) {
+          throw ErreurBaseDeDonnees(
+            "La source n°$idSource n'est pas un site du titre n°$idTitre.",
+          );
+        }
+        if (lien.estLienSeul == lienSeul) {
+          return 0;
+        }
+        if (lienSeul && lien.estPrincipale) {
+          throw const ErreurBaseDeDonnees(
+            "Le site principal d'un titre ne peut pas être un lien seul : "
+            "choisissez d'abord un autre site principal.",
+          );
+        }
+        await txn.update(
+          'titres_sources',
+          <String, Object?>{
+            'lien_seul': lienSeul ? valeurSqlVrai : valeurSqlFaux,
+          },
+          where: 'id = ?',
+          whereArgs: <Object?>[lien.id],
+        );
+        if (!lienSeul) {
+          return 0;
+        }
+        return supprimerChapitresNonConservesSource(txn, idTitre, idSource);
+      });
+    } on DatabaseException catch (erreur) {
+      throw ErreurBaseDeDonnees(
+        "Impossible de modifier le mode « lien seul » du site n°$idSource "
+        'pour le titre n°$idTitre.',
         cause: erreur,
       );
     }

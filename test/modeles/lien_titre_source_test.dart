@@ -66,6 +66,32 @@ void main() {
       expect(secondaire.copierAvec(estPrincipale: true), lien);
       expect(lien.copierAvec(idSource: 9).idSource, 9);
     });
+
+    test('estLienSeul : défaut, versMap / depuisMap, copierAvec, ==', () {
+      expect(lien.estLienSeul, isFalse);
+      expect(lien.versMap()['lien_seul'], 0);
+      final lienSeul = lien.copierAvec(estPrincipale: false, estLienSeul: true);
+      expect(lienSeul.estLienSeul, isTrue);
+      expect(lienSeul.versMap()['lien_seul'], 1);
+      expect(LienTitreSource.depuisMap(lienSeul.versMap()), lienSeul);
+      expect(lienSeul.copierAvec().estLienSeul, isTrue);
+      expect(lienSeul, isNot(lien.copierAvec(estPrincipale: false)));
+      expect(
+        lienSeul.hashCode,
+        lien.copierAvec(estPrincipale: false, estLienSeul: true).hashCode,
+      );
+      expect(lienSeul.copierAvec(estLienSeul: false).estLienSeul, isFalse);
+    });
+
+    test('estLienSeul : colonne absente (avant la migration 8) ou '
+        'invalide', () {
+      final sansColonne = lien.versMap()..remove('lien_seul');
+      expect(LienTitreSource.depuisMap(sansColonne).estLienSeul, isFalse);
+      expect(
+        () => LienTitreSource.depuisMap(lien.versMap()..['lien_seul'] = 2),
+        throwsA(isA<ErreurBaseDeDonnees>()),
+      );
+    });
   });
 
   group('Chapitre.idSource', () {
