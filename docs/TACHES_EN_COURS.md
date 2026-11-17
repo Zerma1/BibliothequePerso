@@ -126,14 +126,14 @@ la bibliothèque ; clé de signature Android et `share_plus` en attente (pas d'A
 Analyse de Gemini lue : juste sur le fond, mais écrite sur un état ancien (Madara, MangaThemesia
 et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
 
-- [ ] T1. **Scan-Manga 403 « Just a moment… » (Cloudflare)** chez le client, alors que le site
+- [x] T1. **Scan-Manga 403 « Just a moment… » (Cloudflare)** chez le client, alors que le site
   répond 200 depuis le PC de développement avec un User-Agent honnête comme navigateur.
   Hypothèse : un User-Agent de navigateur envoyé par un client qui n'est pas un navigateur est
   repéré par Cloudflare. Correction : User-Agent **honnête de l'application par défaut pour tous
   les sites** (le playbook §6 sera mis à jour), et reconnaissance d'une page de défi anti-robot
   (403/503 + « Just a moment » / challenge-platform) comme une erreur dédiée « protection
   anti-robot » avec un message clair. Aucun contournement.
-- [ ] T2. **Adaptateur générique** (W3) avec **heuristiques pour les sites à liens explicites**
+- [x] T2. **Adaptateur générique** (W3) avec **heuristiques pour les sites à liens explicites**
   (ex. https://ruri-dragon.online : un site dédié à une œuvre, chapitres en
   `/comic/<titre>-chapter-<n>/`) : sans réglage, trouver les liens de chapitres (motifs
   chapter/chapitre/episode + numéro), le titre, la couverture, et les images de la page de
