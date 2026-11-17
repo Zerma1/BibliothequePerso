@@ -60,7 +60,8 @@ void main() {
     final scanManga = sources.singleWhere((s) => s.nom == nomScanManga);
     expect(scanManga.urlBase, urlBaseScanManga);
     expect(scanManga.typeSource, TypeSource.scanManga);
-    expect(scanManga.langueParDefaut, 'fr');
+    // Aucune langue imposée : un titre suit vos langues, jamais celles d'un site (B1).
+    expect(scanManga.langueParDefaut, '');
     expect(requetes, isEmpty);
 
     // Aucun titre suivi : rapport vide, aucune requête réseau.
