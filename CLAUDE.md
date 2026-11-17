@@ -57,6 +57,9 @@ limité à son scope :
   test (`X.Y.Z-test.N`) à essayer par le client ; `main` sert seulement à publier les versions
   validées par le client. Ne jamais commiter sur `test` ni sur `main` : procédure dans
   `docs/DEPLOIEMENT.md`.
+- Versions de test : **`X.Y.Z-test`** sur `test` (Z+1 à chaque itération de corrections),
+  toujours accompagnées de `testUtilisateur/plan_de_tests_vX.Y.Z-test.md` ; le client est
+  prévenu quand une version de test est prête.
 - Versions au format `X.Y.Z` : X = rupture, Y = nouvelle fonctionnalité, Z = correction.
   Dans `pubspec.yaml` : `version: X.Y.Z+N`. Étiquette `vX.Y.Z` sur `main` à chaque version.
 

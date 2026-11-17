@@ -28,8 +28,15 @@ Après chaque publication sur `main` (version `X.Y.Z`), la version suivante pren
 - **`X.Y.(Z+1)`** si elle ne contient **que** des corrections de bugs de `X.Y.Z` ;
 - **`(X+1).0.0`** si elle casse l'existant (données à refaire, habitudes à changer).
 
-Les versions de test reprennent ce numéro : `0.2.0-test.1`, `0.2.0-test.2`… Le numéro de
-build `+N` de `pubspec.yaml` augmente toujours, quelle que soit la version.
+**Versions de test (règle du client, 2026-11-17)** : une version publiée sur `test` s'appelle
+**`X.Y.Z-test`** (ex. `0.2.0-test`). Le suffixe « -test » signale seulement qu'elle est sur la
+branche `test` et attend les retours de l'équipe de test. Une nouvelle itération de corrections
+pendant les tests augmente **Z** (`0.2.1-test`, `0.2.2-test`…). Une fois validée, la version
+passe sur `main` sous le même numéro sans « -test » (`0.2.1`).
+**Chaque version de test contient sa liste de tests à effectuer** :
+`testUtilisateur/plan_de_tests_vX.Y.Z-test.md`, et les retours vont dans
+`testUtilisateur/retour/vX.Y.Z-test/`.
+Le numéro de build `+N` de `pubspec.yaml` augmente toujours, quelle que soit la version.
 
 ## 1. Préparer une version de test (sur `dev`)
 
@@ -53,9 +60,9 @@ Ensuite :
 
 ```powershell
 git switch test
-git merge --no-ff -X theirs dev -m "Version de test 0.1.0-test.N"
+git merge --no-ff -X theirs dev -m "Version de test X.Y.Z-test"
 git diff --quiet dev -- lib test pubspec.yaml docs .github   # doit être vrai : code identique à dev
-git tag -a v0.1.0-test.N -m "Version de test 0.1.0-test.N"
+git tag -a vX.Y.Z-test -m "Version de test X.Y.Z-test"
 git push origin test --follow-tags
 git switch dev
 ```

@@ -151,4 +151,4 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
   « Ouvrir dans le navigateur » toujours présent.
 - [x] T6. Plan de tests pour le client sur la branche `test` (fait par l'orchestrateur).
 
-- [ ] T7. Prochaine version de test : **0.2.0-test.1** (`version: 0.2.0+5`), `versionApplication = '0.2.0'` (erreur de numérotation des test.2 à test.4, voir docs/VERSIONS.md).
+- [ ] T7. Prochaine version de test : **0.2.0-test** (règle du client : X.Y.Z-test, Z+1 à chaque itération de corrections ; `version: 0.2.0+5`) avec son plan de tests `testUtilisateur/plan_de_tests_v0.2.0-test.md`, `versionApplication = '0.2.0'` (erreur de numérotation des test.2 à test.4, voir docs/VERSIONS.md).
