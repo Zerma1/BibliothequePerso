@@ -52,7 +52,14 @@ void main() {
         'motifNumeroChapitre',
         '(non fermé',
       );
-      expect(message, contains('(non fermé'));
+      expect(message, isNotNull);
+      expect(
+        message,
+        ServiceAjoutSite.erreurReglageGenerique(
+          'motifNumeroChapitre',
+          '(non fermé',
+        ),
+      );
       // Libellé retiré : il est déjà affiché au-dessus du champ.
       expect(
         message,

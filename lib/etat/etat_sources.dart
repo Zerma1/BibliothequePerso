@@ -1,8 +1,6 @@
 /// État de l'écran Sources : sites configurés et ajout d'un site.
 library;
 
-import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
 
 import '../modeles/source.dart';
@@ -137,25 +135,11 @@ class EtatSources extends EtatNotifiant {
   static Map<String, String> reglagesGeneriquesDepuisJson(String? json) =>
       ServiceAjoutSite.reglagesGeneriquesDepuisJson(json);
 
-  /// Message d'erreur du réglage [cle] valant [valeur], ou `null` s'il est
-  /// vide ou valide. Vérifié par le service (même contrôle qu'à
-  /// l'enregistrement) ; le libellé du champ, déjà affiché au-dessus du
-  /// message, est retiré du début du message.
-  static String? erreurReglageGenerique(String cle, String valeur) {
-    final propre = valeur.trim();
-    if (propre.isEmpty) return null;
-    try {
-      ServiceAjoutSite.normaliserReglagesGeneriques(
-        jsonEncode(<String, String>{cle: propre}),
-      );
-      return null;
-    } on ErreurService catch (erreur) {
-      final prefixe = '${ServiceAjoutSite.libelleReglageGenerique(cle)} : ';
-      return erreur.message.startsWith(prefixe)
-          ? erreur.message.substring(prefixe.length)
-          : erreur.message;
-    }
-  }
+  /// Motif court (sans le libellé du champ, déjà affiché au-dessus) du refus
+  /// du réglage [cle] valant [valeur], ou `null` s'il est vide ou valide.
+  /// Vérifié par le service (même parseur que la lecture du site).
+  static String? erreurReglageGenerique(String cle, String valeur) =>
+      ServiceAjoutSite.erreurReglageGenerique(cle, valeur);
 
   /// Message d'erreur (qui nomme le champ fautif) des réglages avancés
   /// [reglages], ou `null` s'ils sont tous vides ou valides.
