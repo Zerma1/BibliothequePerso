@@ -90,10 +90,18 @@ class DepotCategories {
 
   /// Supprime les catégories qui ne sont plus utilisées par aucun titre et
   /// renvoie le nombre de lignes supprimées.
+  ///
+  /// Les catégories qui font partie d'un groupe d'équivalences (référence
+  /// ou rattachée, migration 9) sont gardées même sans titre : le
+  /// regroupement est un choix du client, il doit rester valable quand un
+  /// site redonnera ce nom.
   Future<int> supprimerCategoriesInutilisees() {
     return _baseDeDonnees.delete(
       'categories',
-      where: 'id NOT IN (SELECT id_categorie FROM titres_categories)',
+      where:
+          'id NOT IN (SELECT id_categorie FROM titres_categories) '
+          'AND id NOT IN (SELECT id_categorie FROM categories_equivalences) '
+          'AND id NOT IN (SELECT id_reference FROM categories_equivalences)',
     );
   }
 }

@@ -20,8 +20,8 @@ void main() {
     await base.close();
   });
 
-  test('la version du schéma est 8 et correspond à la base ouverte', () async {
-    expect(versionSchema, 8);
+  test('la version du schéma est 9 et correspond à la base ouverte', () async {
+    expect(versionSchema, 9);
     expect(await base.getVersion(), versionSchema);
   });
 
@@ -1279,6 +1279,195 @@ void main() {
           'date_ajout': 0,
         }),
         throwsA(isA<DatabaseException>()),
+      );
+    });
+  });
+
+  test('la migration 8 → 9 ne perd rien et ajoute les équivalences', () async {
+    final dossier = await Directory.systemTemp.createTemp('migration9_test_');
+    final chemin = p.join(dossier.path, 'version8.db');
+    try {
+      final version8 = await databaseFactoryFfi.openDatabase(
+        chemin,
+        options: OpenDatabaseOptions(
+          version: 8,
+          onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+          onCreate: (db, version) => appliquerMigrations(db, 0, 8),
+        ),
+      );
+      final idSource = await version8.insert('sources', <String, Object?>{
+        'nom': 'MangaDex',
+        'url_base': 'https://mangadex.org',
+        'type_source': 'mangaDex',
+      });
+      final idTitre = await version8.insert('titres', <String, Object?>{
+        'id_source': idSource,
+        'url_titre': 'https://mangadex.org/title/ruri',
+        'nom': 'Ruri Dragon',
+        'type_titre': 'manga',
+      });
+      final idSurvival = await version8.insert('categories', <String, Object?>{
+        'nom': 'survival',
+      });
+      final idSurvie = await version8.insert('categories', <String, Object?>{
+        'nom': 'survie',
+      });
+      await version8.insert('titres_categories', <String, Object?>{
+        'id_titre': idTitre,
+        'id_categorie': idSurvival,
+      });
+      await version8.insert('chapitres', <String, Object?>{
+        'id_titre': idTitre,
+        'url_chapitre': 'https://mangadex.org/chapter/1',
+        'nom': 'Chapitre 1',
+        'numero': 1.0,
+      });
+
+      const tables = <String>[
+        'sources',
+        'titres',
+        'titres_sources',
+        'chapitres',
+        'listes',
+        'categories',
+        'titres_categories',
+      ];
+      final avant = <String, List<Map<String, Object?>>>{
+        for (final table in tables)
+          table: await version8.query(table, orderBy: 'rowid'),
+      };
+      expect(await version8.getVersion(), 8);
+      await version8.close();
+
+      final version9 = await ouvrirBaseDeDonnees(
+        chemin: chemin,
+        fabrique: databaseFactoryFfi,
+      );
+      try {
+        expect(await version9.getVersion(), versionSchema);
+        for (final table in tables) {
+          expect(
+            await version9.query(table, orderBy: 'rowid'),
+            avant[table],
+            reason: 'table $table',
+          );
+        }
+        // Table vide, index et déclencheurs créés.
+        expect(await version9.query('categories_equivalences'), isEmpty);
+        final objets = await version9.rawQuery(
+          'SELECT name FROM sqlite_master WHERE name IN (?, ?, ?)',
+          <Object?>[
+            'index_categories_equivalences_id_reference',
+            'declencheur_categories_equivalences_insertion',
+            'declencheur_categories_equivalences_modification',
+          ],
+        );
+        expect(objets, hasLength(3));
+
+        // La table est utilisable sur les catégories existantes.
+        await version9.insert('categories_equivalences', <String, Object?>{
+          'id_categorie': idSurvival,
+          'id_reference': idSurvie,
+        });
+        expect(await version9.rawQuery('PRAGMA foreign_key_check'), isEmpty);
+      } finally {
+        await version9.close();
+      }
+    } finally {
+      await dossier.delete(recursive: true);
+    }
+  });
+
+  group('migration 9 : équivalences de catégories', () {
+    late int idSurvie;
+    late int idSurvival;
+    late int idSupervivencia;
+
+    Future<int> categorie(String nom) =>
+        base.insert('categories', <String, Object?>{'nom': nom});
+    Future<int> rattacher(int idCategorie, int idReference) =>
+        base.insert('categories_equivalences', <String, Object?>{
+          'id_categorie': idCategorie,
+          'id_reference': idReference,
+        });
+
+    setUp(() async {
+      idSurvie = await categorie('survie');
+      idSurvival = await categorie('survival');
+      idSupervivencia = await categorie('supervivencia');
+    });
+
+    test('une catégorie ne peut pas être sa propre référence', () async {
+      await expectLater(
+        rattacher(idSurvie, idSurvie),
+        throwsA(isA<DatabaseException>()),
+      );
+    });
+
+    test('une catégorie n\'a qu\'une seule référence', () async {
+      await rattacher(idSurvival, idSurvie);
+      await expectLater(
+        rattacher(idSurvival, idSupervivencia),
+        throwsA(isA<DatabaseException>()),
+      );
+    });
+
+    test(
+      'les chaînes et les cycles sont refusés par les déclencheurs',
+      () async {
+        await rattacher(idSurvival, idSurvie);
+        // Référence elle-même rattachée : survival → survie déjà présent.
+        await expectLater(
+          rattacher(idSupervivencia, idSurvival),
+          throwsA(isA<DatabaseException>()),
+        );
+        // Une référence ne peut pas être rattachée (cycle survie → survival).
+        await expectLater(
+          rattacher(idSurvie, idSurvival),
+          throwsA(isA<DatabaseException>()),
+        );
+        await expectLater(
+          rattacher(idSurvie, idSupervivencia),
+          throwsA(isA<DatabaseException>()),
+        );
+        // Même contrôle par une mise à jour.
+        await rattacher(idSupervivencia, idSurvie);
+        await expectLater(
+          base.update(
+            'categories_equivalences',
+            <String, Object?>{'id_reference': idSurvival},
+            where: 'id_categorie = ?',
+            whereArgs: <Object?>[idSupervivencia],
+          ),
+          throwsA(isA<DatabaseException>()),
+        );
+        expect(await base.query('categories_equivalences'), hasLength(2));
+      },
+    );
+
+    test('supprimer une catégorie retire ses rattachements', () async {
+      await rattacher(idSurvival, idSurvie);
+      await rattacher(idSupervivencia, idSurvie);
+      await base.delete(
+        'categories',
+        where: 'id = ?',
+        whereArgs: <Object?>[idSurvival],
+      );
+      expect(await base.query('categories_equivalences'), hasLength(1));
+      await base.delete(
+        'categories',
+        where: 'id = ?',
+        whereArgs: <Object?>[idSurvie],
+      );
+      expect(await base.query('categories_equivalences'), isEmpty);
+      // La catégorie rattachée reste, indépendante.
+      expect(
+        await base.query(
+          'categories',
+          where: 'id = ?',
+          whereArgs: <Object?>[idSupervivencia],
+        ),
+        hasLength(1),
       );
     });
   });

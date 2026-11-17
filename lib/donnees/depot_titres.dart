@@ -8,6 +8,7 @@ import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/titre.dart';
 import '../modeles/titre_alternatif.dart';
 import 'depot_categories.dart';
+import 'depot_equivalences_categories.dart';
 import 'gestionnaire_transactions.dart';
 
 /// Accès aux tables `titres`, `titres_alternatifs` et `titres_categories`.
@@ -271,6 +272,17 @@ class DepotTitres {
   ///   alternatifs, sans tenir compte de la casse ;
   /// - [idListe] : uniquement les titres de cette liste ;
   /// - [idCategorie] : uniquement les titres de cette catégorie ;
+  /// - [idsCategoriesIncluses] : uniquement les titres qui ont **toutes**
+  ///   ces catégories (se cumule avec [idCategorie]) ;
+  /// - [idsCategoriesExclues] : uniquement les titres qui n'ont **aucune**
+  ///   de ces catégories ;
+  /// - [suivreEquivalences] (`true` par défaut) : les filtres de catégorie
+  ///   portent sur le **groupe** de la catégorie demandée (migration 9,
+  ///   `DepotEquivalencesCategories`). Un filtre sur « survie » (référence)
+  ///   trouve aussi les titres classés « survival » (rattachée), et
+  ///   inversement : filtrer sur une catégorie rattachée revient à filtrer
+  ///   sur tout son groupe. Une catégorie sans groupe se comporte comme
+  ///   avant. `false` : correspondance exacte sur l'identifiant ;
   /// - [idSource] : uniquement les titres de cette source ;
   /// - [niveauxContenu] : uniquement les titres dont le niveau de contenu
   ///   fait partie de cette liste (`niveauxContenuParDefaut` pour le filtre
@@ -290,6 +302,9 @@ class DepotTitres {
     String? recherche,
     int? idListe,
     int? idCategorie,
+    Set<int> idsCategoriesIncluses = const <int>{},
+    Set<int> idsCategoriesExclues = const <int>{},
+    bool suivreEquivalences = true,
     int? idSource,
     List<String>? niveauxContenu,
     bool inclureNiveauInconnu = true,
@@ -325,12 +340,41 @@ class DepotTitres {
       );
       arguments.add(idListe);
     }
-    if (idCategorie != null) {
-      conditions.add(
-        'EXISTS (SELECT 1 FROM titres_categories tc '
-        'WHERE tc.id_titre = t.id AND tc.id_categorie = ?)',
-      );
-      arguments.add(idCategorie);
+    // Une condition EXISTS par catégorie incluse, NOT EXISTS par exclue.
+    // LIMITE : deux paramètres par catégorie avec les équivalences ; la
+    // limite de 999 paramètres de SQLite n'est pas atteignable avec les
+    // quelques catégories choisies dans le panneau des filtres.
+    void filtrerCategorie(int id, {required bool exclue}) {
+      final prefixe = exclue ? 'NOT EXISTS' : 'EXISTS';
+      if (suivreEquivalences) {
+        // Le titre a une catégorie dont la catégorie effective (référence,
+        // ou elle-même) est celle de [id]. La jointure passe par la clé
+        // primaire de titres_categories et l'index UNIQUE de
+        // categories_equivalences.id_categorie.
+        conditions.add(
+          '$prefixe (SELECT 1 FROM titres_categories tc '
+          '${DepotEquivalencesCategories.jointureEquivalences} '
+          'WHERE tc.id_titre = t.id '
+          'AND ${DepotEquivalencesCategories.sqlIdEffectif} = '
+          '${DepotEquivalencesCategories.sqlIdEffectifParametre})',
+        );
+        arguments
+          ..add(id)
+          ..add(id);
+      } else {
+        conditions.add(
+          '$prefixe (SELECT 1 FROM titres_categories tc '
+          'WHERE tc.id_titre = t.id AND tc.id_categorie = ?)',
+        );
+        arguments.add(id);
+      }
+    }
+
+    for (final id in <int>{?idCategorie, ...idsCategoriesIncluses}) {
+      filtrerCategorie(id, exclue: false);
+    }
+    for (final id in idsCategoriesExclues) {
+      filtrerCategorie(id, exclue: true);
     }
     if (idSource != null) {
       conditions.add('t.id_source = ?');
@@ -358,6 +402,16 @@ class DepotTitres {
       conditions.isEmpty ? null : conditions.join(' AND '),
       arguments,
     );
+  }
+
+  /// Compte les titres de la bibliothèque (tous, sans filtre).
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
+  Future<int> compterTitres({DatabaseExecutor? executeur}) async {
+    final lignes = await (executeur ?? _baseDeDonnees).rawQuery(
+      'SELECT COUNT(*) AS nombre FROM titres',
+    );
+    return Sqflite.firstIntValue(lignes) ?? 0;
   }
 
   /// Enregistre la date de la dernière recherche de nouveaux chapitres.

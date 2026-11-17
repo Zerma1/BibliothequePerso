@@ -27,6 +27,7 @@ const List<Migration> migrations = <Migration>[
   _migration6,
   _migration7,
   _migration8,
+  _migration9,
 ];
 
 /// Version actuelle du schéma (nombre de migrations).
@@ -632,6 +633,87 @@ Future<void> _migration8(DatabaseExecutor executeur) async {
     WHEN NEW.est_principale = 1 AND NEW.lien_seul = 1
     BEGIN
       SELECT RAISE(ABORT, 'site principal en lien seul interdit');
+    END
+    ''',
+  ];
+  for (final instruction in instructions) {
+    await executeur.execute(instruction);
+  }
+}
+
+/// Migration 9 : regroupement des catégories de même sens (« survival » /
+/// « survie »), PLAYBOOK.md section « idées futures ».
+///
+/// Table `categories_equivalences` : chaque ligne rattache une catégorie à
+/// sa **catégorie de référence**. Un groupe = une référence et les
+/// catégories qui lui sont rattachées. Les catégories et `titres_categories`
+/// ne changent pas : les adaptateurs de sites continuent d'enregistrer les
+/// noms qu'ils lisent, le regroupement n'intervient qu'à la lecture.
+///
+/// Un seul niveau : une référence n'est jamais elle-même rattachée, et une
+/// catégorie rattachée n'est jamais la référence d'une autre (pas de
+/// chaîne, donc pas de cycle). Garanti par deux déclencheurs, en plus des
+/// contrôles de `DepotEquivalencesCategories`.
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration9(DatabaseExecutor executeur) async {
+  const instructions = <String>[
+    // id_categorie UNIQUE : une catégorie a au plus une référence ; l'index
+    // créé sert à retrouver la référence d'une catégorie (lecture des
+    // catégories effectives et filtre de la bibliothèque). Ce n'est pas la
+    // clé primaire INTEGER : elle deviendrait un alias du rowid, et une
+    // insertion avec NULL recevrait un identifiant automatique au lieu
+    // d'échouer.
+    // ON DELETE CASCADE des deux côtés : supprimer une catégorie retire son
+    // rattachement, et supprimer une référence défait son groupe (les
+    // catégories rattachées redeviennent indépendantes, rien d'autre n'est
+    // effacé).
+    // CHECK (id_categorie <> id_reference) : une catégorie ne peut pas être
+    // sa propre référence (cycle de longueur 1).
+    '''
+    CREATE TABLE categories_equivalences (
+      id_categorie INTEGER NOT NULL UNIQUE
+        REFERENCES categories (id) ON DELETE CASCADE,
+      id_reference INTEGER NOT NULL
+        REFERENCES categories (id) ON DELETE CASCADE,
+      CHECK (id_categorie <> id_reference)
+    )
+    ''',
+    // Index sur la clé étrangère id_reference : SQLite n'en crée pas. Il
+    // sert à la cascade quand une référence est supprimée, au chargement
+    // des catégories d'un groupe et aux contrôles des déclencheurs.
+    'CREATE INDEX index_categories_equivalences_id_reference '
+        'ON categories_equivalences (id_reference)',
+    // Déclencheurs : refusent toute chaîne (A → B → C), quel que soit le
+    // chemin d'écriture. Une contrainte CHECK ne peut pas lire d'autres
+    // lignes, d'où les déclencheurs. Le texte d'erreur sert seulement au
+    // diagnostic : le dépôt vérifie avant d'écrire et donne un message
+    // clair. Sans chaîne et sans boucle sur soi-même (CHECK), aucun cycle
+    // n'est possible.
+    '''
+    CREATE TRIGGER declencheur_categories_equivalences_insertion
+    BEFORE INSERT ON categories_equivalences
+    WHEN EXISTS (SELECT 1 FROM categories_equivalences
+                 WHERE id_categorie = NEW.id_reference)
+      OR EXISTS (SELECT 1 FROM categories_equivalences
+                 WHERE id_reference = NEW.id_categorie)
+    BEGIN
+      SELECT RAISE(ABORT, 'chaine de categories equivalentes interdite');
+    END
+    ''',
+    // Mise à jour : même contrôle, en ignorant la ligne modifiée elle-même
+    // (id_categorie est UNIQUE, il identifie la ligne).
+    '''
+    CREATE TRIGGER declencheur_categories_equivalences_modification
+    BEFORE UPDATE OF id_categorie, id_reference ON categories_equivalences
+    WHEN EXISTS (SELECT 1 FROM categories_equivalences
+                 WHERE id_categorie = NEW.id_reference
+                   AND id_categorie <> OLD.id_categorie)
+      OR EXISTS (SELECT 1 FROM categories_equivalences
+                 WHERE id_reference = NEW.id_categorie
+                   AND id_categorie <> OLD.id_categorie)
+    BEGIN
+      SELECT RAISE(ABORT, 'chaine de categories equivalentes interdite');
     END
     ''',
   ];
