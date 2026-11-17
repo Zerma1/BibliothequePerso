@@ -19,6 +19,7 @@ import 'dart:io';
 import 'package:sqflite/sqflite.dart' show DatabaseExecutor;
 
 import '../donnees/depot_categories.dart';
+import '../donnees/depot_equivalences_categories.dart';
 import '../donnees/depot_listes.dart';
 import '../donnees/depot_parametres.dart';
 import '../donnees/depot_sources.dart';
@@ -187,6 +188,26 @@ class ListeImportee {
   final bool estSysteme;
 }
 
+/// Un regroupement de catégories tel qu'il est décrit dans le fichier
+/// d'import (format 3), noms déjà normalisés (`Categorie.normaliserNom`).
+class EquivalenceImportee {
+  /// Crée la ligne.
+  const EquivalenceImportee({
+    required this.numero,
+    required this.categorie,
+    required this.reference,
+  });
+
+  /// Position du regroupement dans le fichier (1 pour le premier).
+  final int numero;
+
+  /// Nom de la catégorie à rattacher.
+  final String categorie;
+
+  /// Nom de sa catégorie de référence.
+  final String reference;
+}
+
 /// Tout ce qu'un fichier d'import contient, déjà vérifié. Produit par
 /// [ServiceImport.lireJson] (fonction pure, testable sans base).
 class ContenuImport {
@@ -199,11 +220,15 @@ class ContenuImport {
     this.listes = const <ListeImportee>[],
     this.sources = const <SourceImportee>[],
     this.titres = const <TitreImporte>[],
+    this.equivalences = const <EquivalenceImportee>[],
     this.erreursLecture = const <ErreurLigneImport>[],
   });
 
-  /// Version du format du fichier (1 ou 2).
+  /// Version du format du fichier (1 à 3).
   final int versionFormat;
+
+  /// Regroupements de catégories (format 3 ; vide pour les formats 1 et 2).
+  final List<EquivalenceImportee> equivalences;
 
   /// Version de l'application qui a produit le fichier, si connue.
   final String? versionApplication;
@@ -242,6 +267,9 @@ enum PartieImport {
 
   /// Les réglages généraux.
   reglages,
+
+  /// Un regroupement de catégories de la section `equivalences` (format 3).
+  equivalence,
 }
 
 /// Une ligne du fichier qui n'a pas pu être importée (en tout ou partie).
@@ -273,6 +301,7 @@ class ErreurLigneImport {
       PartieImport.liste => 'Liste',
       PartieImport.titre => 'Titre',
       PartieImport.reglages => 'Réglages',
+      PartieImport.equivalence => 'Regroupement de catégories',
     };
     final position = numero == null ? '' : ' n°$numero';
     final nomLisible = nom == null ? '' : ' « $nom »';
@@ -295,7 +324,11 @@ class ResultatImport {
     this.listesAjoutees = 0,
     this.reglagesGenerauxAppliques = false,
     this.erreurs = const <ErreurLigneImport>[],
+    this.regroupementsAjoutes = 0,
   });
+
+  /// Regroupements de catégories (format 3) enregistrés par l'import.
+  final int regroupementsAjoutes;
 
   /// Version du format du fichier importé.
   final int versionFormat;
@@ -341,6 +374,12 @@ class ResultatImport {
         pluriel(sitesAjoutes, 'site ajouté', 'sites ajoutés'),
       if (listesAjoutees > 0)
         pluriel(listesAjoutees, 'liste créée', 'listes créées'),
+      if (regroupementsAjoutes > 0)
+        pluriel(
+          regroupementsAjoutes,
+          'catégorie regroupée',
+          'catégories regroupées',
+        ),
       if (erreurs.isNotEmpty) pluriel(erreurs.length, 'erreur', 'erreurs'),
     ];
     final tampon = StringBuffer('${parties.join(', ')}.');
@@ -412,7 +451,9 @@ class ServiceImport {
     ServiceParametres? serviceParametres,
     DepotParametres? depotParametres,
     GestionnaireTransactions? gestionnaireTransactions,
-  }) : _depotSources = depotSources,
+    DepotEquivalencesCategories? depotEquivalences,
+  }) : _depotEquivalences = depotEquivalences,
+       _depotSources = depotSources,
        _depotTitres = depotTitres,
        _depotTitresSources = depotTitresSources,
        _depotListes = depotListes,
@@ -438,6 +479,10 @@ class ServiceImport {
   final ServiceParametres? _serviceParametres;
   final DepotParametres? _depotParametres;
   final GestionnaireTransactions? _gestionnaireTransactions;
+
+  /// Regroupements de catégories (format 3) ; sans lui, les regroupements
+  /// du fichier ne sont pas importés (une erreur le signale).
+  final DepotEquivalencesCategories? _depotEquivalences;
 
   /// Import en cours : un second appel (double clic) reçoit le même
   /// résultat au lieu de lancer un second import en parallèle, dont les
@@ -599,6 +644,26 @@ class ServiceImport {
       }
     }
 
+    // Format 3 : absents des formats 1 et 2 (liste vide).
+    final equivalencesBrutes = _liste(donnees, 'equivalences');
+    if (equivalencesBrutes.length > nombreMaximalEquivalencesImport) {
+      throw ErreurService(
+        'Cet export contient trop de regroupements de catégories '
+        '(${equivalencesBrutes.length}, au plus '
+        '$nombreMaximalEquivalencesImport).',
+      );
+    }
+    final equivalences = <EquivalenceImportee>[];
+    for (var i = 0; i < equivalencesBrutes.length; i++) {
+      final ligne = _lireEquivalence(equivalencesBrutes[i], i + 1);
+      switch (ligne) {
+        case final EquivalenceImportee equivalence:
+          equivalences.add(equivalence);
+        case final ErreurLigneImport erreur:
+          erreurs.add(erreur);
+      }
+    }
+
     final reglages = donnees['reglages'];
     final reglagesLus = reglages is Map<String, Object?> ? reglages : null;
     final niveaux = reglagesLus?['niveauxContenu'];
@@ -618,7 +683,43 @@ class ServiceImport {
       listes: listes,
       sources: sources,
       titres: titres,
+      equivalences: equivalences,
       erreursLecture: erreurs,
+    );
+  }
+
+  /// Regroupement lu dans [brut], ou l'erreur qui l'écarte (ligne
+  /// illisible, nom absent, catégorie identique à sa référence).
+  static Object _lireEquivalence(Object? brut, int numero) {
+    if (brut is! Map<String, Object?>) {
+      return ErreurLigneImport(
+        partie: PartieImport.equivalence,
+        numero: numero,
+        message: 'ligne illisible.',
+      );
+    }
+    final categorie = Categorie.normaliserNom(_texte(brut, 'categorie') ?? '');
+    final reference = Categorie.normaliserNom(_texte(brut, 'reference') ?? '');
+    if (categorie.isEmpty || reference.isEmpty) {
+      return ErreurLigneImport(
+        partie: PartieImport.equivalence,
+        numero: numero,
+        nom: categorie.isEmpty ? null : categorie,
+        message: 'catégorie ou catégorie de référence absente.',
+      );
+    }
+    if (categorie == reference) {
+      return ErreurLigneImport(
+        partie: PartieImport.equivalence,
+        numero: numero,
+        nom: categorie,
+        message: 'une catégorie ne peut pas être sa propre référence.',
+      );
+    }
+    return EquivalenceImportee(
+      numero: numero,
+      categorie: categorie,
+      reference: reference,
     );
   }
 
@@ -872,13 +973,10 @@ class ServiceImport {
     // centaines de titres ne dure que quelques secondes (aucun réseau).
     final ecriture = _Ecriture(this, contenu, executeur);
     // Lu avant toute écriture : « bibliothèque vide » décrit l'appareil tel
-    // que le client l'avait avant l'import.
-    // LIMITE : charge tous les titres pour savoir s'il y en a un ; aucun
-    // dépôt n'offre de comptage léger (besoin : `DepotTitres.compterTitres`
-    // ou `existeTitre`, avec exécuteur). Coût unique, base seulement.
-    final bibliothequeVide = (await _depotTitres.chargerTitres(
-      executeur: executeur,
-    )).isEmpty;
+    // que le client l'avait avant l'import. Simple comptage (aucun titre
+    // chargé).
+    final bibliothequeVide =
+        await _depotTitres.compterTitres(executeur: executeur) == 0;
     await ecriture.chargerEtat();
     await ecriture.importerSources();
     await ecriture.importerListes();
@@ -887,6 +985,9 @@ class ServiceImport {
     for (final titre in contenu.titres) {
       await ecriture.importerTitre(titre);
     }
+    // Après les titres : leurs catégories existent alors en base, et seules
+    // les catégories d'un regroupement sans aucun titre restent à créer.
+    await ecriture.importerEquivalences();
     return ResultatImport(
       versionFormat: contenu.versionFormat,
       titresAjoutes: ecriture.titresAjoutes,
@@ -895,6 +996,7 @@ class ServiceImport {
       sitesAjoutes: ecriture.sitesAjoutes,
       listesAjoutees: ecriture.listesAjoutees,
       reglagesGenerauxAppliques: reglagesAppliques,
+      regroupementsAjoutes: ecriture.regroupementsAjoutes,
       erreurs: <ErreurLigneImport>[
         ...contenu.erreursLecture,
         ...ecriture.erreurs,
@@ -934,6 +1036,7 @@ class _Ecriture {
   int titresIgnores = 0;
   int sitesAjoutes = 0;
   int listesAjoutees = 0;
+  int regroupementsAjoutes = 0;
   final List<ErreurLigneImport> erreurs = <ErreurLigneImport>[];
 
   Future<void> chargerEtat() async {
@@ -1447,6 +1550,122 @@ class _Ecriture {
       ajoute = true;
     }
     return ajoute;
+  }
+
+  // ------------------------------------------------------ Regroupements
+
+  /// Enregistre les regroupements de catégories du fichier (format 3).
+  ///
+  /// Mêmes règles que le reste de l'import : rien n'est remplacé. Chaque
+  /// ligne est vérifiée **avant** d'écrire, contre l'état de la base et les
+  /// lignes déjà importées ; une ligne incohérente est refusée et notée
+  /// sans arrêter les autres :
+  /// - catégorie déjà rattachée à une autre référence sur cet appareil
+  ///   (choix du client gardé) ;
+  /// - référence elle-même rattachée à une autre catégorie (un seul
+  ///   niveau) ;
+  /// - catégorie qui est déjà la référence d'un autre groupe.
+  /// Un regroupement déjà présent est ignoré sans erreur. Une catégorie
+  /// absente de la base (regroupement sans titre) est créée.
+  Future<void> importerEquivalences() async {
+    final lignes = _contenu.equivalences;
+    if (lignes.isEmpty) return;
+    final depot = _service._depotEquivalences;
+    if (depot == null) {
+      erreurs.add(
+        const ErreurLigneImport(
+          partie: PartieImport.equivalence,
+          message:
+              "regroupements de catégories non importés (fonction absente de "
+              'cet assemblage).',
+        ),
+      );
+      return;
+    }
+    // État courant, tenu à jour ligne après ligne : par nom de catégorie,
+    // son identifiant ; par identifiant, sa référence éventuelle.
+    final idsParNom = <String, int>{
+      for (final categorie in await _service._depotCategories.chargerCategories(
+        executeur: _executeur,
+      ))
+        if (categorie.id != null) categorie.nom: categorie.id!,
+    };
+    final nomsParId = <int, String>{
+      for (final MapEntry(key: nom, value: id) in idsParNom.entries) id: nom,
+    };
+    final referenceDe = <int, int>{
+      for (final equivalence in await depot.chargerEquivalences(
+        executeur: _executeur,
+      ))
+        equivalence.idCategorie: equivalence.idReference,
+    };
+
+    for (final ligne in lignes) {
+      void refuser(String message) => erreurs.add(
+        ErreurLigneImport(
+          partie: PartieImport.equivalence,
+          numero: ligne.numero,
+          nom: ligne.categorie,
+          message: message,
+        ),
+      );
+
+      final idCategorie = idsParNom[ligne.categorie];
+      final idReference = idsParNom[ligne.reference];
+      final referenceActuelle = idCategorie == null
+          ? null
+          : referenceDe[idCategorie];
+      if (referenceActuelle != null) {
+        if (referenceActuelle != idReference) {
+          refuser(
+            'déjà regroupée avec « ${nomsParId[referenceActuelle]} » sur cet '
+            'appareil : ce regroupement est gardé.',
+          );
+        }
+        // Sinon : regroupement déjà présent, rien à faire.
+        continue;
+      }
+      final referenceDeLaReference = idReference == null
+          ? null
+          : referenceDe[idReference];
+      if (referenceDeLaReference != null) {
+        refuser(
+          '« ${ligne.reference} » est déjà regroupée avec '
+          '« ${nomsParId[referenceDeLaReference]} » sur cet appareil : elle ne '
+          'peut pas servir de référence.',
+        );
+        continue;
+      }
+      if (idCategorie != null && referenceDe.containsValue(idCategorie)) {
+        refuser(
+          'elle est déjà la référence d\'un autre groupe sur cet appareil.',
+        );
+        continue;
+      }
+
+      try {
+        for (final nom in <String>[ligne.categorie, ligne.reference]) {
+          if (idsParNom.containsKey(nom)) continue;
+          final creee = await _service._depotCategories.enregistrerCategorie(
+            nom,
+            executeur: _executeur,
+          );
+          idsParNom[creee.nom] = creee.id!;
+          nomsParId[creee.id!] = creee.nom;
+        }
+        final idC = idsParNom[ligne.categorie]!;
+        final idR = idsParNom[ligne.reference]!;
+        await depot.rattacherCategorie(idC, idR, executeur: _executeur);
+        referenceDe[idC] = idR;
+        regroupementsAjoutes++;
+      } on ErreurBaseDeDonnees catch (erreur) {
+        // Les refus prévisibles sont décidés ci-dessus : une erreur ici est
+        // une vraie erreur de base, qui annule tout l'import « tout ou
+        // rien ».
+        if (_toutOuRien) rethrow;
+        refuser(erreur.message);
+      }
+    }
   }
 
   /// Message lisible d'une erreur attrapée pendant l'import.

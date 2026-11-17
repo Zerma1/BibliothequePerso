@@ -14,12 +14,14 @@ import 'package:path/path.dart' as chemins;
 
 import '../donnees/depot_categories.dart';
 import '../donnees/depot_chapitres.dart';
+import '../donnees/depot_equivalences_categories.dart';
 import '../donnees/depot_listes.dart';
 import '../donnees/depot_sources.dart';
 import '../donnees/depot_titres.dart';
 import '../donnees/depot_titres_sources.dart';
 import '../donnees/stockage_telechargements.dart';
 import '../modeles/chapitre.dart';
+import '../modeles/groupe_categories.dart';
 import '../modeles/lien_titre_source.dart';
 import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
@@ -104,6 +106,20 @@ class SiteExporte {
   final Source? source;
 }
 
+/// Un regroupement de catégories tel qu'il est exporté (format 3) : les
+/// catégories sont désignées par leur **nom** (unique), seul repère commun à
+/// deux appareils.
+class EquivalenceExportee {
+  /// Crée la ligne.
+  const EquivalenceExportee({required this.categorie, required this.reference});
+
+  /// Nom de la catégorie rattachée (« survival »).
+  final String categorie;
+
+  /// Nom de sa catégorie de référence (« survie »).
+  final String reference;
+}
+
 /// Tout ce qu'un export contient, lu dans la base. Séparé de l'écriture des
 /// fichiers pour que la mise en forme ([ServiceExport.produireJson],
 /// [ServiceExport.produireMarkdown]) soit testable sans base ni disque.
@@ -117,7 +133,12 @@ class ContenuExport {
     this.listes = const <ListeLecture>[],
     this.languesGenerales = const <String>[],
     this.niveauxContenu = const <String>[],
+    this.equivalences = const <EquivalenceExportee>[],
   });
+
+  /// Regroupements de catégories (format 3), triés par référence puis par
+  /// catégorie.
+  final List<EquivalenceExportee> equivalences;
 
   /// Date de l'export (heure locale pour le Markdown, UTC dans le JSON).
   final DateTime date;
@@ -165,7 +186,9 @@ class ServiceExport {
     String? versionApplication,
     DateTime Function()? horloge,
     DepotTitresSources? depotTitresSources,
+    DepotEquivalencesCategories? depotEquivalences,
   }) : _depotTitresSources = depotTitresSources,
+       _depotEquivalences = depotEquivalences,
        _depotSources = depotSources,
        _depotTitres = depotTitres,
        _depotChapitres = depotChapitres,
@@ -200,6 +223,10 @@ class ServiceExport {
   /// Sites de chaque titre (étape 8) ; sans lui, seul le site principal est
   /// exporté.
   final DepotTitresSources? _depotTitresSources;
+
+  /// Regroupements de catégories (migration 9) ; sans lui, aucun
+  /// regroupement n'est exporté.
+  final DepotEquivalencesCategories? _depotEquivalences;
 
   /// Réglages du client (langues, niveaux de contenu) ; sans lui, les
   /// valeurs par défaut sont exportées.
@@ -422,6 +449,17 @@ class ServiceExport {
       niveauxContenu: parametres == null
           ? const <String>[]
           : await parametres.chargerNiveauxContenu(),
+      equivalences: <EquivalenceExportee>[
+        // Groupes déjà triés par référence, rattachées triées par nom.
+        for (final groupe
+            in await _depotEquivalences?.chargerGroupes() ??
+                const <GroupeCategories>[])
+          for (final rattachee in groupe.rattachees)
+            EquivalenceExportee(
+              categorie: rattachee.nom,
+              reference: groupe.reference.nom,
+            ),
+      ],
     );
   }
 
@@ -470,9 +508,9 @@ class ServiceExport {
   /// Contenu du fichier JSON (indenté, UTF-8 sans échappement des accents).
   /// Fonction pure.
   ///
-  /// Format `versionFormatExport` (2) : `format`, `version`, `dateExport`
+  /// Format `versionFormatExport` (3) : `format`, `version`, `dateExport`
   /// (UTC, ISO 8601), `versionApplication`, `reglages` (`langues`,
-  /// `niveauxContenu`), `listes`, `sources`, `titres`. Les titres désignent
+  /// `niveauxContenu`), `listes`, `sources`, `titres`, `equivalences`. Les titres désignent
   /// leur site par son nom **et** son `urlBase` (unique), pour que l'import
   /// retrouve le bon site même si deux sites portent le même nom. Champ
   /// `sites` (étape 8, ajout compatible) : tous les sites du titre (`url`,
@@ -482,6 +520,10 @@ class ServiceExport {
   /// (sélecteurs CSS d'un site générique) et `titres[].resume`. Un fichier
   /// de format 1 reste lisible par l'import : ces champs y sont seulement
   /// absents.
+  ///
+  /// Format 3 (compatible) : `equivalences`, regroupements de catégories
+  /// (`categorie`, `reference`, par nom). Toujours écrit, même vide, pour
+  /// que l'import distingue « aucun regroupement » d'un ancien fichier.
   static String produireJson(ContenuExport contenu) {
     Map<String, Object?> versSource(Source source) => <String, Object?>{
       'nom': source.nom,
@@ -580,6 +622,13 @@ class ServiceExport {
       ],
       'sources': contenu.sources.map(versSource).toList(),
       'titres': contenu.titres.map(versTitre).toList(),
+      'equivalences': <Map<String, Object?>>[
+        for (final equivalence in contenu.equivalences)
+          <String, Object?>{
+            'categorie': equivalence.categorie,
+            'reference': equivalence.reference,
+          },
+      ],
     };
     return '${const JsonEncoder.withIndent('  ').convert(donnees)}\n';
   }
@@ -590,7 +639,8 @@ class ServiceExport {
   ///
   /// Une section par liste, dans l'ordre d'affichage (Favoris, Suivis,
   /// Planifié, En attente, puis les listes du client), puis « Sans liste »
-  /// si des titres n'appartiennent à aucune liste, puis les sites. Chaque
+  /// si des titres n'appartiennent à aucune liste, puis les catégories
+  /// regroupées (s'il y en a), puis les sites. Chaque
   /// titre est un lien `[Nom](url)` suivi de son site, de ses catégories et
   /// du dernier chapitre lu. Un titre présent dans plusieurs listes apparaît
   /// dans chacune.
@@ -633,6 +683,27 @@ class ServiceExport {
         if (exporte.listes.isEmpty) exporte,
     ];
     if (sansListe.isNotEmpty) section(titreSectionSansListe, sansListe);
+
+    if (contenu.equivalences.isNotEmpty) {
+      // Une ligne par référence : « survie ← survival, supervivencia ».
+      final parReference = <String, List<String>>{};
+      for (final equivalence in contenu.equivalences) {
+        (parReference[equivalence.reference] ??= <String>[]).add(
+          equivalence.categorie,
+        );
+      }
+      tampon
+        ..writeln()
+        ..writeln('## Catégories regroupées')
+        ..writeln();
+      for (final MapEntry(key: reference, value: rattachees)
+          in parReference.entries) {
+        tampon.writeln(
+          '- ${echapperMarkdown(reference)} ← '
+          '${echapperMarkdown(rattachees.join(', '))}',
+        );
+      }
+    }
 
     tampon
       ..writeln()

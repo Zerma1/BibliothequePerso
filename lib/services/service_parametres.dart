@@ -277,11 +277,17 @@ class ServiceParametres {
 
   /// Nettoie une liste de codes de langue : minuscules, sans espaces, codes
   /// invalides et doublons retirés (le premier garde sa place), au plus
-  /// [nombreMaximalLangues]. « pt-br » est accepté (variante régionale).
+  /// [nombreMaximalLangues].
+  ///
+  /// Variantes régionales (tâche P3) : un code `xx-yy` est accepté tel quel
+  /// (`pt-br`, `es-la`, `zh-hk`), distinct de sa langue de base `xx` ; la
+  /// forme `pt_BR` (souvent vue dans les réglages système) devient `pt-br`.
+  /// La correspondance avec les chapitres (exacte d'abord, langue de base
+  /// en repli) est décrite par `PolitiqueTelechargement.rangLangue`.
   static List<String> nettoyerLangues(Iterable<String> langues) {
     final propres = <String>[];
     for (final langue in langues) {
-      final code = langue.trim().toLowerCase();
+      final code = langue.trim().toLowerCase().replaceAll('_', '-');
       if (!_motifLangue.hasMatch(code) || propres.contains(code)) continue;
       propres.add(code);
       if (propres.length >= nombreMaximalLangues) break;

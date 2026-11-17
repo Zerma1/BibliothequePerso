@@ -42,6 +42,7 @@ import '../sources/source_webtoons.dart';
 import 'classement_listes.dart';
 import 'constantes_services.dart';
 import 'erreur_service.dart';
+import 'politique_telechargement.dart';
 import 'service_ajout_site.dart';
 import 'service_parametres.dart';
 import 'service_sources_par_defaut.dart';
@@ -317,6 +318,12 @@ class ServiceBibliotheque {
   /// `ServiceParametres.chargerNiveauxContenu`) ; `null` = pas de filtre. Les
   /// titres sans niveau connu (sites autres que MangaDex) restent affichés si
   /// [inclureNiveauInconnu] vaut `true`.
+  ///
+  /// Un filtre sur [idCategorie] porte sur le **groupe** de la catégorie
+  /// (regroupements de `ServiceCategories`). Pour plusieurs catégories
+  /// incluses ou exclues : `ServiceCategories.chargerTitresFiltres` (une
+  /// nouvelle méthode ici casserait `FauxServiceBibliotheque`, qui
+  /// implémente toute cette classe dans les tests de l'interface).
   Future<List<Titre>> chargerTitres({
     String? recherche,
     int? idListe,
@@ -401,6 +408,36 @@ class ServiceBibliotheque {
     return propres.isNotEmpty
         ? propres
         : List<String>.of(languesParDefautClient);
+  }
+
+  /// Codes de langue à chercher en base pour les [langues] du client (tâche
+  /// P3) : chaque langue, puis sa langue de base si c'est une variante
+  /// régionale (`pt-br` → `pt`), puis ses variantes régionales connues
+  /// (`pt` → `pt-br`, celles que demande MangaDex). Sans doublon, dans
+  /// l'ordre. Fonction pure.
+  ///
+  /// Sert aux requêtes de l'onglet « Mises à jour », qui comparent les
+  /// codes exactement : sans cela, un chapitre `pt-br` accepté par les
+  /// règles (`PolitiqueTelechargement.rangLangue`) n'y apparaîtrait pas.
+  ///
+  /// LIMITE : une variante absente de la liste de MangaDex (`fr-ca`, par
+  /// exemple) n'est trouvée que si le client l'a choisie exactement ; la
+  /// comparaison par préfixe demanderait une évolution de
+  /// `DepotChapitres.chargerDernieresParutions`.
+  static List<String> languesEtVariantes(List<String> langues) {
+    final codes = <String>[];
+    void ajouter(String code) {
+      final propre = code.trim().toLowerCase();
+      if (propre.isNotEmpty && !codes.contains(propre)) codes.add(propre);
+    }
+
+    for (final langue in langues) {
+      ajouter(langue);
+      final base = PolitiqueTelechargement.langueDeBase(langue);
+      ajouter(base);
+      SourceMangaDex.languesApiDepuisIso(base).forEach(ajouter);
+    }
+    return codes;
   }
 
   /// Langues du réglage général du client.
@@ -1802,7 +1839,7 @@ class ServiceBibliotheque {
     }
     for (final MapEntry(key: jeu, value: ids) in parJeu.entries) {
       final parutions = await _depotChapitres.chargerDernieresParutions(
-        jeu.split(','),
+        languesEtVariantes(jeu.split(',')),
       );
       for (final id in ids) {
         final date = parutions[id];
@@ -1816,7 +1853,10 @@ class ServiceBibliotheque {
       final date = dates[id];
       final dernier = date == null
           ? null
-          : await _depotChapitres.chargerDernierChapitreParu(id, langues);
+          : await _depotChapitres.chargerDernierChapitreParu(
+              id,
+              languesEtVariantes(langues),
+            );
       lignes.add(
         ParutionTitre(
           titre: titre,

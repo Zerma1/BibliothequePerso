@@ -115,7 +115,10 @@ const String identifiantFormatExport = 'bibliotheque_perso-export';
 ///   fiche complète sans requête réseau. Augmentée malgré la compatibilité
 ///   pour que l'import sache si un champ absent est vide ou seulement
 ///   inconnu de l'ancien format.
-const int versionFormatExport = 2;
+/// - 3 : ajout compatible de `equivalences` (regroupements de catégories de
+///   même sens, migration 9 : `categorie` et `reference`, par nom). Les
+///   formats 1 et 2 restent lisibles (aucun regroupement importé).
+const int versionFormatExport = 3;
 
 /// Durée pendant laquelle un chapitre non lu porte le badge « Nouveau »
 /// dans l'onglet Mises à jour, comptée depuis sa publication, sinon depuis
@@ -137,6 +140,11 @@ const int versionFormatImportMinimale = 1;
 /// l'import (une bibliothèque personnelle compte quelques centaines de
 /// titres) et protège d'un fichier corrompu démesuré.
 const int nombreMaximalTitresImport = 20000;
+
+/// Nombre maximal de regroupements de catégories lus dans un fichier
+/// d'import (format 3) : une bibliothèque en compte quelques dizaines ; la
+/// borne protège d'un fichier corrompu démesuré.
+const int nombreMaximalEquivalencesImport = 5000;
 
 /// Taille maximale (en octets) d'un fichier d'import : bien au-delà d'un
 /// export réel (quelques centaines de Ko), pour refuser clairement un

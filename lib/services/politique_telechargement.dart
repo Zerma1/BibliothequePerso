@@ -126,7 +126,8 @@ class PlanTelechargement {
 /// sans version dans ces langues est ignoré (il ne compte pas dans les
 /// positions), et une archive déjà présente dans une autre langue est à
 /// supprimer. Une version sans langue connue (site d'une seule langue) est
-/// acceptée.
+/// acceptée. Une variante régionale de même langue de base est acceptée en
+/// repli, après les langues exactes (voir [PolitiqueTelechargement.rangLangue]).
 ///
 /// Chapitres hébergés sur un site externe (`Chapitre.estExterne`, R4) : ils
 /// ne sont **jamais** à télécharger. Une version hébergée du même numéro
@@ -257,23 +258,46 @@ class PolitiqueTelechargement {
   /// Rang de la langue de [chapitre] dans [languesPreferees] (0 = la
   /// préférée), ou `null` si elle n'en fait pas partie.
   ///
-  /// Une variante régionale compte comme sa langue (« pt-br » pour « pt »),
-  /// comme pour le filtre des chapitres de MangaDex. Une langue vide
-  /// (inconnue) ou une liste de préférences vide est acceptée au dernier
-  /// rang.
+  /// Variantes régionales (tâche P3 : `pt-br`, `es-la`, `zh-hk`…), règle la
+  /// plus prudente retenue :
+  /// 1. **correspondance exacte** d'abord : un chapitre `pt-br` a le rang de
+  ///    la préférence `pt-br`, un chapitre `pt` celui de la préférence `pt` ;
+  /// 2. sinon, **même langue de base**, en repli : un chapitre `pt-br` pour
+  ///    la préférence `pt` (comme le filtre des chapitres de MangaDex, qui
+  ///    demande `pt` et `pt-br`), un chapitre `pt` pour la préférence
+  ///    `pt-br`, un chapitre `es-la` pour la préférence `es`. Ce repli est
+  ///    classé **après toutes les correspondances exactes**
+  ///    (`languesPreferees.length` + rang de la préférence) : avec « pt-br,
+  ///    en », une version anglaise passe avant une version `pt` du Portugal,
+  ///    car le client a choisi exactement ces deux langues ;
+  /// 3. une langue vide (inconnue : site d'une seule langue) ou une liste de
+  ///    préférences vide est acceptée au tout dernier rang
+  ///    (`2 × languesPreferees.length`).
+  ///
+  /// Une langue de base différente n'est jamais acceptée (pas de russe pour
+  /// « fr,en »).
   int? rangLangue(Chapitre chapitre) {
     final langue = chapitre.langue.trim().toLowerCase();
-    if (languesPreferees.isEmpty || langue.isEmpty) {
-      return languesPreferees.length;
+    final nombre = languesPreferees.length;
+    if (nombre == 0 || langue.isEmpty) {
+      return 2 * nombre;
     }
-    var rang = languesPreferees.indexOf(langue);
-    if (rang < 0) {
-      final tiret = langue.indexOf('-');
-      if (tiret > 0) {
-        rang = languesPreferees.indexOf(langue.substring(0, tiret));
-      }
+    final exacte = languesPreferees.indexOf(langue);
+    if (exacte >= 0) return exacte;
+    final base = langueDeBase(langue);
+    for (var i = 0; i < nombre; i++) {
+      if (langueDeBase(languesPreferees[i]) == base) return nombre + i;
     }
-    return rang < 0 ? null : rang;
+    return null;
+  }
+
+  /// Langue de base d'un code de langue : `pt` pour `pt-br`, `es` pour
+  /// `es-la`, le code lui-même (en minuscules, sans espaces) s'il n'a pas
+  /// de variante régionale. Fonction pure.
+  static String langueDeBase(String code) {
+    final propre = code.trim().toLowerCase();
+    final tiret = propre.indexOf('-');
+    return tiret > 0 ? propre.substring(0, tiret) : propre;
   }
 
   /// `true` si les règles peuvent télécharger [chapitre] (langue choisie par
@@ -293,8 +317,10 @@ class PolitiqueTelechargement {
     // Les langues absentes des préférences passent en dernier : cet ordre
     // sert à l'affichage (toutes les versions restent visibles) ; les règles
     // de téléchargement les écartent avant (voir [calculer]).
+    // Au-delà du dernier rang accepté (`2 × languesPreferees.length`, voir
+    // [rangLangue]).
     int rangLangue(Chapitre chapitre) =>
-        this.rangLangue(chapitre) ?? languesPreferees.length + 1;
+        this.rangLangue(chapitre) ?? 2 * languesPreferees.length + 1;
     // Groupe avant la langue : une version hébergée dans les langues du
     // client passe avant une version externe, même dans une langue préférée
     // (R4 : la version externe ne se lit pas dans l'application). Une
