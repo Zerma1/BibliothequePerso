@@ -562,12 +562,9 @@ class ServiceBibliotheque {
     } on ErreurSource catch (erreur) {
       throw erreur.avecContexte(typeDetecte: source.typeSource);
     }
-    final nouveaux = await _depotChapitres.enregistrerChapitres(
-      <Chapitre>[
-        for (final chapitre in chapitres) chapitre.copierAvec(idTitre: idTitre),
-      ],
-      idSource: idSource,
-    );
+    final nouveaux = await _depotChapitres.enregistrerChapitres(<Chapitre>[
+      for (final chapitre in chapitres) chapitre.copierAvec(idTitre: idTitre),
+    ], idSource: idSource);
     await _depotTitres.enregistrerDateVerification(
       idTitre,
       DateTime.now().toUtc(),
@@ -710,13 +707,9 @@ class ServiceBibliotheque {
       final idSource =
           source.id ?? (await _depotSources.enregistrerSource(source)).id!;
       await depot.ajouterSourceSecondaire(idTitre, idSource, urlRetenue);
-      final nouveaux = await _depotChapitres.enregistrerChapitres(
-        <Chapitre>[
-          for (final chapitre in chapitres)
-            chapitre.copierAvec(idTitre: idTitre),
-        ],
-        idSource: idSource,
-      );
+      final nouveaux = await _depotChapitres.enregistrerChapitres(<Chapitre>[
+        for (final chapitre in chapitres) chapitre.copierAvec(idTitre: idTitre),
+      ], idSource: idSource);
       final estEnAttente = await _classerEnAttenteSansErreur(idTitre);
       final relu = await _depotTitres.chargerTitre(idTitre) ?? titre;
       return ResultatAjoutTitre(relu, nouveaux, estEnAttente: estEnAttente);

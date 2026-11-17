@@ -183,9 +183,7 @@ class ServiceSourcesParDefaut {
       };
       for (final defaut in plan.aAjouter) {
         try {
-          ajoutees.add(
-            await _depot.enregistrerSource(defaut.versSource()),
-          );
+          ajoutees.add(await _depot.enregistrerSource(defaut.versSource()));
           marquees.add(defaut.identifiant);
         } catch (erreur) {
           // Non marquée : on réessaiera au prochain démarrage. Une autre

@@ -309,9 +309,8 @@ void main() {
       final second = titres.firstWhere((t) => t['nom'] == 'Un *livre*');
       expect(second['sites'], hasLength(1));
 
-      final markdown = File(
-        resultat.cheminMarkdown,
-      ).readAsStringSync(encoding: utf8);
+      final markdown = File(resultat.cheminMarkdown)
+          .readAsStringSync(encoding: utf8);
       expect(
         markdown,
         contains(

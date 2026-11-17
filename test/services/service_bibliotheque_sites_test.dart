@@ -305,9 +305,8 @@ void main() {
     final titre = await ajouterTitrePrincipal();
     await service.ajouterSiteAuTitre(titre.id!, _urlScanManga);
     scanManga.appels.clear();
-    final idFavoris = (await depotListes.chargerListeParNom(
-      nomListeFavoris,
-    ))!.id!;
+    final idFavoris = (await depotListes.chargerListeParNom(nomListeFavoris))!
+        .id!;
 
     final resultat = await service.ajouterTitreDepuisUrl(
       _urlScanManga,
@@ -325,24 +324,26 @@ void main() {
   });
 
   group('actualiserTitre', () {
-    test('interroge tous les sites ; la fiche ne vient que du principal',
-        () async {
-      final titre = await ajouterTitrePrincipal();
-      await service.ajouterSiteAuTitre(titre.id!, _urlScanManga);
-      scanManga.appels.clear();
-      scanManga.chapitres[_urlScanManga]!.add(
-        _chapitre('https://www.scan-manga.com/lecture/abc/4', 4),
-      );
-      mangaDex.chapitres[_urlPrincipale]!.add(
-        _chapitre('https://mangadex.org/chapter/3', 3),
-      );
+    test(
+      'interroge tous les sites ; la fiche ne vient que du principal',
+      () async {
+        final titre = await ajouterTitrePrincipal();
+        await service.ajouterSiteAuTitre(titre.id!, _urlScanManga);
+        scanManga.appels.clear();
+        scanManga.chapitres[_urlScanManga]!.add(
+          _chapitre('https://www.scan-manga.com/lecture/abc/4', 4),
+        );
+        mangaDex.chapitres[_urlPrincipale]!.add(
+          _chapitre('https://mangadex.org/chapter/3', 3),
+        );
 
-      final resultat = await service.actualiserTitre(titre);
+        final resultat = await service.actualiserTitre(titre);
 
-      expect(resultat.nombreNouveauxChapitres, 2);
-      expect(resultat.aDesErreursDeSite, isFalse);
-      expect(scanManga.appels, <String>['chapitres $_urlScanManga']);
-    });
+        expect(resultat.nombreNouveauxChapitres, 2);
+        expect(resultat.aDesErreursDeSite, isFalse);
+        expect(scanManga.appels, <String>['chapitres $_urlScanManga']);
+      },
+    );
 
     test("un site en panne n'empêche pas les autres et son erreur est "
         'rendue', () async {
@@ -403,9 +404,11 @@ void main() {
       expect(restants[0].dateSuppressionPrevue, isNull);
       final echeance = restants[1].dateSuppressionPrevue!;
       expect(
-        echeance.isAfter(avant.add(delaiSuppressionDifferee).subtract(
-          const Duration(minutes: 1),
-        )),
+        echeance.isAfter(
+          avant
+              .add(delaiSuppressionDifferee)
+              .subtract(const Duration(minutes: 1)),
+        ),
         isTrue,
       );
     });

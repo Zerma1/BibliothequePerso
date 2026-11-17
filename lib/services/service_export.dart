@@ -616,9 +616,7 @@ class ServiceExport {
           : echapperMarkdown(exporte.source!.nom),
       // Étape 8 : autres sites du titre, en liens cliquables.
       if (exporte.sitesSecondaires.isNotEmpty)
-        'autres sites : ${<String>[
-          for (final site in exporte.sitesSecondaires) _lien(site.source?.nom ?? 'site inconnu', site.url),
-        ].join(', ')}',
+        'autres sites : ${<String>[for (final site in exporte.sitesSecondaires) _lien(site.source?.nom ?? 'site inconnu', site.url)].join(', ')}',
       if (exporte.categories.isNotEmpty)
         'catégories : ${echapperMarkdown(exporte.categories.join(', '))}',
       if (exporte.dernierChapitreLu case final chapitre?)

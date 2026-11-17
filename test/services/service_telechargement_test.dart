@@ -1449,9 +1449,8 @@ void main() {
       // Site encore lié : un téléchargement manuel est conservé.
       await avecSites.appliquerRegles(titre.id!);
       expect(
-        (await depotChapitres.chargerChapitre(
-          chapitreScan.id!,
-        ))!.dateSuppressionPrevue,
+        (await depotChapitres.chargerChapitre(chapitreScan.id!))!
+            .dateSuppressionPrevue,
         isNull,
       );
 
@@ -1460,9 +1459,8 @@ void main() {
 
       expect(plan.idsASupprimer, <int>[chapitreScan.id!]);
       expect(
-        (await depotChapitres.chargerChapitre(
-          chapitreScan.id!,
-        ))!.dateSuppressionPrevue,
+        (await depotChapitres.chargerChapitre(chapitreScan.id!))!
+            .dateSuppressionPrevue,
         isNotNull,
       );
     });

@@ -83,7 +83,8 @@ class _ServiceSimule extends ServiceBibliotheque {
     await Future<void>.delayed(Duration.zero);
     enCoursTotal--;
     enCoursParSource[idSource] = enCoursParSource[idSource]! - 1;
-    if (titresEnErreur.contains(titre.nom) || sitesEnErreur.contains(idSource)) {
+    if (titresEnErreur.contains(titre.nom) ||
+        sitesEnErreur.contains(idSource)) {
       throw ErreurSource(titre.urlTitre, 'site injoignable');
     }
     return ResultatAjoutTitre(titre, nouveauxParTitre[titre.nom] ?? 0);
@@ -284,9 +285,8 @@ void main() {
       final principal = await creerSource('a.test');
       final inactif = await creerSource('b.test', estActive: false);
       final titre = await creerTitre(principal, 'double');
-      await DepotTitresSources(
-        base,
-      ).ajouterSourceSecondaire(titre.id!, inactif, 'https://b.test/double');
+      await DepotTitresSources(base)
+          .ajouterSourceSecondaire(titre.id!, inactif, 'https://b.test/double');
 
       await service.verifierTitresSuivis();
 

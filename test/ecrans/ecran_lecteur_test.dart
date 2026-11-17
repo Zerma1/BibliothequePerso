@@ -131,15 +131,10 @@ void main() {
     await afficher(tester, 1);
 
     expect(
-      find.text(
-        Textes.chapitresExternesSuivants(1, 'MANGA Plus'),
-      ),
+      find.text(Textes.chapitresExternesSuivants(1, 'MANGA Plus')),
       findsOneWidget,
     );
-    expect(
-      find.textContaining(Textes.lireSur('MANGA Plus')),
-      findsOneWidget,
-    );
+    expect(find.textContaining(Textes.lireSur('MANGA Plus')), findsOneWidget);
     // « Chapitre suivant » saute le chapitre externe.
     expect(
       find.text('${Textes.chapitreSuivant} : ${Textes.nomChapitre('Deux', 2)}'),

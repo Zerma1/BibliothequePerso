@@ -790,10 +790,7 @@ void main() {
     test("une version déjà téléchargée d'un site secondaire n'est pas "
         'retéléchargée depuis le principal', () {
       final plan = multiSites.calculer(
-        <Chapitre>[
-          version(1, 1, 2, estTelecharge: true),
-          version(2, 1, 1),
-        ],
+        <Chapitre>[version(1, 1, 2, estTelecharge: true), version(2, 1, 1)],
         estFavori: true,
         estSuivi: false,
       );
