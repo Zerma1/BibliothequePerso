@@ -20,6 +20,7 @@ import 'donnees/base_de_donnees.dart';
 import 'donnees/depot_categories.dart';
 import 'donnees/depot_chapitres.dart';
 import 'donnees/depot_listes.dart';
+import 'donnees/depot_equivalences_categories.dart';
 import 'donnees/depot_parametres.dart';
 import 'donnees/depot_sources.dart';
 import 'donnees/depot_telechargements.dart';
@@ -41,6 +42,7 @@ import 'etat/etat_telechargements.dart';
 import 'services/constantes_services.dart' show nomDossierRapports;
 import 'services/service_ajout_site.dart';
 import 'services/service_bibliotheque.dart';
+import 'services/service_categories.dart';
 import 'services/service_export.dart';
 import 'services/service_import.dart';
 import 'services/planification_mises_a_jour.dart';
@@ -96,7 +98,11 @@ class ServicesApplication {
     required this.serviceRapportsErreur,
     required this.serviceExport,
     required this.serviceImport,
+    required this.serviceCategories,
   });
+
+  /// Catégories regroupées (groupes, suggestions, filtres).
+  final ServiceCategories serviceCategories;
 
   /// Export des titres et des sites (section « Sauvegarde et export »).
   final ServiceExport serviceExport;
@@ -232,6 +238,7 @@ ServicesApplication assemblerServices(
       serviceParametres: serviceParametres,
       versionApplication: versionApplication,
       depotTitresSources: depotTitresSources,
+      depotEquivalences: DepotEquivalencesCategories(base),
     ),
     // Réimport d'un export JSON (Paramètres → Sauvegarde et export).
     serviceImport: ServiceImport(
@@ -244,7 +251,10 @@ ServicesApplication assemblerServices(
       // Tout ou rien : l'import entier passe par une seule transaction.
       depotParametres: DepotParametres(base),
       gestionnaireTransactions: GestionnaireTransactions(base),
+      depotEquivalences: DepotEquivalencesCategories(base),
     ),
+    // Catégories regroupées et filtres de la bibliothèque.
+    serviceCategories: ServiceCategories.surBase(base),
   );
 }
 
