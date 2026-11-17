@@ -28,6 +28,9 @@ Changé :
   tous les sites. Un site qui bloque les programmes automatiques (protection anti-robot) est
   reconnu et signalé clairement ; l'application ne contourne jamais ces protections.
 - Windows : les liens « Lire sur … » s'ouvrent toujours dans le navigateur par défaut.
+- Après **chaque** vérification des nouveaux chapitres (même sans nouveauté), les
+  téléchargements prévus par vos règles sont relancés et les chapitres en échec retentés
+  (un site qui bloquait peut de nouveau répondre), toujours dans les limites réglées.
 - Compilation automatique : les étiquettes `vX.Y.Z-test` sont publiées en pre-release.
 
 ## 0.1.0-test.4 — version de test (2026-11-17)
