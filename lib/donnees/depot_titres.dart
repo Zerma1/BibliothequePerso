@@ -8,6 +8,7 @@ import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/titre.dart';
 import '../modeles/titre_alternatif.dart';
 import 'depot_categories.dart';
+import 'gestionnaire_transactions.dart';
 
 /// Accès aux tables `titres`, `titres_alternatifs` et `titres_categories`.
 ///
@@ -60,9 +61,16 @@ class DepotTitres {
   /// écrit. Lève une [ErreurBaseDeDonnees] si [Titre.idSource] est absent ou
   /// ne correspond à aucune source, ou si l'URL est déjà celle d'un autre
   /// titre.
+  ///
+  /// [executeur] : transaction ouverte par `GestionnaireTransactions` pour
+  /// écrire avec d'autres dépôts. Le titre y est écrit puis relu sans ouvrir
+  /// de nouvelle transaction ; il ne sera définitif qu'à la validation de
+  /// celle-ci. `null` : transaction propre à cet appel (comportement
+  /// d'origine).
   Future<Titre> enregistrerTitre(
     Titre titre, {
     List<String>? categories,
+    DatabaseExecutor? executeur,
   }) async {
     final idSource = titre.idSource;
     if (idSource == null) {
@@ -73,24 +81,28 @@ class DepotTitres {
     }
     final int idTitre;
     try {
-      idTitre = await _baseDeDonnees.transaction((txn) async {
-        // Vérification explicite : sqflite ne permet pas de reconnaître
-        // proprement une erreur de clé étrangère, et le message est plus clair.
-        final sources = await txn.query(
-          'sources',
-          columns: <String>['id'],
-          where: 'id = ?',
-          whereArgs: <Object?>[idSource],
-          limit: 1,
-        );
-        if (sources.isEmpty) {
-          throw ErreurBaseDeDonnees(
-            'Impossible d\'enregistrer « ${titre.nom} » : la source '
-            'n°$idSource n\'existe pas.',
+      idTitre = await GestionnaireTransactions.executerAtomiquement(
+        _baseDeDonnees,
+        executeur,
+        (txn) async {
+          // Vérification explicite : sqflite ne permet pas de reconnaître
+          // proprement une erreur de clé étrangère, et le message est plus clair.
+          final sources = await txn.query(
+            'sources',
+            columns: <String>['id'],
+            where: 'id = ?',
+            whereArgs: <Object?>[idSource],
+            limit: 1,
           );
-        }
-        return _enregistrerTitreDansTransaction(txn, titre, categories);
-      });
+          if (sources.isEmpty) {
+            throw ErreurBaseDeDonnees(
+              'Impossible d\'enregistrer « ${titre.nom} » : la source '
+              'n°$idSource n\'existe pas.',
+            );
+          }
+          return _enregistrerTitreDansTransaction(txn, titre, categories);
+        },
+      );
     } on DatabaseException catch (erreur) {
       if (erreur.isUniqueConstraintError()) {
         throw ErreurBaseDeDonnees(
@@ -104,7 +116,7 @@ class DepotTitres {
       );
     }
 
-    final relu = await chargerTitre(idTitre);
+    final relu = await chargerTitre(idTitre, executeur: executeur);
     if (relu == null) {
       throw ErreurBaseDeDonnees(
         'Le titre « ${titre.nom} » est introuvable après son enregistrement.',
@@ -116,7 +128,7 @@ class DepotTitres {
   /// Écrit le titre, ses titres alternatifs et ses catégories dans [txn], puis
   /// renvoie l'identifiant du titre.
   Future<int> _enregistrerTitreDansTransaction(
-    Transaction txn,
+    DatabaseExecutor txn,
     Titre titre,
     List<String>? categories,
   ) async {
@@ -171,7 +183,7 @@ class DepotTitres {
   /// On n'utilise pas `INSERT OR REPLACE` : il supprime puis recrée la ligne,
   /// ce qui déclencherait les `ON DELETE CASCADE` et effacerait les chapitres,
   /// l'état de lecture et l'appartenance aux listes.
-  Future<int> _enregistrerLigneTitre(Transaction txn, Titre titre) async {
+  Future<int> _enregistrerLigneTitre(DatabaseExecutor txn, Titre titre) async {
     var id = titre.id;
     if (id == null) {
       final existants = await txn.query(
@@ -226,16 +238,29 @@ class DepotTitres {
 
   /// Charge un titre complet (avec titres alternatifs et nombre de non-lus),
   /// ou `null` s'il n'existe pas.
-  Future<Titre?> chargerTitre(int id) async {
-    final titres = await _chargerAvecConditions('t.id = ?', <Object?>[id]);
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
+  Future<Titre?> chargerTitre(int id, {DatabaseExecutor? executeur}) async {
+    final titres = await _chargerAvecConditions(
+      executeur ?? _baseDeDonnees,
+      't.id = ?',
+      <Object?>[id],
+    );
     return titres.isEmpty ? null : titres.first;
   }
 
   /// Charge un titre par son URL exacte, ou `null`.
-  Future<Titre?> chargerTitreParUrl(String urlTitre) async {
-    final titres = await _chargerAvecConditions('t.url_titre = ?', <Object?>[
-      urlTitre,
-    ]);
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
+  Future<Titre?> chargerTitreParUrl(
+    String urlTitre, {
+    DatabaseExecutor? executeur,
+  }) async {
+    final titres = await _chargerAvecConditions(
+      executeur ?? _baseDeDonnees,
+      't.url_titre = ?',
+      <Object?>[urlTitre],
+    );
     return titres.isEmpty ? null : titres.first;
   }
 
@@ -259,6 +284,8 @@ class DepotTitres {
   /// Android) ne replient que les lettres ASCII. « death » trouve « Death »,
   /// « Élise » trouve « Élise », mais « élise » ne trouve pas « Élise ». Les
   /// écritures sans casse (japonais, coréen, chinois) ne sont pas concernées.
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
   Future<List<Titre>> chargerTitres({
     String? recherche,
     int? idListe,
@@ -266,6 +293,7 @@ class DepotTitres {
     int? idSource,
     List<String>? niveauxContenu,
     bool inclureNiveauInconnu = true,
+    DatabaseExecutor? executeur,
   }) {
     // Seuls des fragments SQL constants sont assemblés ; toutes les valeurs
     // passent par des paramètres `?`.
@@ -326,6 +354,7 @@ class DepotTitres {
     }
 
     return _chargerAvecConditions(
+      executeur ?? _baseDeDonnees,
       conditions.isEmpty ? null : conditions.join(' AND '),
       arguments,
     );
@@ -351,8 +380,14 @@ class DepotTitres {
   /// → `"fr,en"`). Renvoie `false` si le titre n'existe pas. Lève une
   /// [ArgumentError] si un code contient autre chose que des lettres, des
   /// chiffres ou des tirets.
-  Future<bool> enregistrerLanguesPreferees(int idTitre, String? langues) async {
-    final modifiees = await _baseDeDonnees.update(
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
+  Future<bool> enregistrerLanguesPreferees(
+    int idTitre,
+    String? langues, {
+    DatabaseExecutor? executeur,
+  }) async {
+    final modifiees = await (executeur ?? _baseDeDonnees).update(
       'titres',
       <String, Object?>{
         'langues_preferees': normaliserLanguesPreferees(langues),
@@ -370,11 +405,14 @@ class DepotTitres {
   ///
   /// Renvoie `false` si le titre n'existe pas. Une ré-actualisation du titre
   /// par [enregistrerTitre] ne modifie jamais ce choix.
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
   Future<bool> enregistrerCouvertureChoisie(
     int idTitre,
-    String? couverture,
-  ) async {
-    final modifiees = await _baseDeDonnees.update(
+    String? couverture, {
+    DatabaseExecutor? executeur,
+  }) async {
+    final modifiees = await (executeur ?? _baseDeDonnees).update(
       'titres',
       <String, Object?>{
         'couverture_choisie': _normaliserCouverture(couverture),
@@ -436,6 +474,7 @@ class DepotTitres {
   /// Exécute la requête de titres avec une clause `WHERE` facultative, puis
   /// charge les titres alternatifs de tous les résultats.
   Future<List<Titre>> _chargerAvecConditions(
+    DatabaseExecutor base,
     String? clauseWhere,
     List<Object?> arguments,
   ) async {
@@ -445,7 +484,7 @@ class DepotTitres {
     }
     sql.write(' ORDER BY t.nom COLLATE NOCASE, t.id');
 
-    final lignes = await _baseDeDonnees.rawQuery(sql.toString(), arguments);
+    final lignes = await base.rawQuery(sql.toString(), arguments);
     if (lignes.isEmpty) {
       return <Titre>[];
     }
@@ -454,7 +493,7 @@ class DepotTitres {
       for (final ligne in lignes)
         if (ligne['id'] case final int id) id,
     ];
-    final alternatifsParTitre = await _chargerTitresAlternatifs(ids);
+    final alternatifsParTitre = await _chargerTitresAlternatifs(base, ids);
 
     return <Titre>[
       for (final ligne in lignes)
@@ -469,6 +508,7 @@ class DepotTitres {
   /// Charge les titres alternatifs de plusieurs titres en peu de requêtes,
   /// regroupés par identifiant de titre.
   Future<Map<int, List<TitreAlternatif>>> _chargerTitresAlternatifs(
+    DatabaseExecutor base,
     List<int> idsTitres,
   ) async {
     final resultat = <int, List<TitreAlternatif>>{};
@@ -485,7 +525,7 @@ class DepotTitres {
       final lot = idsTitres.sublist(debut, fin);
       // Seuls des `?` sont générés ; les identifiants sont passés en paramètres.
       final marqueurs = List<String>.filled(lot.length, '?').join(', ');
-      final lignes = await _baseDeDonnees.rawQuery(
+      final lignes = await base.rawQuery(
         'SELECT * FROM titres_alternatifs WHERE id_titre IN ($marqueurs) '
         'ORDER BY id',
         lot,

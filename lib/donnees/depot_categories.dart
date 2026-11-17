@@ -18,8 +18,13 @@ class DepotCategories {
   /// Le nom est normalisé (minuscules, trim). Si une catégorie de même nom
   /// existe déjà, elle est réutilisée. Lève une [ErreurBaseDeDonnees] si le nom
   /// est vide après normalisation.
-  Future<Categorie> enregistrerCategorie(String nomBrut) {
-    return enregistrerCategorieAvec(_baseDeDonnees, nomBrut);
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
+  Future<Categorie> enregistrerCategorie(
+    String nomBrut, {
+    DatabaseExecutor? executeur,
+  }) {
+    return enregistrerCategorieAvec(executeur ?? _baseDeDonnees, nomBrut);
   }
 
   /// Variante de [enregistrerCategorie] utilisable dans une transaction
@@ -55,14 +60,26 @@ class DepotCategories {
   }
 
   /// Charge toutes les catégories, triées par nom.
-  Future<List<Categorie>> chargerCategories() async {
-    final lignes = await _baseDeDonnees.query('categories', orderBy: 'nom');
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
+  Future<List<Categorie>> chargerCategories({
+    DatabaseExecutor? executeur,
+  }) async {
+    final lignes = await (executeur ?? _baseDeDonnees).query(
+      'categories',
+      orderBy: 'nom',
+    );
     return lignes.map(Categorie.depuisMap).toList();
   }
 
   /// Charge les catégories d'un titre, triées par nom.
-  Future<List<Categorie>> chargerCategoriesDuTitre(int idTitre) async {
-    final lignes = await _baseDeDonnees.rawQuery(
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
+  Future<List<Categorie>> chargerCategoriesDuTitre(
+    int idTitre, {
+    DatabaseExecutor? executeur,
+  }) async {
+    final lignes = await (executeur ?? _baseDeDonnees).rawQuery(
       'SELECT c.id, c.nom FROM categories c '
       'JOIN titres_categories tc ON tc.id_categorie = c.id '
       'WHERE tc.id_titre = ? ORDER BY c.nom',

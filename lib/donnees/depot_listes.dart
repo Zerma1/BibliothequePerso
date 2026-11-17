@@ -7,6 +7,7 @@ import 'package:sqflite/sqflite.dart';
 import '../modeles/constantes.dart';
 import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/liste_lecture.dart';
+import 'gestionnaire_transactions.dart';
 
 /// Accès aux tables `listes` et `titres_listes`.
 ///
@@ -19,8 +20,12 @@ class DepotListes {
   final Database _baseDeDonnees;
 
   /// Charge toutes les listes, dans l'ordre d'affichage.
-  Future<List<ListeLecture>> chargerListes() async {
-    final lignes = await _baseDeDonnees.query(
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
+  Future<List<ListeLecture>> chargerListes({
+    DatabaseExecutor? executeur,
+  }) async {
+    final lignes = await (executeur ?? _baseDeDonnees).query(
       'listes',
       orderBy: 'ordre, nom COLLATE NOCASE',
     );
@@ -35,8 +40,13 @@ class DepotListes {
   /// Charge une liste par son nom (sans tenir compte de la casse ASCII), ou
   /// `null`. Pratique pour retrouver une liste système (« Favoris »,
   /// « Suivis », « Planifié », « En attente »).
-  Future<ListeLecture?> chargerListeParNom(String nom) async {
-    final lignes = await _baseDeDonnees.query(
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
+  Future<ListeLecture?> chargerListeParNom(
+    String nom, {
+    DatabaseExecutor? executeur,
+  }) async {
+    final lignes = await (executeur ?? _baseDeDonnees).query(
       'listes',
       where: 'nom = ? COLLATE NOCASE',
       whereArgs: <Object?>[nom.trim()],
@@ -46,8 +56,13 @@ class DepotListes {
   }
 
   /// Charge les listes qui contiennent un titre.
-  Future<List<ListeLecture>> chargerListesDuTitre(int idTitre) async {
-    final lignes = await _baseDeDonnees.rawQuery(
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
+  Future<List<ListeLecture>> chargerListesDuTitre(
+    int idTitre, {
+    DatabaseExecutor? executeur,
+  }) async {
+    final lignes = await (executeur ?? _baseDeDonnees).rawQuery(
       'SELECT l.* FROM listes l '
       'JOIN titres_listes tl ON tl.id_liste = l.id '
       'WHERE tl.id_titre = ? ORDER BY l.ordre, l.nom COLLATE NOCASE',
@@ -59,21 +74,32 @@ class DepotListes {
   /// Crée une liste du client, placée après les listes existantes.
   ///
   /// Lève une [ErreurBaseDeDonnees] si le nom est vide ou déjà utilisé.
-  Future<ListeLecture> creerListe(String nom) async {
+  ///
+  /// [executeur] : transaction ouverte par `GestionnaireTransactions` pour
+  /// écrire avec d'autres dépôts ; `null` : transaction propre à cet appel.
+  Future<ListeLecture> creerListe(
+    String nom, {
+    DatabaseExecutor? executeur,
+  }) async {
     final nomPropre = _verifierNom(nom);
     try {
-      return await _baseDeDonnees.transaction((txn) async {
-        // Calcul de l'ordre et insertion dans la même transaction pour que
-        // deux créations rapprochées n'obtiennent pas la même position.
-        final lignes = await txn.rawQuery(
-          'SELECT COALESCE(MAX(ordre), ?) + 1 FROM listes',
-          <Object?>[ordreListeEnAttente],
-        );
-        final ordre = Sqflite.firstIntValue(lignes) ?? ordreListeEnAttente + 1;
-        final liste = ListeLecture(nom: nomPropre, ordre: ordre);
-        final id = await txn.insert('listes', liste.versMap());
-        return liste.copierAvec(id: id);
-      });
+      return await GestionnaireTransactions.executerAtomiquement(
+        _baseDeDonnees,
+        executeur,
+        (txn) async {
+          // Calcul de l'ordre et insertion dans la même transaction pour que
+          // deux créations rapprochées n'obtiennent pas la même position.
+          final lignes = await txn.rawQuery(
+            'SELECT COALESCE(MAX(ordre), ?) + 1 FROM listes',
+            <Object?>[ordreListeEnAttente],
+          );
+          final ordre =
+              Sqflite.firstIntValue(lignes) ?? ordreListeEnAttente + 1;
+          final liste = ListeLecture(nom: nomPropre, ordre: ordre);
+          final id = await txn.insert('listes', liste.versMap());
+          return liste.copierAvec(id: id);
+        },
+      );
     } on DatabaseException catch (erreur) {
       if (erreur.isUniqueConstraintError()) {
         throw ErreurBaseDeDonnees(
@@ -129,31 +155,42 @@ class DepotListes {
   /// Ajoute un titre à une liste. Sans effet s'il y est déjà.
   ///
   /// Lève une [ErreurBaseDeDonnees] si la liste ou le titre n'existe pas.
-  Future<void> ajouterTitre(int idListe, int idTitre) async {
+  ///
+  /// [executeur] : transaction ouverte par `GestionnaireTransactions` pour
+  /// écrire avec d'autres dépôts ; `null` : transaction propre à cet appel.
+  Future<void> ajouterTitre(
+    int idListe,
+    int idTitre, {
+    DatabaseExecutor? executeur,
+  }) async {
     try {
-      await _baseDeDonnees.transaction((txn) async {
-        // Vérification explicite : sqflite ne permet pas de reconnaître
-        // proprement une erreur de clé étrangère, et ce message est plus clair.
-        if (await _chargerListeAvec(txn, idListe) == null) {
-          throw ErreurBaseDeDonnees('La liste n°$idListe n\'existe pas.');
-        }
-        final titres = await txn.query(
-          'titres',
-          columns: <String>['id'],
-          where: 'id = ?',
-          whereArgs: <Object?>[idTitre],
-          limit: 1,
-        );
-        if (titres.isEmpty) {
-          throw ErreurBaseDeDonnees('Le titre n°$idTitre n\'existe pas.');
-        }
-        // IGNORE : la clé primaire (id_titre, id_liste) rend l'ajout
-        // idempotent.
-        await txn.insert('titres_listes', <String, Object?>{
-          'id_titre': idTitre,
-          'id_liste': idListe,
-        }, conflictAlgorithm: ConflictAlgorithm.ignore);
-      });
+      await GestionnaireTransactions.executerAtomiquement(
+        _baseDeDonnees,
+        executeur,
+        (txn) async {
+          // Vérification explicite : sqflite ne permet pas de reconnaître
+          // proprement une erreur de clé étrangère, et ce message est plus clair.
+          if (await _chargerListeAvec(txn, idListe) == null) {
+            throw ErreurBaseDeDonnees('La liste n°$idListe n\'existe pas.');
+          }
+          final titres = await txn.query(
+            'titres',
+            columns: <String>['id'],
+            where: 'id = ?',
+            whereArgs: <Object?>[idTitre],
+            limit: 1,
+          );
+          if (titres.isEmpty) {
+            throw ErreurBaseDeDonnees('Le titre n°$idTitre n\'existe pas.');
+          }
+          // IGNORE : la clé primaire (id_titre, id_liste) rend l'ajout
+          // idempotent.
+          await txn.insert('titres_listes', <String, Object?>{
+            'id_titre': idTitre,
+            'id_liste': idListe,
+          }, conflictAlgorithm: ConflictAlgorithm.ignore);
+        },
+      );
     } on DatabaseException catch (erreur) {
       throw ErreurBaseDeDonnees(
         'Impossible d\'ajouter le titre n°$idTitre à la liste n°$idListe.',
