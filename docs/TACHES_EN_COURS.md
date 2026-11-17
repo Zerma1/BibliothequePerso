@@ -117,3 +117,36 @@ Décisions de l'orchestrateur :
 - [x] W1. **webtoons.com** (signalé par le client : https://www.webtoons.com/fr/romance/the-gangster-daughter-of-the-henchman-dukes-family/list?title_no=11499) : diagnostic (HTML lisible ? pagination de la liste des épisodes ? images protégées ?), puis adaptateur `SourceWebtoons` sur le modèle de Scan-Manga : fiche + tous les épisodes, chaque épisode avec `urlExterne` = sa page (« Lire sur WEBTOON ») tant que la récupération des images n'est pas clairement autorisée sans contournement. Langue d'après l'adresse (/fr/, /en/…).
 - [x] W2. Adaptateurs Madara et MangaThemesia (thèmes WordPress courants).
 - [ ] W3. Adaptateur générique par sélecteurs CSS (formulaire de sélecteurs dans « Ajouter un site »).
+
+## Retours du client sur la 0.1.0-test.4 (2026-11-17) — `testUtilisateur/retour/v0.1.0-test.4/`
+
+Décisions du client : `webview_flutter` **validé** (lire les liens externes dans l'application,
+navigateur par défaut en repli) ; `file_selector` non nécessaire ; bouton « Contenu » gardé dans
+la bibliothèque ; clé de signature Android et `share_plus` en attente (pas d'Android à tester).
+Analyse de Gemini lue : juste sur le fond, mais écrite sur un état ancien (Madara, MangaThemesia
+et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
+
+- [ ] T1. **Scan-Manga 403 « Just a moment… » (Cloudflare)** chez le client, alors que le site
+  répond 200 depuis le PC de développement avec un User-Agent honnête comme navigateur.
+  Hypothèse : un User-Agent de navigateur envoyé par un client qui n'est pas un navigateur est
+  repéré par Cloudflare. Correction : User-Agent **honnête de l'application par défaut pour tous
+  les sites** (le playbook §6 sera mis à jour), et reconnaissance d'une page de défi anti-robot
+  (403/503 + « Just a moment » / challenge-platform) comme une erreur dédiée « protection
+  anti-robot » avec un message clair. Aucun contournement.
+- [ ] T2. **Adaptateur générique** (W3) avec **heuristiques pour les sites à liens explicites**
+  (ex. https://ruri-dragon.online : un site dédié à une œuvre, chapitres en
+  `/comic/<titre>-chapter-<n>/`) : sans réglage, trouver les liens de chapitres (motifs
+  chapter/chapitre/episode + numéro), le titre, la couverture, et les images de la page de
+  chapitre ; accepter qu'on colle l'adresse d'un chapitre (remonter à la page qui liste les
+  chapitres) ; sinon sélecteurs CSS réglables. Détection automatique d'un site « œuvre unique ».
+- [ ] T3. **Critères de lecture des sites** (demande du client) : document clair
+  `docs/CRITERES_LECTURE_SITES.md` + aide dans l'écran d'ajout de site et dans les messages de
+  refus (« pourquoi ce site n'est pas lisible »).
+- [ ] T4. **Ajouter quand même comme simple lien** : quand un site ne peut pas être lu
+  (protection, adaptateur absent), proposer d'enregistrer l'adresse comme site du titre en
+  « lien seul » (ouverture dans la vue web / le navigateur, pas de lecture des chapitres).
+- [ ] T5. **Vue web intégrée** pour les liens externes et les « liens seuls » : `webview_flutter`
+  (Android) ; **Windows : `webview_flutter` ne fonctionne pas sous Windows**, il faut le paquet
+  `webview_windows` (moteur WebView2 de Windows 11) ; Linux : navigateur par défaut. Bouton
+  « Ouvrir dans le navigateur » toujours présent.
+- [ ] T6. Plan de tests pour le client sur la branche `test` (fait par l'orchestrateur).
