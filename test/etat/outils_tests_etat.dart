@@ -12,8 +12,11 @@ import 'package:bibliotheque_perso/donnees/depot_chapitres.dart';
 import 'package:bibliotheque_perso/donnees/depot_listes.dart';
 import 'package:bibliotheque_perso/donnees/depot_sources.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres.dart';
+import 'package:bibliotheque_perso/donnees/stockage_telechargements.dart'
+    show BilanDeplacement;
 import 'package:bibliotheque_perso/etat/etat_bibliotheque.dart';
 import 'package:bibliotheque_perso/etat/etat_couvertures.dart';
+import 'package:bibliotheque_perso/etat/etat_dossier_chapitres.dart';
 import 'package:bibliotheque_perso/etat/etat_export.dart';
 import 'package:bibliotheque_perso/etat/etat_mises_a_jour.dart';
 import 'package:bibliotheque_perso/etat/etat_parametres.dart';
@@ -2037,6 +2040,181 @@ class FauxServiceCategories implements ServiceCategories {
   }
 }
 
+/// Faux `ServiceDossierChapitres` en mémoire : aucun fichier n'est touché.
+///
+/// Reproduit les règles visibles du vrai service : pause gardée après un
+/// refus « chapitre en cours » ([chapitreEnCours]), redémarrage nécessaire
+/// après un changement réussi, repère de déplacement inachevé.
+class FauxServiceDossierChapitres implements ServiceDossierChapitres {
+  final StreamController<void> _changements =
+      StreamController<void>.broadcast();
+
+  @override
+  Stream<void> get changements => _changements.stream;
+
+  /// Prévient les écouteurs (comme le vrai service).
+  void signaler() => _changements.add(null);
+
+  @override
+  String dossierActuel = r'C:\appli\telechargements';
+
+  @override
+  bool estDossierPersonnalise = false;
+
+  @override
+  bool redemarrageNecessaire = false;
+
+  @override
+  bool estFileEnPause = false;
+
+  @override
+  AccesDossierChapitres accesDossier = const AccesDossierChapitres.accessible(
+    r'C:\appli\telechargements',
+    estPersonnalise: false,
+  );
+
+  /// État renvoyé par [verifierAccesDossier] (sinon [accesDossier]).
+  AccesDossierChapitres? accesApresVerification;
+
+  /// Nombre d'appels à [verifierAccesDossier].
+  int nombreVerifications = 0;
+
+  /// Si défini, [verifierAccesDossier] attend qu'il soit complété.
+  Completer<void>? retenueVerification;
+
+  /// Dossier enregistré dans les réglages.
+  String? dossierChoisi;
+
+  /// Chemin du dossier par défaut.
+  String cheminParDefaut = r'C:\appli\telechargements';
+
+  /// Déplacement inachevé enregistré.
+  String? deplacementInacheve;
+
+  /// Erreur levée par les lectures des réglages, si définie.
+  Object? erreurLecture;
+
+  /// Si `true`, un changement avec déplacement est refusé comme par le vrai
+  /// service quand un chapitre est en cours (file laissée en pause).
+  bool chapitreEnCours = false;
+
+  /// Erreur levée par [changerDossierChapitres], si définie.
+  Object? erreurChangement;
+
+  /// Nombre de fichiers « déplacés » (progression annoncée).
+  int nombreFichiers = 3;
+
+  /// Si défini, le déplacement attend qu'il soit complété après la première
+  /// progression (déplacement en cours).
+  Completer<void>? retenueDeplacement;
+
+  /// Demandes reçues : (dossier, déplacer).
+  final List<({String? dossier, bool deplacer})> demandes =
+      <({String? dossier, bool deplacer})>[];
+
+  /// Nombre d'appels à [reprendreFile].
+  int nombreReprises = 0;
+
+  /// Nombre d'appels à [abandonnerDeplacementInacheve].
+  int nombreAbandons = 0;
+
+  @override
+  Future<AccesDossierChapitres> verifierAccesDossier() async {
+    nombreVerifications++;
+    final attente = retenueVerification;
+    if (attente != null) await attente.future;
+    final nouveau = accesApresVerification;
+    if (nouveau != null) accesDossier = nouveau;
+    signaler();
+    return accesDossier;
+  }
+
+  void _lire() {
+    final panne = erreurLecture;
+    if (panne != null) throw panne;
+  }
+
+  @override
+  Future<String?> chargerDossierChoisi() async {
+    _lire();
+    return dossierChoisi;
+  }
+
+  @override
+  Future<String> chargerCheminDossierParDefaut() async {
+    _lire();
+    return cheminParDefaut;
+  }
+
+  @override
+  Future<String?> chargerDeplacementInacheve() async {
+    _lire();
+    return deplacementInacheve;
+  }
+
+  @override
+  Future<void> abandonnerDeplacementInacheve() async {
+    nombreAbandons++;
+    deplacementInacheve = null;
+  }
+
+  @override
+  void reprendreFile() {
+    nombreReprises++;
+    if (redemarrageNecessaire || !estFileEnPause) return;
+    estFileEnPause = false;
+    signaler();
+  }
+
+  @override
+  Future<ResultatChangementDossier> changerDossierChapitres(
+    String? nouveauDossier, {
+    bool deplacerArchives = true,
+    void Function(int faits, int total)? surProgression,
+  }) async {
+    demandes.add((dossier: nouveauDossier, deplacer: deplacerArchives));
+    final panne = erreurChangement;
+    if (panne != null) throw panne;
+    if (deplacerArchives && chapitreEnCours) {
+      estFileEnPause = true;
+      signaler();
+      throw const ErreurService(
+        'Un chapitre est en cours de téléchargement : la file est mise '
+        "en pause et s'arrêtera à la fin de ce chapitre. Réessayez dans "
+        'un instant.',
+      );
+    }
+    final demande = nouveauDossier?.trim() ?? '';
+    final cible = demande.isEmpty ? cheminParDefaut : demande;
+    BilanDeplacement? bilan;
+    if (deplacerArchives) {
+      surProgression?.call(0, nombreFichiers);
+      final attente = retenueDeplacement;
+      if (attente != null) {
+        surProgression?.call(1, nombreFichiers);
+        await attente.future;
+      }
+      surProgression?.call(nombreFichiers, nombreFichiers);
+      bilan = BilanDeplacement(
+        nombreFichiers: nombreFichiers,
+        nombreCopies: nombreFichiers,
+        nombreDejaPresents: 0,
+        octetsCopies: 0,
+      );
+    }
+    dossierChoisi = demande.isEmpty ? null : cible;
+    deplacementInacheve = null;
+    redemarrageNecessaire = true;
+    estFileEnPause = true;
+    signaler();
+    return ResultatChangementDossier(
+      dossierChoisi: dossierChoisi,
+      cheminDossier: cible,
+      bilan: bilan,
+    );
+  }
+}
+
 // ------------------------------------------------------------------ Widgets
 
 /// Enveloppe [enfant] dans les fournisseurs de l'application et un
@@ -2052,6 +2230,7 @@ Widget envelopper(
   FauxServiceExport? export,
   FauxServiceImport? importation,
   FauxServiceCategories? categories,
+  FauxServiceDossierChapitres? dossierChapitres,
   Future<List<String>> Function()? listerExports,
   bool verifierMisesAJourAuDemarrage = false,
   DateTime Function()? maintenant,
@@ -2118,6 +2297,12 @@ Widget envelopper(
           serviceBibliotheque: bibliotheque,
         )..charger(),
       ),
+      // Section « Dossier des chapitres » et bandeaux seulement si un faux
+      // service est fourni (comme l'application sans service).
+      if (dossierChapitres != null)
+        ChangeNotifierProvider<EtatDossierChapitres>(
+          create: (_) => EtatDossierChapitres(dossierChapitres)..charger(),
+        ),
     ],
     child: BibliothequePersoApp(accueil: enfant),
   );

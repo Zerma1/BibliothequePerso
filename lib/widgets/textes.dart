@@ -1869,6 +1869,127 @@ abstract final class Textes {
   /// Bouton : écarter une suggestion pour la session.
   static const String ignorer = 'Ignorer';
 
+  // ------------------------------------------------- Dossier des chapitres
+
+  /// Titre de la section des Paramètres.
+  static const String sectionDossierChapitres = 'Dossier des chapitres';
+
+  /// Explication en tête de la section.
+  static const String explicationDossierChapitres =
+      'Les chapitres téléchargés sont rangés dans ce dossier. Vous pouvez '
+      'en choisir un autre : un dossier de cet appareil, un lecteur réseau '
+      '(Z:\\Mangas) ou un partage de votre NAS (\\\\nas\\partage\\Mangas). '
+      'Les rapports d\'erreur et les exports restent dans le dossier de '
+      'l\'application.';
+
+  /// Intitulé du dossier utilisé pendant cette session.
+  static const String dossierActuel = 'Dossier actuel';
+
+  /// Précision : dossier par défaut de l'application.
+  static const String dossierParDefautApplication =
+      'Dossier par défaut de l\'application';
+
+  /// Précision : dossier choisi par le client.
+  static const String dossierChoisiParVous = 'Dossier choisi par vous';
+
+  /// Dossier qui sera utilisé au prochain démarrage.
+  static String dossierAuProchainDemarrage(String chemin) =>
+      'Au prochain démarrage : $chemin';
+
+  /// Bouton et titre du dialogue de changement de dossier.
+  static const String changerDeDossier = 'Changer de dossier';
+
+  /// Libellé du champ du chemin.
+  static const String champNouveauDossier = 'Nouveau dossier';
+
+  /// Exemple sous le champ du chemin.
+  static const String aideNouveauDossier =
+      r'D:\Mangas, Z:\Mangas ou \\nas\partage\Mangas';
+
+  /// Explication en tête du dialogue.
+  static const String explicationChangementDossier =
+      'Collez le chemin complet du dossier. Il est créé s\'il n\'existe pas, '
+      'puis l\'application vérifie qu\'elle peut y écrire.';
+
+  /// Case : déplacer les chapitres déjà téléchargés.
+  static const String deplacerChapitresTelecharges =
+      'Déplacer les chapitres déjà téléchargés';
+
+  /// Explication de la case cochée.
+  static const String explicationDeplacerCoche =
+      'Les chapitres et les couvertures sont déplacés vers le nouveau '
+      'dossier. Cela peut prendre du temps sur un NAS.';
+
+  /// Explication de la case décochée.
+  static const String explicationDeplacerDecoche =
+      'Les chapitres déjà téléchargés restent dans l\'ancien dossier : ceux '
+      'que vos règles demandent seront retéléchargés dans le nouveau.';
+
+  /// Bouton de validation du changement.
+  static const String changer = 'Changer';
+
+  /// Bouton : revenir au dossier par défaut.
+  static const String revenirDossierParDefaut = 'Revenir au dossier par défaut';
+
+  /// Chemin du dossier par défaut, sous le bouton.
+  static String cheminDossierParDefaut(String chemin) =>
+      'Dossier par défaut : $chemin';
+
+  /// Pendant le déplacement : boîte non fermable.
+  static const String deplacementEnCours =
+      'Déplacement des chapitres en cours. Ne fermez pas l\'application.';
+
+  /// Pendant un changement sans déplacement (vérification du dossier).
+  static const String changementEnCours = 'Vérification du dossier…';
+
+  /// Progression du déplacement.
+  static String progressionDeplacement(int faits, int total) =>
+      total <= 0 ? 'Préparation…' : '$faits / $total fichier(s)';
+
+  /// Titre de la boîte après un changement réussi.
+  static const String dossierChange = 'Dossier des chapitres changé';
+
+  /// Mention après un changement réussi.
+  static const String redemarrerPourNouveauDossier =
+      'Redémarrez l\'application pour utiliser le nouveau dossier.';
+
+  /// Refus « chapitre en cours » : la file attend la décision du client.
+  static const String filePauseeParChangement =
+      'Les téléchargements sont en pause en attendant le changement de '
+      'dossier. Réessayez dans un instant, ou annulez pour les reprendre.';
+
+  /// Bouton : renoncer au changement et reprendre les téléchargements.
+  static const String reprendreTelechargements =
+      'Reprendre les téléchargements';
+
+  /// Déplacement inachevé détecté.
+  static String deplacementInacheve(String chemin) =>
+      'Un déplacement des chapitres vers « $chemin » n\'est pas terminé. '
+      'Les chapitres déjà déplacés ne sont pas perdus.';
+
+  /// Bouton : terminer le déplacement inachevé.
+  static const String terminerDeplacement = 'Terminer le déplacement';
+
+  /// Bouton : abandonner le déplacement inachevé.
+  static const String abandonner = 'Abandonner';
+
+  /// Titre de la confirmation d'abandon.
+  static const String abandonnerDeplacement = 'Abandonner le déplacement ?';
+
+  /// Confirmation avant d'abandonner un déplacement inachevé.
+  static const String confirmationAbandonDeplacement =
+      'Les chapitres restés dans l\'autre dossier ne seront plus reconnus : '
+      'ceux que vos règles demandent seront retéléchargés. Aucun fichier '
+      'n\'est supprimé.';
+
+  /// Message après l'abandon.
+  static const String deplacementAbandonne = 'Déplacement abandonné.';
+
+  /// Bandeau : le dossier a été changé pendant la session.
+  static const String bandeauRedemarrage =
+      'Redémarrez l\'application pour utiliser le nouveau dossier des '
+      'chapitres.';
+
   // ------------------------------------------------------------- Formatage
 
   /// Date au format français `jj/mm/aaaa`, en heure locale.

@@ -32,6 +32,7 @@ import 'ecrans/ecran_accueil.dart';
 import 'ecrans/ecran_erreur_demarrage.dart';
 import 'etat/etat_bibliotheque.dart';
 import 'etat/etat_export.dart';
+import 'etat/etat_dossier_chapitres.dart';
 import 'etat/etat_couvertures.dart';
 import 'etat/etat_mises_a_jour.dart';
 import 'etat/etat_parametres.dart';
@@ -535,6 +536,7 @@ Future<void> demarrer() async {
       serviceExport: services.serviceExport,
       serviceImport: services.serviceImport,
       serviceCategories: services.serviceCategories,
+      serviceDossierChapitres: services.serviceDossierChapitres,
     );
   } catch (erreur, pile) {
     debugPrint('Démarrage impossible : $erreur\n$pile');
@@ -562,6 +564,7 @@ Widget construireApplication({
   ServiceExport? serviceExport,
   ServiceImport? serviceImport,
   ServiceCategories? serviceCategories,
+  ServiceDossierChapitres? serviceDossierChapitres,
 }) {
   // Les états sont fournis au-dessus de MaterialApp : les écrans ouverts par
   // Navigator et les boîtes de dialogue y ont accès.
@@ -609,6 +612,13 @@ Widget construireApplication({
             EtatTelechargements(serviceTelechargement, serviceBibliotheque)
               ..charger(),
       ),
+      // Sans service (tests), la section « Dossier des chapitres » et les
+      // bandeaux de l'accueil sont masqués.
+      if (serviceDossierChapitres != null)
+        ChangeNotifierProvider<EtatDossierChapitres>(
+          create: (_) =>
+              EtatDossierChapitres(serviceDossierChapitres)..charger(),
+        ),
       ChangeNotifierProvider<EtatParametres>(
         create: (_) => EtatParametres(
           serviceParametres,

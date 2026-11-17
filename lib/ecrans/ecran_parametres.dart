@@ -16,6 +16,7 @@ import '../widgets/dialogue_import.dart';
 import '../widgets/editeur_langues.dart';
 import '../widgets/messages.dart';
 import '../widgets/section_categories_regroupees.dart';
+import '../widgets/section_dossier_chapitres.dart';
 import '../widgets/section_pliable.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
@@ -48,6 +49,9 @@ class EcranParametres extends StatelessWidget {
               _SectionLangues(),
               _SectionMisesAJour(),
               _SectionTelechargements(),
+              // Juste après les règles de téléchargement : il s'agit de
+              // l'endroit où ces chapitres sont rangés.
+              SectionDossierChapitres(),
               _SectionSites(),
               // Après les sites : les catégories viennent d'eux.
               SectionCategoriesRegroupees(),

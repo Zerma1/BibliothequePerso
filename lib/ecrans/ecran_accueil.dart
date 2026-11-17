@@ -5,9 +5,11 @@ library;
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
+import '../etat/etat_dossier_chapitres.dart';
 import '../etat/etat_mises_a_jour.dart';
 import '../etat/etat_parutions.dart';
 import '../etat/etat_telechargements.dart';
+import '../widgets/bandeaux_dossier_chapitres.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/textes.dart';
 import 'ecran_bibliotheque.dart';
@@ -82,6 +84,9 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
         if (!mounted) return;
         context.read<EtatMisesAJour>().controlerEcheance();
         context.read<EtatTelechargements>().controlerSuppressionsEchues();
+        // Le NAS a pu être rallumé (ou éteint) pendant la veille : le
+        // bandeau suit tout de suite. Absent dans les tests sans service.
+        context.read<EtatDossierChapitres?>()?.verifierAcces();
       },
     );
   }
@@ -143,58 +148,63 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
         // disparaissent. IndexedStack garde chaque onglet en vie lors d'un
         // changement d'onglet.
         return Scaffold(
-          body: Row(
-            children: <Widget>[
-              if (estLarge) ...<Widget>[
-                NavigationRail(
-                  selectedIndex: _indexOnglet,
-                  onDestinationSelected: _choisirOnglet,
-                  labelType: NavigationRailLabelType.all,
-                  // Version épinglée en bas de la colonne (retour du client
-                  // sur la 0.2.0-test) : elle ne se confond plus avec les
-                  // onglets. Les onglets défilent si la fenêtre est très
-                  // basse, la version reste visible.
-                  trailingAtBottom: true,
-                  scrollable: true,
-                  trailing: Padding(
-                    padding: const EdgeInsets.only(bottom: espacementMoyen),
-                    child: version,
+          // Bandeaux du dossier des chapitres (NAS inaccessible, redémarrage
+          // nécessaire) en haut, sur toute la largeur : visibles quel que
+          // soit l'onglet.
+          body: ZoneBandeauxDossierChapitres(
+            child: Row(
+              children: <Widget>[
+                if (estLarge) ...<Widget>[
+                  NavigationRail(
+                    selectedIndex: _indexOnglet,
+                    onDestinationSelected: _choisirOnglet,
+                    labelType: NavigationRailLabelType.all,
+                    // Version épinglée en bas de la colonne (retour du client
+                    // sur la 0.2.0-test) : elle ne se confond plus avec les
+                    // onglets. Les onglets défilent si la fenêtre est très
+                    // basse, la version reste visible.
+                    trailingAtBottom: true,
+                    scrollable: true,
+                    trailing: Padding(
+                      padding: const EdgeInsets.only(bottom: espacementMoyen),
+                      child: version,
+                    ),
+                    destinations: <NavigationRailDestination>[
+                      for (var i = 0; i < _onglets.length; i++)
+                        NavigationRailDestination(
+                          icon: _icone(
+                            i,
+                            _onglets[i].icone,
+                            nombreActifs,
+                            nouveautes,
+                          ),
+                          selectedIcon: _icone(
+                            i,
+                            _onglets[i].iconeChoisie,
+                            nombreActifs,
+                            nouveautes,
+                          ),
+                          label: Text(_onglets[i].libelle),
+                        ),
+                    ],
                   ),
-                  destinations: <NavigationRailDestination>[
-                    for (var i = 0; i < _onglets.length; i++)
-                      NavigationRailDestination(
-                        icon: _icone(
-                          i,
-                          _onglets[i].icone,
-                          nombreActifs,
-                          nouveautes,
-                        ),
-                        selectedIcon: _icone(
-                          i,
-                          _onglets[i].iconeChoisie,
-                          nombreActifs,
-                          nouveautes,
-                        ),
-                        label: Text(_onglets[i].libelle),
-                      ),
-                  ],
+                  const VerticalDivider(width: 1, thickness: 1),
+                ],
+                Expanded(
+                  child: IndexedStack(
+                    key: _cleContenu,
+                    index: _indexOnglet,
+                    children: const <Widget>[
+                      EcranBibliotheque(),
+                      EcranMisesAJour(),
+                      EcranSources(),
+                      EcranTelechargements(),
+                      EcranParametres(),
+                    ],
+                  ),
                 ),
-                const VerticalDivider(width: 1, thickness: 1),
               ],
-              Expanded(
-                child: IndexedStack(
-                  key: _cleContenu,
-                  index: _indexOnglet,
-                  children: const <Widget>[
-                    EcranBibliotheque(),
-                    EcranMisesAJour(),
-                    EcranSources(),
-                    EcranTelechargements(),
-                    EcranParametres(),
-                  ],
-                ),
-              ),
-            ],
+            ),
           ),
           bottomNavigationBar: estLarge
               ? null
