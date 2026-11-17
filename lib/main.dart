@@ -99,7 +99,11 @@ class ServicesApplication {
     required this.serviceExport,
     required this.serviceImport,
     required this.serviceCategories,
+    required this.serviceDossierChapitres,
   });
+
+  /// Dossier des chapitres (choix, déplacement, accès au NAS).
+  final ServiceDossierChapitres serviceDossierChapitres;
 
   /// Catégories regroupées (groupes, suggestions, filtres).
   final ServiceCategories serviceCategories;
@@ -155,7 +159,10 @@ ServicesApplication assemblerServices(
   Database base, {
   ClientHttpPoli? client,
   required StockageTelechargements stockage,
+  String? dossierApplication,
 }) {
+  // Rapports et exports : dossier de l'application, jamais le NAS.
+  final racineApplication = dossierApplication ?? stockage.dossierRacine;
   // Un seul client HTTP par isolat : le délai minimal entre deux requêtes
   // vers un même domaine est ainsi partagé par tous les services
   // (PLAYBOOK.md section 6).
@@ -209,6 +216,8 @@ ServicesApplication assemblerServices(
     client: clientUtilise,
     serviceParametres: serviceParametres,
     depotTitresSources: depotTitresSources,
+    // Repère « déplacement des archives inachevé », contrôlé au démarrage.
+    depotParametres: DepotParametres(base),
   );
   return ServicesApplication(
     base: base,
@@ -218,23 +227,20 @@ ServicesApplication assemblerServices(
     serviceMisesAJour: serviceMisesAJour,
     serviceParametres: serviceParametres,
     serviceTelechargement: serviceTelechargement,
-    // Rapports d'erreur à côté des archives :
-    // `<dossier racine>/rapports/` (par défaut
+    // Rapports d'erreur : `<dossier de l'application>/rapports/` (par défaut
     // `Documents/bibliotheque_perso/rapports/`).
     serviceRapportsErreur: ServiceRapportsErreur(
-      chemins.join(stockage.dossierRacine, nomDossierRapports),
+      chemins.join(racineApplication, nomDossierRapports),
       versionApplication: versionApplication,
     ),
-    // Exports à côté des rapports : `<dossier racine>/exports/`.
+    // Exports à côté des rapports : `<dossier de l'application>/exports/`.
     serviceExport: ServiceExport(
       depotSources: depotSources,
       depotTitres: depotTitres,
       depotChapitres: depotChapitres,
       depotListes: depotListes,
       depotCategories: DepotCategories(base),
-      dossierExports: ServiceExport.cheminDossierExports(
-        stockage.dossierRacine,
-      ),
+      dossierExports: ServiceExport.cheminDossierExports(racineApplication),
       serviceParametres: serviceParametres,
       versionApplication: versionApplication,
       depotTitresSources: depotTitresSources,
@@ -255,6 +261,11 @@ ServicesApplication assemblerServices(
     ),
     // Catégories regroupées et filtres de la bibliothèque.
     serviceCategories: ServiceCategories.surBase(base),
+    // Dossier des chapitres (Paramètres) et bandeau « dossier inaccessible ».
+    serviceDossierChapitres: ServiceDossierChapitres(
+      serviceTelechargement: serviceTelechargement,
+      depotParametres: DepotParametres(base),
+    ),
   );
 }
 
@@ -277,10 +288,16 @@ Future<ServicesApplication> construireServices({
     fabrique: fabrique,
     annulerTransactionOuverte: annulerTransactionOuverte,
   );
+  // Dossier de l'application (rapports, exports) : toujours le dossier par
+  // défaut, même quand les chapitres sont sur un NAS (accessibles NAS éteint).
+  final String dossierApplication;
   final StockageTelechargements stockage;
   try {
+    dossierApplication =
+        dossierTelechargements ?? await cheminParDefautDossierTelechargements();
+    // Chapitres : dossier choisi par le client (Paramètres), sinon défaut.
     stockage = dossierTelechargements == null
-        ? await StockageTelechargements.parDefaut()
+        ? await ServiceDossierChapitres.creerStockage(DepotParametres(base))
         : StockageTelechargements(dossierTelechargements);
   } catch (_) {
     // Sans dossier de téléchargement, l'application ne démarre pas : on ne
@@ -298,7 +315,12 @@ Future<ServicesApplication> construireServices({
     depotSources: DepotSources(base),
     serviceParametres: ServiceParametres(DepotParametres(base)),
   ).assurerSourcesParDefaut();
-  return assemblerServices(base, client: client, stockage: stockage);
+  return assemblerServices(
+    base,
+    client: client,
+    stockage: stockage,
+    dossierApplication: dossierApplication,
+  );
 }
 
 /// Point d'entrée de la tâche de fond Android, appelé par `workmanager`.
