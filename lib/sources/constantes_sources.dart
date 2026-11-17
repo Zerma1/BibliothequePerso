@@ -31,18 +31,45 @@ const int codeHttpTropDeRequetes = 429;
 /// Longueur maximale d'un extrait de corps de réponse cité dans une erreur.
 const int longueurMaxExtraitReponse = 300;
 
-/// User-Agent d'un navigateur courant, envoyé par défaut (PLAYBOOK.md
-/// section 6) aux sites qui refusent les clients non navigateurs.
-const String userAgentNavigateur =
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-    '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-
-/// User-Agent honnête de l'application, utilisé pour l'API MangaDex.
+/// User-Agent honnête de l'application, envoyé par défaut à **tous** les
+/// sites (tâche T1 du 2026-11-17).
 ///
-/// La documentation MangaDex (https://api.mangadex.org/docs/2-limitations/)
-/// exige : « The request MUST have a User-Agent header, and it must not be
-/// spoofed ». On n'y envoie donc pas le User-Agent d'un navigateur.
+/// Auparavant, les sites autres que MangaDex recevaient le User-Agent d'un
+/// navigateur. Or un client qui annonce un navigateur sans en avoir le
+/// comportement (pas de JavaScript, empreinte réseau différente) est repéré
+/// par les protections anti-robot (Cloudflare : page « Just a moment… » chez
+/// le client sur Scan-Manga). La documentation MangaDex
+/// (https://api.mangadex.org/docs/2-limitations/) exige de toute façon :
+/// « The request MUST have a User-Agent header, and it must not be
+/// spoofed ».
 const String userAgentApplication = 'BibliothequePerso/0.1 (usage personnel)';
+
+/// Codes HTTP par lesquels une protection anti-robot (Cloudflare…) sert sa
+/// page de défi : 403 (accès refusé), 503 (« vérification en cours ») et 429
+/// (trop de requêtes).
+const Set<int> codesHttpDefiAntiRobot = <int>{403, 429, 503};
+
+/// Marqueurs du corps d'une page de défi anti-robot (comparés en
+/// minuscules) : titre « Just a moment... » de Cloudflare, dossier de ses
+/// scripts de défi (`/cdn-cgi/challenge-platform/`) et préfixe de ses
+/// paramètres (`cf-chl`, `__cf_chl_opt`).
+const List<String> marqueursDefiAntiRobot = <String>[
+  'just a moment',
+  'challenge-platform',
+  'cf-chl',
+  'cf_chl',
+];
+
+/// Titres de page d'un défi anti-robot servi en 200 (comparés en
+/// minuscules). Une page normale peut contenir `challenge-platform` (script
+/// de détection injecté par Cloudflare sur les pages ordinaires, vu sur
+/// Scan-Manga) : une réponse 200 n'est prise pour un défi que si son titre
+/// en est aussi un.
+const List<String> titresDefiAntiRobot = <String>[
+  'just a moment',
+  'attention required',
+  'un instant',
+];
 
 /// Domaine du site public MangaDex (URLs des titres et des chapitres).
 const String domaineMangaDex = 'mangadex.org';
@@ -126,6 +153,25 @@ const int nombreMaxPagesChapitresMadara = 50;
 /// 405 Method Not Allowed) : `SourceMadara` passe alors à l'ancien appel
 /// `admin-ajax.php`.
 const Set<int> codesHttpSansAjaxChapitresMadara = <int>{400, 404, 405};
+
+/// Durée pendant laquelle `SourceGenerique` réutilise une page qu'il vient
+/// de télécharger : la fiche et la liste des chapitres viennent de la même
+/// page, et une adresse de chapitre collée est résolue une seule fois.
+const Duration dureeCachePageGenerique = Duration(minutes: 1);
+
+/// Nombre minimal d'images d'un même conteneur pour que `SourceGenerique`
+/// y voie la zone de lecture d'un chapitre : en dessous, il s'agit plutôt
+/// d'un logo, d'une bannière ou d'un bouton de dons.
+const int nombreMinImagesChapitreGenerique = 3;
+
+/// Nombre maximal de pages essayées par `SourceGenerique` pour remonter
+/// d'une adresse de chapitre à la page qui liste les chapitres (une requête
+/// chacune, 1 s entre deux).
+const int nombreMaxCandidatsPageListe = 3;
+
+/// Longueur minimale (en caractères) d'un bloc de texte pour être pris pour
+/// le résumé d'un titre par `SourceGenerique`.
+const int longueurMinResumeGenerique = 40;
 
 /// Texte dont la présence dans l'URL de base désigne un serveur MangaDex
 /// (docs/04-chapter/retrieving-chapter : signaler chaque image chargée

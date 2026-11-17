@@ -29,23 +29,23 @@ void main() {
   }
 
   group('En-têtes', () {
-    test(
-      'envoie le User-Agent navigateur par défaut et le Referer demandé',
-      () async {
-        final client = clientAvecReponses(<http.Response>[
-          http.Response('ok', 200),
-        ]);
-        await client.recupererOctets(
-          Uri.parse('https://exemple.org/image.jpg'),
-          referer: 'https://exemple.org/chapitre-1',
-        );
-        expect(requetes.single.headers['user-agent'], userAgentNavigateur);
-        expect(
-          requetes.single.headers['referer'],
-          'https://exemple.org/chapitre-1',
-        );
-      },
-    );
+    test("envoie le User-Agent honnête de l'application par défaut et le "
+        'Referer demandé', () async {
+      final client = clientAvecReponses(<http.Response>[
+        http.Response('ok', 200),
+      ]);
+      await client.recupererOctets(
+        Uri.parse('https://exemple.org/image.jpg'),
+        referer: 'https://exemple.org/chapitre-1',
+      );
+      expect(requetes.single.headers['user-agent'], userAgentApplication);
+      expect(client.userAgentParDefaut, userAgentApplication);
+      expect(requetes.single.headers['user-agent'], isNot(contains('Mozilla')));
+      expect(
+        requetes.single.headers['referer'],
+        'https://exemple.org/chapitre-1',
+      );
+    });
 
     test(
       'le User-Agent peut être remplacé et le Referer est absent par défaut',
@@ -55,9 +55,9 @@ void main() {
         ]);
         await client.recupererTexte(
           Uri.parse('https://exemple.org/'),
-          userAgent: userAgentApplication,
+          userAgent: 'AutreClient/1.0',
         );
-        expect(requetes.single.headers['user-agent'], userAgentApplication);
+        expect(requetes.single.headers['user-agent'], 'AutreClient/1.0');
         expect(requetes.single.headers.containsKey('referer'), isFalse);
       },
     );

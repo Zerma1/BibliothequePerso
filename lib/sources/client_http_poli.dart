@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 
 import 'constantes_sources.dart';
 import 'erreur_source.dart';
+import 'protection_anti_robot.dart';
 import 'rapport_erreur_source.dart';
 
 /// Fonction qui donne l'heure courante (remplaçable dans les tests).
@@ -65,8 +66,12 @@ class ReponseOctets {
 /// Client HTTP qui respecte la charge des sites lus.
 ///
 /// Il applique les règles de PLAYBOOK.md section 6 :
-/// - en-tête `User-Agent` (navigateur courant par défaut, remplaçable par
-///   requête : l'API MangaDex interdit un User-Agent usurpé) ;
+/// - en-tête `User-Agent` honnête de l'application par défaut, pour tous les
+///   sites ([userAgentApplication], tâche T1 : un faux User-Agent de
+///   navigateur est repéré par les protections anti-robot) ;
+/// - page de défi anti-robot (403/429/503 « Just a moment… ») reconnue et
+///   signalée par une [ErreurSource] dont `protectionAntiRobot` vaut `true`,
+///   sans nouvelle tentative ni contournement ;
 /// - en-tête `Referer` optionnel, que beaucoup de sites exigent pour les
 ///   images ;
 /// - au moins [delaiParDomaine] entre le début de deux requêtes vers un même
@@ -83,7 +88,7 @@ class ClientHttpPoli {
   /// et [attendre] permettent de simuler le temps.
   ClientHttpPoli({
     http.Client? client,
-    this.userAgentParDefaut = userAgentNavigateur,
+    this.userAgentParDefaut = userAgentApplication,
     this.delaiParDomaine = delaiMinimalParDomaine,
     this.delaiExpiration = delaiExpirationRequete,
     this.nombreNouvellesTentatives = nombreMaxNouvellesTentatives,
@@ -122,7 +127,8 @@ class ClientHttpPoli {
   /// décode en UTF-8 (le défaut de `package:http` est latin-1, ce qui abîme
   /// les pages UTF-8 qui ne déclarent pas leur encodage).
   ///
-  /// Lève une [ErreurSource] en cas d'échec.
+  /// Lève une [ErreurSource] en cas d'échec, avec `protectionAntiRobot` à
+  /// `true` si la page reçue (même en 200) est un défi anti-robot.
   Future<String> recupererTexte(
     Uri uri, {
     String? referer,
@@ -138,8 +144,9 @@ class ClientHttpPoli {
       limite: limite,
       nouvellesTentatives: nombreNouvellesTentatives,
     );
+    final String texte;
     try {
-      return _decoderTexte(reponse);
+      texte = _decoderTexte(reponse);
     } on FormatException catch (erreur) {
       throw ErreurSource(
         uri.toString(),
@@ -148,6 +155,18 @@ class ClientHttpPoli {
         codeStatut: reponse.statusCode,
       );
     }
+    // Certains défis sont servis en 200 (après une redirection suivie par
+    // `package:http`) : sans ce contrôle, l'adaptateur analyserait la page
+    // de défi et signalerait une « structure inattendue » trompeuse.
+    if (estPageDefiAntiRobot(texte)) {
+      throw erreurProtectionAntiRobot(
+        uri,
+        codeStatut: reponse.statusCode,
+        octetsRecus: reponse.bodyBytes.length,
+        extraitReponse: _extrait(reponse),
+      );
+    }
+    return texte;
   }
 
   /// Récupère [uri] et renvoie le corps brut (images…).
@@ -432,6 +451,23 @@ class ClientHttpPoli {
         // afficher l'adresse IP ou un jeton) : il est cité dans le message
         // affiché et gardé à part pour le rapport d'erreur exportable.
         final extrait = _extrait(reponse);
+        // Page de défi anti-robot : réessayer ne servirait à rien (la même
+        // requête reçoit le même défi) et insister ressemblerait à une
+        // attaque. On s'arrête tout de suite avec une erreur dédiée ;
+        // aucune tentative de résoudre le défi (PLAYBOOK.md section 10).
+        if (estReponseDefiAntiRobot(
+          codeStatut: code,
+          enTetes: reponse.headers,
+          corps: utf8.decode(reponse.bodyBytes, allowMalformed: true),
+        )) {
+          throw erreurProtectionAntiRobot(
+            uri,
+            codeStatut: code,
+            octetsRecus: reponse.bodyBytes.length,
+            duree: chrono.elapsed,
+            extraitReponse: extrait,
+          );
+        }
         derniereErreur = ErreurSource(
           url,
           'Réponse HTTP $code : $extrait',

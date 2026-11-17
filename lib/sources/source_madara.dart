@@ -768,7 +768,7 @@ class SourceMadara implements SourceSite {
         maintenant.difference(page.date) < dureeCachePageWordPress) {
       return page.html;
     }
-    // User-Agent par défaut de ClientHttpPoli (navigateur courant).
+    // User-Agent par défaut de ClientHttpPoli (honnête, de l'application).
     final html = await _client.recupererTexte(uri);
     _dernierePage = (url: url, html: html, date: maintenant);
     return html;

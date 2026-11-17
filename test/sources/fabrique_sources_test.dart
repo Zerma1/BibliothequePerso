@@ -1,6 +1,7 @@
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/sources/fabrique_sources.dart';
+import 'package:bibliotheque_perso/sources/source_generique.dart';
 import 'package:bibliotheque_perso/sources/source_madara.dart';
 import 'package:bibliotheque_perso/sources/source_mangadex.dart';
 import 'package:bibliotheque_perso/sources/source_mangathemesia.dart';
@@ -126,20 +127,45 @@ void main() {
     );
   });
 
-  test('le type générique (sans adaptateur) lève une ErreurSource', () {
-    for (final type in <TypeSource>[TypeSource.generique]) {
-      expect(
-        () => fabrique.creer(
-          Source(nom: 'Site', urlBase: 'https://exemple.org', typeSource: type),
+  test('le type générique donne un SourceGenerique (réglages lus)', () {
+    final sansReglage = fabrique.creer(
+      const Source(
+        nom: 'Ruri',
+        urlBase: 'https://ruri-dragon.online',
+        typeSource: TypeSource.generique,
+      ),
+    );
+    expect(sansReglage, isA<SourceGenerique>());
+    expect((sansReglage as SourceGenerique).configuration.estVide, isTrue);
+    final avecReglage = fabrique.creer(
+      const Source(
+        nom: 'Site',
+        urlBase: 'https://exemple.org',
+        typeSource: TypeSource.generique,
+        configurationSelecteurs: '{"selecteurTitre": "h2.nom"}',
+      ),
+    ) as SourceGenerique;
+    expect(avecReglage.configuration.selecteurTitre, 'h2.nom');
+    expect(avecReglage.urlBase, 'https://exemple.org');
+  });
+
+  test('réglages génériques illisibles : ErreurSource typée', () {
+    expect(
+      () => fabrique.creer(
+        const Source(
+          nom: 'Site',
+          urlBase: 'https://exemple.org',
+          typeSource: TypeSource.generique,
+          configurationSelecteurs: '{pas du json',
         ),
-        throwsA(
-          isA<ErreurSource>()
-              .having((e) => e.url, 'url', 'https://exemple.org')
-              // Le type est gardé pour le rapport d'erreur exportable.
-              .having((e) => e.typeDetecte, 'typeDetecte', type),
-        ),
-      );
-    }
+      ),
+      throwsA(
+        isA<ErreurSource>()
+            .having((e) => e.url, 'url', 'https://exemple.org')
+            // Le type est gardé pour le rapport d'erreur exportable.
+            .having((e) => e.typeDetecte, 'typeDetecte', TypeSource.generique),
+      ),
+    );
   });
 
   test('niveaux de contenu de la recherche transmis à SourceMangaDex', () {
