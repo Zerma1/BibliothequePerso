@@ -6,6 +6,32 @@
 > restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
 > chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
 
+## 0.2.2-test — en préparation sur `dev` (publiée après le retour sur la 0.2.1-test)
+
+Nouveau :
+- **Catégories regroupées** (Paramètres → « Catégories regroupées ») : « Survival » et
+  « Survie » ne font plus qu'une catégorie dans les filtres et sur la fiche ; suggestions
+  automatiques (dictionnaire anglais → français) à valider une par une. Exportées et importées.
+- **Dossier des chapitres au choix** (Paramètres → « Dossier des chapitres ») : disque local,
+  lecteur réseau ou NAS (`\\nas\partage\…`). Déplacement des chapitres déjà téléchargés avec
+  barre de progression ; aucun fichier existant n'est jamais écrasé (conflits signalés et
+  chapitres retéléchargés sous un autre nom). Pris en compte au redémarrage. Si le NAS ne
+  répond pas : bandeau en haut, téléchargements en attente, aucun chapitre perdu. Rapports
+  d'erreur et exports restent sur l'appareil.
+- **Réglages avancés (sélecteurs CSS)** modifiables et effaçables dans « Modifier le site »,
+  vérifiés avant l'enregistrement.
+- Document `docs/CRITERES_LECTURE_SITES.md` : quand un site est lisible, et pourquoi pas.
+
+Changé :
+- Badge « Nouveau » pendant **30 jours** (décision du client).
+- Import d'un export **tout ou rien** (rien n'est écrit s'il échoue) ; les chapitres d'un titre
+  importé ne sont plus annoncés comme nouveaux.
+- Langues : variantes régionales acceptées (`pt-br`…), la langue exacte passe avant la variante.
+- Messages d'erreur affichés 10 s, avec une croix pour les fermer.
+
+Corrigé :
+- Une section pliable des Paramètres en erreur pouvait faire planter l'écran.
+
 ## 0.2.1-test — version de test (2026-11-17)
 
 Suite aux retours sur la 0.2.0-test.

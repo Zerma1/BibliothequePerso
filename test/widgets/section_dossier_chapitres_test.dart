@@ -250,8 +250,8 @@ void main() {
     await afficher(tester);
 
     expect(find.text(Textes.deplacementInacheve(r'Z:\Mangas')), findsOneWidget);
-    // Nouveau changement impossible tant que ce déplacement est en suspens.
-    expect(tester.widget<ButtonStyleButton>(boutonChanger()).enabled, isFalse);
+    // Changer pour un autre dossier reste possible (après avertissement).
+    expect(tester.widget<ButtonStyleButton>(boutonChanger()).enabled, isTrue);
 
     await tester.tap(find.text(Textes.terminerDeplacement));
     await tester.pumpAndSettle();
@@ -324,11 +324,42 @@ void main() {
     expect(find.textContaining("restés dans l'ancien dossier"), findsNothing);
   });
 
+  testWidgets('de bout en bout : déplacement inachevé, « Changer de dossier » '
+      'actif, avertissement puis changement', (tester) async {
+    service.deplacementInacheve = r'Y:\Ancien';
+    await afficher(tester);
+
+    expect(find.text(Textes.deplacementInacheve(r'Y:\Ancien')), findsOneWidget);
+    expect(tester.widget<ButtonStyleButton>(boutonChanger()).enabled, isTrue);
+
+    await ouvrirDialogue(tester);
+    await tester.tap(find.byType(CheckboxListTile));
+    await tester.pump();
+    await tester.enterText(find.byType(TextField), r'Z:\Mangas');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, Textes.changer));
+    await tester.pumpAndSettle();
+
+    expect(find.text(Textes.avantChangementDossier), findsOneWidget);
+    expect(find.textContaining(r'Y:\Ancien'), findsWidgets);
+    expect(service.demandes, isEmpty);
+
+    await tester.tap(find.text(Textes.changerQuandMeme));
+    await tester.pumpAndSettle();
+
+    expect(service.demandes.single, (dossier: r'Z:\Mangas', deplacer: false));
+    expect(find.text(Textes.dossierChange), findsOneWidget);
+    await tester.tap(find.text(Textes.fermer));
+    await tester.pumpAndSettle();
+
+    // Après un changement réussi, le bouton est désactivé pour la session.
+    expect(tester.widget<ButtonStyleButton>(boutonChanger()).enabled, isFalse);
+  });
+
   group('avertissement avant changement', () {
     late EtatDossierChapitres etat;
 
-    // Le bouton de la section est désactivé tant qu'un déplacement est
-    // inachevé : le dialogue est affiché seul pour ce cas.
+    // Dialogue affiché seul : cas de l'avertissement testés en détail.
     Future<void> afficherDialogue(WidgetTester tester) async {
       etat = EtatDossierChapitres(service);
       addTearDown(etat.dispose);

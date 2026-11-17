@@ -175,9 +175,10 @@ class SectionDossierChapitres extends StatelessWidget {
         Align(
           alignment: Alignment.centerRight,
           child: FilledButton.tonalIcon(
-            // Un seul changement par session ; un déplacement inachevé doit
-            // être terminé ou abandonné avant d'en commencer un autre.
-            onPressed: occupe || etat.redemarrageNecessaire || inacheve != null
+            // Un seul changement par session. Pendant un déplacement
+            // inachevé, le bouton reste actif : le client peut choisir un
+            // autre dossier, après l'avertissement du service.
+            onPressed: occupe || etat.redemarrageNecessaire
                 ? null
                 : () => ouvrirChangementDossier(context, etat),
             icon: const Icon(Icons.drive_file_move_outlined),
