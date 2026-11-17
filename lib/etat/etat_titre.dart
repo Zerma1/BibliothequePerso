@@ -15,6 +15,7 @@ import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
 import '../services/classement_listes.dart';
 import '../services/service_bibliotheque.dart';
+import '../services/service_categories.dart';
 import '../services/service_telechargement.dart';
 import 'constantes_etat.dart';
 import 'description_erreur.dart';
@@ -63,10 +64,15 @@ class EtatTitre extends EtatNotifiant {
   ///
   /// [maintenant] permet aux tests de fixer l'heure du compte à rebours des
   /// suppressions prévues.
+  ///
+  /// Avec [serviceCategories], la fiche montre les catégories ramenées à
+  /// leur groupe, sans doublon de même sens (« survie » seulement, pas
+  /// aussi « survival ») ; sans lui, les catégories telles qu'enregistrées.
   EtatTitre(
     this._service,
     this.idTitre, {
     ServiceTelechargement? serviceTelechargement,
+    this._serviceCategories,
     DateTime Function()? maintenant,
   }) : _serviceTelechargement = serviceTelechargement,
        _maintenant = maintenant ?? (() => DateTime.now().toUtc()) {
@@ -79,6 +85,7 @@ class EtatTitre extends EtatNotifiant {
 
   final ServiceBibliotheque _service;
   final ServiceTelechargement? _serviceTelechargement;
+  final ServiceCategories? _serviceCategories;
   final DateTime Function() _maintenant;
   StreamSubscription<void>? _abonnement;
 
@@ -1005,7 +1012,10 @@ class EtatTitre extends EtatNotifiant {
     final source = idSource == null
         ? null
         : await _service.chargerSource(idSource);
-    final categories = await _service.chargerCategoriesDuTitre(idTitre);
+    final serviceCategories = _serviceCategories;
+    final categories = serviceCategories == null
+        ? await _service.chargerCategoriesDuTitre(idTitre)
+        : await serviceCategories.chargerCategoriesEffectivesDuTitre(idTitre);
     final listes = await _service.chargerListes();
     final listesDuTitre = await _service.chargerListesDuTitre(idTitre);
     final chapitres = await _service.chargerChapitres(idTitre);

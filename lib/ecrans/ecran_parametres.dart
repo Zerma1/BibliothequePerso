@@ -15,6 +15,7 @@ import '../widgets/constantes_interface.dart';
 import '../widgets/dialogue_import.dart';
 import '../widgets/editeur_langues.dart';
 import '../widgets/messages.dart';
+import '../widgets/section_categories_regroupees.dart';
 import '../widgets/section_pliable.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
@@ -48,6 +49,8 @@ class EcranParametres extends StatelessWidget {
               _SectionMisesAJour(),
               _SectionTelechargements(),
               _SectionSites(),
+              // Après les sites : les catégories viennent d'eux.
+              SectionCategoriesRegroupees(),
               _SectionExport(),
               _SectionAPropos(),
             ],

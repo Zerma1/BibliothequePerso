@@ -1756,6 +1756,119 @@ abstract final class Textes {
   // Libellés des réglages et messages d'erreur : fournis par le service
   // (`ServiceAjoutSite.libellesReglagesGeneriques`), via `EtatSources`.
 
+  // ------------------------------------------------ Catégories regroupées
+
+  /// Autres noms d'un groupe (info-bulle d'une puce du filtre).
+  static String aussiAppelee(String autres) => 'Aussi appelée : $autres';
+
+  /// Titre de la section des Paramètres.
+  static const String sectionCategoriesRegroupees = 'Catégories regroupées';
+
+  /// Résumé de la section repliée.
+  static String resumeCategoriesRegroupees(int groupes, int suggestions) {
+    final debut = groupes == 0
+        ? 'Aucun groupe'
+        : (groupes == 1 ? '1 groupe' : '$groupes groupes');
+    if (suggestions == 0) return debut;
+    return suggestions == 1
+        ? '$debut, 1 suggestion'
+        : '$debut, $suggestions suggestions';
+  }
+
+  /// Explication en tête de la section.
+  static const String explicationCategoriesRegroupees =
+      'Les sites donnent parfois la même catégorie sous plusieurs noms '
+      '(« Survival », « Survie »). Regroupées, elles ne forment plus qu\'une '
+      'catégorie dans les filtres et sur les fiches, au nom de la référence. '
+      'Les catégories données par les sites ne sont pas modifiées.';
+
+  /// Intertitre : groupes existants.
+  static const String intertitreGroupes = 'Groupes';
+
+  /// Aucun groupe.
+  static const String aucunGroupe = 'Aucun groupe pour l\'instant.';
+
+  /// Libellé de la référence d'un groupe.
+  static const String referenceDuGroupe = 'Référence';
+
+  /// Catégories rattachées à la référence.
+  static String rattacheesAuGroupe(String noms) => 'Regroupe : $noms';
+
+  /// Info-bulle : retirer une catégorie de son groupe.
+  static String detacherCategorie(String nom) => 'Retirer « $nom » du groupe';
+
+  /// Bouton : défaire un groupe.
+  static const String defaireGroupe = 'Défaire le groupe';
+
+  /// Confirmation avant de défaire un groupe.
+  static String confirmationDefaireGroupe(String reference) =>
+      'Les catégories du groupe « $reference » redeviendront séparées dans '
+      'les filtres et sur les fiches.';
+
+  /// Bouton de confirmation : défaire.
+  static const String defaire = 'Défaire';
+
+  /// Message après le retrait d'une catégorie.
+  static String categorieDetachee(String nom) =>
+      '« $nom » ne fait plus partie du groupe.';
+
+  /// Message après la dissolution d'un groupe.
+  static String groupeDefait(String reference) =>
+      'Groupe « $reference » défait.';
+
+  /// Bouton et titre du dialogue de regroupement manuel.
+  static const String regrouperDesCategories = 'Regrouper des catégories';
+
+  /// Il faut au moins deux catégories pour regrouper.
+  static const String pasAssezDeCategories =
+      'Il faut au moins deux catégories pour en regrouper.';
+
+  /// Première étape du dialogue : choix de la référence.
+  static const String choisirReference =
+      '1. Choisissez la catégorie de référence : son nom représentera le '
+      'groupe.';
+
+  /// Deuxième étape du dialogue : catégories à rattacher.
+  static String choisirARattacher(String reference) =>
+      '2. Cochez les catégories de même sens à rattacher à « $reference ».';
+
+  /// Bouton : revenir au choix de la référence.
+  static const String changerReference = 'Changer de référence';
+
+  /// Catégorie déjà dans un autre groupe (elle en changera).
+  static String dansLeGroupe(String reference) =>
+      'Actuellement dans le groupe « $reference »';
+
+  /// Bouton de validation du regroupement manuel.
+  static String regrouperNombre(int nombre) => 'Regrouper ($nombre)';
+
+  /// Message après un regroupement.
+  static String categoriesRegroupees(String reference, int nombre) =>
+      nombre <= 1
+      ? '1 catégorie rattachée à « $reference ».'
+      : '$nombre catégories rattachées à « $reference ».';
+
+  /// Intertitre : suggestions.
+  static const String intertitreSuggestions = 'Suggestions';
+
+  /// Explication des suggestions.
+  static const String explicationSuggestions =
+      'Catégories qui semblent avoir le même sens (traduction ou écriture '
+      'proche). Rien n\'est regroupé sans votre accord.';
+
+  /// Aucune suggestion.
+  static const String aucuneSuggestion = 'Aucune suggestion pour l\'instant.';
+
+  /// Une suggestion : catégories à rattacher à la référence.
+  static String suggestion(String reference, String autres) =>
+      'Rattacher $autres à « $reference »';
+
+  /// Bouton : appliquer une suggestion.
+  static const String regrouper = 'Regrouper';
+
+  /// Bouton : écarter une suggestion pour la session.
+  static const String ignorer = 'Ignorer';
+
   // ------------------------------------------------------------- Formatage
 
   /// Date au format français `jj/mm/aaaa`, en heure locale.

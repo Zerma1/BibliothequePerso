@@ -25,6 +25,8 @@ import 'package:bibliotheque_perso/main.dart';
 import 'package:bibliotheque_perso/modeles/categorie.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
+import 'package:bibliotheque_perso/modeles/equivalence_categorie.dart';
+import 'package:bibliotheque_perso/modeles/groupe_categories.dart';
 import 'package:bibliotheque_perso/modeles/lien_titre_source.dart';
 import 'package:bibliotheque_perso/modeles/liste_lecture.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
@@ -35,6 +37,7 @@ import 'package:bibliotheque_perso/services/planification_mises_a_jour.dart';
 import 'package:bibliotheque_perso/services/politique_telechargement.dart';
 import 'package:bibliotheque_perso/services/service_ajout_site.dart';
 import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
+import 'package:bibliotheque_perso/services/service_categories.dart';
 import 'package:bibliotheque_perso/services/service_export.dart';
 import 'package:bibliotheque_perso/services/service_import.dart';
 import 'package:bibliotheque_perso/services/service_mises_a_jour.dart';
@@ -1796,6 +1799,244 @@ class FauxServiceImport implements ServiceImport {
   }) => importerFichier('<texte>');
 }
 
+/// Faux `ServiceCategories` en mémoire, branché sur les catégories et les
+/// titres d'un [FauxServiceBibliotheque] : groupes (catégorie → référence),
+/// filtres par groupe et suggestions calculées comme le vrai service.
+class FauxServiceCategories implements ServiceCategories {
+  /// Crée le faux service sur [bibliotheque].
+  FauxServiceCategories(this.bibliotheque);
+
+  /// Faux service de la bibliothèque (catégories et titres).
+  final FauxServiceBibliotheque bibliotheque;
+
+  /// Rattachements : identifiant de catégorie → identifiant de référence.
+  final Map<int, int> equivalences = <int, int>{};
+
+  /// Erreur levée par toutes les lectures, si définie.
+  Object? erreurLecture;
+
+  /// Erreur levée par toutes les écritures, si définie.
+  Object? erreurEcriture;
+
+  /// Nombre d'appels à [chargerTitresFiltres].
+  int nombreLecturesTitres = 0;
+
+  /// Derniers filtres reçus par [chargerTitresFiltres].
+  ({Set<int> incluses, Set<int> exclues})? derniersFiltres;
+
+  /// Journal des écritures (« regrouper:1:2,3 », « detacher:2 »…).
+  final List<String> journal = <String>[];
+
+  void _lire() {
+    final erreur = erreurLecture;
+    if (erreur != null) throw erreur;
+  }
+
+  void _ecrire() {
+    final erreur = erreurEcriture;
+    if (erreur != null) throw erreur;
+  }
+
+  int _effective(int idCategorie) => equivalences[idCategorie] ?? idCategorie;
+
+  Categorie? _parId(int id) =>
+      bibliotheque.categories.where((c) => c.id == id).firstOrNull;
+
+  List<Categorie> _triees(Iterable<Categorie> categories) =>
+      categories.toList()..sort((a, b) => a.nom.compareTo(b.nom));
+
+  /// Ajoute un groupe de test (sans contrôle).
+  void regrouperDeTest(int idReference, List<int> idsCategories) {
+    for (final id in idsCategories) {
+      equivalences[id] = idReference;
+    }
+  }
+
+  @override
+  Future<List<Titre>> chargerTitresFiltres({
+    String? recherche,
+    int? idListe,
+    Set<int> idsCategoriesIncluses = const <int>{},
+    Set<int> idsCategoriesExclues = const <int>{},
+    List<String>? niveauxContenu,
+    bool inclureNiveauInconnu = true,
+  }) async {
+    _lire();
+    nombreLecturesTitres++;
+    derniersFiltres = (
+      incluses: Set<int>.of(idsCategoriesIncluses),
+      exclues: Set<int>.of(idsCategoriesExclues),
+    );
+    final titres = await bibliotheque.chargerTitres(
+      recherche: recherche,
+      idListe: idListe,
+      niveauxContenu: niveauxContenu,
+      inclureNiveauInconnu: inclureNiveauInconnu,
+    );
+    final incluses = idsCategoriesIncluses.map(_effective).toSet();
+    final exclues = idsCategoriesExclues.map(_effective).toSet();
+    return <Titre>[
+      for (final titre in titres)
+        if (() {
+          final groupes = <int>{
+            for (final categorie
+                in bibliotheque.categoriesParTitre[titre.id] ??
+                    const <Categorie>[])
+              if (categorie.id != null) _effective(categorie.id!),
+          };
+          return incluses.every(groupes.contains) &&
+              !exclues.any(groupes.contains);
+        }())
+          titre,
+    ];
+  }
+
+  @override
+  Future<List<Categorie>> chargerCategories() async {
+    _lire();
+    return _triees(bibliotheque.categories);
+  }
+
+  @override
+  Future<List<GroupeCategories>> chargerGroupes() async {
+    _lire();
+    final parReference = <int, List<Categorie>>{};
+    for (final MapEntry(key: id, value: idReference) in equivalences.entries) {
+      final categorie = _parId(id);
+      if (categorie != null) {
+        (parReference[idReference] ??= <Categorie>[]).add(categorie);
+      }
+    }
+    final groupes = <GroupeCategories>[
+      for (final MapEntry(key: idReference, value: rattachees)
+          in parReference.entries)
+        if (_parId(idReference) case final reference?)
+          GroupeCategories(
+            reference: reference,
+            rattachees: _triees(rattachees),
+          ),
+    ]..sort((a, b) => a.reference.nom.compareTo(b.reference.nom));
+    return groupes;
+  }
+
+  @override
+  Future<List<Categorie>> chargerCategoriesEffectives() async {
+    _lire();
+    return _triees(
+      bibliotheque.categories.where((c) => !equivalences.containsKey(c.id)),
+    );
+  }
+
+  @override
+  Future<List<Categorie>> chargerCategoriesEffectivesDuTitre(
+    int idTitre,
+  ) async {
+    _lire();
+    final ids = <int>{
+      for (final categorie
+          in bibliotheque.categoriesParTitre[idTitre] ?? const <Categorie>[])
+        if (categorie.id != null) _effective(categorie.id!),
+    };
+    return _triees(<Categorie>[for (final id in ids) ?_parId(id)]);
+  }
+
+  @override
+  Future<Categorie?> chargerCategorieEffective(int idCategorie) async {
+    _lire();
+    return _parId(_effective(idCategorie));
+  }
+
+  /// Mêmes refus que le dépôt réel, sans écrire.
+  void _verifier(int idCategorie, int idReference, Map<int, int> etat) {
+    final categorie = _parId(idCategorie);
+    final reference = _parId(idReference);
+    if (categorie == null || reference == null) {
+      throw const ErreurService("Cette catégorie n'existe plus.");
+    }
+    if (idCategorie == idReference) {
+      throw const ErreurService(
+        'Une catégorie ne peut pas être rattachée à elle-même.',
+      );
+    }
+    if (etat.containsKey(idReference)) {
+      throw ErreurService(
+        '« ${reference.nom} » est déjà rattachée à une autre catégorie : '
+        'choisissez sa référence.',
+      );
+    }
+    if (etat.containsValue(idCategorie)) {
+      throw ErreurService(
+        '« ${categorie.nom} » est la référence d\'autres catégories : '
+        'détachez-les d\'abord.',
+      );
+    }
+  }
+
+  @override
+  Future<void> rattacherCategorie(int idCategorie, int idReference) async {
+    _ecrire();
+    _verifier(idCategorie, idReference, equivalences);
+    equivalences[idCategorie] = idReference;
+    journal.add('rattacher:$idCategorie:$idReference');
+  }
+
+  @override
+  Future<void> regrouperCategories(
+    int idReference,
+    Iterable<int> idsCategories,
+  ) async {
+    _ecrire();
+    final ids = <int>[
+      for (final id in idsCategories)
+        if (id != idReference) id,
+    ]..sort();
+    // Tout ou rien, comme le vrai service avec transaction.
+    final copie = Map<int, int>.of(equivalences);
+    for (final id in ids) {
+      _verifier(id, idReference, copie);
+      copie[id] = idReference;
+    }
+    equivalences
+      ..clear()
+      ..addAll(copie);
+    journal.add('regrouper:$idReference:${ids.join(',')}');
+  }
+
+  @override
+  Future<void> appliquerSuggestion(SuggestionRegroupement suggestion) =>
+      regrouperCategories(suggestion.reference.id!, <int>[
+        for (final categorie in suggestion.aRattacher) ?categorie.id,
+      ]);
+
+  @override
+  Future<bool> detacherCategorie(int idCategorie) async {
+    _ecrire();
+    journal.add('detacher:$idCategorie');
+    return equivalences.remove(idCategorie) != null;
+  }
+
+  @override
+  Future<int> dissoudreGroupe(int idReference) async {
+    _ecrire();
+    journal.add('dissoudre:$idReference');
+    final avant = equivalences.length;
+    equivalences.removeWhere((_, reference) => reference == idReference);
+    return avant - equivalences.length;
+  }
+
+  @override
+  Future<List<SuggestionRegroupement>> suggererRegroupements() async {
+    _lire();
+    return ServiceCategories.calculerSuggestions(
+      bibliotheque.categories,
+      <EquivalenceCategorie>[
+        for (final MapEntry(key: id, value: reference) in equivalences.entries)
+          EquivalenceCategorie(idCategorie: id, idReference: reference),
+      ],
+    );
+  }
+}
+
 // ------------------------------------------------------------------ Widgets
 
 /// Enveloppe [enfant] dans les fournisseurs de l'application et un
@@ -1810,6 +2051,7 @@ Widget envelopper(
   FauxServiceRapportsErreur? rapports,
   FauxServiceExport? export,
   FauxServiceImport? importation,
+  FauxServiceCategories? categories,
   Future<List<String>> Function()? listerExports,
   bool verifierMisesAJourAuDemarrage = false,
   DateTime Function()? maintenant,
@@ -1846,6 +2088,9 @@ Widget envelopper(
           bibliotheque,
           serviceTelechargement: serviceTelechargement,
           serviceParametres: serviceParametres,
+          // Catégories regroupées seulement si un faux service est fourni
+          // (sinon, ancien chemin de lecture et section masquée).
+          serviceCategories: categories,
         )..charger(),
       ),
       ChangeNotifierProvider<EtatParutions>(

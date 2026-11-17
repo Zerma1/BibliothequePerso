@@ -512,6 +512,7 @@ Future<void> demarrer() async {
       serviceRapportsErreur: services.serviceRapportsErreur,
       serviceExport: services.serviceExport,
       serviceImport: services.serviceImport,
+      serviceCategories: services.serviceCategories,
     );
   } catch (erreur, pile) {
     debugPrint('Démarrage impossible : $erreur\n$pile');
@@ -538,6 +539,7 @@ Widget construireApplication({
   ServiceRapportsErreur? serviceRapportsErreur,
   ServiceExport? serviceExport,
   ServiceImport? serviceImport,
+  ServiceCategories? serviceCategories,
 }) {
   // Les états sont fournis au-dessus de MaterialApp : les écrans ouverts par
   // Navigator et les boîtes de dialogue y ont accès.
@@ -567,6 +569,7 @@ Widget construireApplication({
           serviceBibliotheque,
           serviceTelechargement: serviceTelechargement,
           serviceParametres: serviceParametres,
+          serviceCategories: serviceCategories,
         )..charger(),
       ),
       ChangeNotifierProvider<EtatParutions>(
