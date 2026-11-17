@@ -145,8 +145,10 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
 - [ ] T4. **Ajouter quand même comme simple lien** : quand un site ne peut pas être lu
   (protection, adaptateur absent), proposer d'enregistrer l'adresse comme site du titre en
   « lien seul » (ouverture dans la vue web / le navigateur, pas de lecture des chapitres).
-- [ ] T5. **Vue web intégrée** pour les liens externes et les « liens seuls » : `webview_flutter`
+- [ ] T5. (Décision du client : sous **Windows, navigateur par défaut seulement**, pas de `webview_windows` ; `webview_flutter` pour Android uniquement, le jour où il pourra tester.) **Vue web intégrée** pour les liens externes et les « liens seuls » : `webview_flutter`
   (Android) ; **Windows : `webview_flutter` ne fonctionne pas sous Windows**, il faut le paquet
   `webview_windows` (moteur WebView2 de Windows 11) ; Linux : navigateur par défaut. Bouton
   « Ouvrir dans le navigateur » toujours présent.
 - [x] T6. Plan de tests pour le client sur la branche `test` (fait par l'orchestrateur).
+
+- [ ] T7. Prochaine version de test : **0.2.0-test.1** (`version: 0.2.0+5`), `versionApplication = '0.2.0'` (erreur de numérotation des test.2 à test.4, voir docs/VERSIONS.md).

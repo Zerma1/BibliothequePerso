@@ -1,5 +1,10 @@
 # Journal des versions
 
+> **Note sur la numérotation (2026-11-17)** : la 0.1.0 a été publiée sur `main` le 2026-11-16.
+> Les versions de test suivantes, appelées par erreur « 0.1.0-test.2 » à « 0.1.0-test.4 »,
+> apportaient de nouvelles fonctionnalités et préparaient donc la **0.2.0**. Leurs étiquettes
+> restent telles quelles ; la prochaine version de test est la **0.2.0-test.1**.
+
 ## 0.1.0-test.4 — version de test (2026-11-17)
 
 Nouveau :

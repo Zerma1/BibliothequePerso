@@ -20,6 +20,17 @@ nécessaire, puis `0.1.0` sur `main` une fois validée.
   build Android ; le `+N` augmente à chaque version de test).
 - Étiquettes Git : `v0.1.0-test.1` sur `test`, `v0.1.0` sur `main`.
 
+### Choisir le numéro de la version suivante
+
+Après chaque publication sur `main` (version `X.Y.Z`), la version suivante prend :
+- **`X.(Y+1).0`** dès qu'elle apporte une nouveauté (fonctionnalité, nouveau site, nouvel écran),
+  même accompagnée de corrections ;
+- **`X.Y.(Z+1)`** si elle ne contient **que** des corrections de bugs de `X.Y.Z` ;
+- **`(X+1).0.0`** si elle casse l'existant (données à refaire, habitudes à changer).
+
+Les versions de test reprennent ce numéro : `0.2.0-test.1`, `0.2.0-test.2`… Le numéro de
+build `+N` de `pubspec.yaml` augmente toujours, quelle que soit la version.
+
 ## 1. Préparer une version de test (sur `dev`)
 
 ```powershell
