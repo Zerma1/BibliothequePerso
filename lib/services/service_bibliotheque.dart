@@ -134,6 +134,7 @@ class ParutionTitre {
     this.derniereParution,
     this.dernierChapitre,
     this.estEnAttente = false,
+    this.dateAjoutSite,
   });
 
   /// Titre concerné.
@@ -152,9 +153,58 @@ class ParutionTitre {
   /// `true` si le titre est dans la liste « En attente ».
   final bool estEnAttente;
 
-  /// `true` si le dernier chapitre paru n'est pas encore lu (badge des
-  /// nouveautés).
-  bool get aNouveaute => dernierChapitre != null && !dernierChapitre!.estLu;
+  /// Date (UTC) à laquelle le site d'où vient [dernierChapitre] a été lié
+  /// au titre (`LienTitreSource.dateAjout` ; site principal si le site du
+  /// chapitre n'est plus lié), ou `null` si elle est inconnue (service sans
+  /// dépôt des sites, aucun chapitre).
+  final DateTime? dateAjoutSite;
+
+  /// `true` si [dernierChapitre] a été découvert par une vérification
+  /// **après** l'ajout de son site au titre (plus de
+  /// [margeDecouverteApresAjout] après [dateAjoutSite]), `false` s'il a été
+  /// reçu lors de cet ajout (retour du client sur la 0.2.0-test : les
+  /// chapitres déjà parus au moment de l'ajout ne sont pas des nouveautés).
+  ///
+  /// `true` si l'une des deux dates est inconnue : dans le doute, on ne
+  /// masque pas une nouveauté. La marge couvre la durée de l'ajout (le site
+  /// est lié, puis ses chapitres sont lus et enregistrés).
+  bool get estDecouvertApresAjout {
+    final detection = dernierChapitre?.dateDetection;
+    final ajout = dateAjoutSite;
+    if (detection == null || ajout == null) return true;
+    return detection.isAfter(ajout.add(margeDecouverteApresAjout));
+  }
+
+  /// Critère du badge « Nouveau » à l'instant [maintenant]. Fonction pure.
+  ///
+  /// Le dernier chapitre paru doit être non lu, et récent :
+  /// - avec une date de publication : publié depuis moins de
+  ///   [dureeNouveaute], même s'il a été reçu à l'ajout du titre ou du site
+  ///   (décision de l'orchestrateur : une vraie parution récente reste une
+  ///   nouveauté). Un chapitre publié il y a des années n'est donc jamais
+  ///   « Nouveau », même découvert aujourd'hui ;
+  /// - sans date de publication (sites sans date) : découvert après l'ajout
+  ///   de son site ([estDecouvertApresAjout]) et depuis moins de
+  ///   [dureeNouveaute] ; sinon tous les chapitres reçus à l'ajout
+  ///   paraîtraient nouveaux pendant une semaine.
+  bool estNouveaute(DateTime maintenant) {
+    final chapitre = dernierChapitre;
+    if (chapitre == null || chapitre.estLu) return false;
+    final publication = chapitre.datePublication;
+    if (publication != null) {
+      return maintenant.difference(publication) < dureeNouveaute;
+    }
+    if (!estDecouvertApresAjout) return false;
+    final date = chapitre.dateDetection ?? derniereParution;
+    if (date == null) return false;
+    return maintenant.difference(date) < dureeNouveaute;
+  }
+
+  /// [estNouveaute] à l'heure actuelle.
+  ///
+  /// Gardé pour les appelants existants ; préférer [estNouveaute] avec une
+  /// heure fixée (testable, et la même pour toutes les lignes d'un écran).
+  bool get aNouveaute => estNouveaute(DateTime.now());
 }
 
 /// Point d'entrée de l'interface pour la bibliothèque : titres, listes,
@@ -1686,20 +1736,40 @@ class ServiceBibliotheque {
     for (final MapEntry(key: id, value: titre) in titres.entries) {
       final langues = languesParTitre[id]!;
       final date = dates[id];
+      final dernier = date == null
+          ? null
+          : await _depotChapitres.chargerDernierChapitreParu(id, langues);
       lignes.add(
         ParutionTitre(
           titre: titre,
           langues: langues,
           derniereParution: date,
-          dernierChapitre: date == null
-              ? null
-              : await _depotChapitres.chargerDernierChapitreParu(id, langues),
+          dernierChapitre: dernier,
           estEnAttente: enAttente.contains(id),
+          dateAjoutSite: dernier == null
+              ? null
+              : await _dateAjoutSite(id, dernier.idSource ?? titre.idSource),
         ),
       );
     }
     lignes.sort(comparerParutions);
     return lignes;
+  }
+
+  /// Date d'ajout du site [idSource] au titre [idTitre] (sinon de son site
+  /// principal, si ce site a été retiré depuis), ou `null` sans dépôt des
+  /// sites. Une requête par titre de l'onglet, comme [_aPlusieursSites].
+  Future<DateTime?> _dateAjoutSite(int idTitre, int? idSource) async {
+    final depot = _depotTitresSources;
+    if (depot == null) return null;
+    final liens = await depot.chargerLiensTitre(idTitre);
+    for (final lien in liens) {
+      if (lien.idSource == idSource) return lien.dateAjout;
+    }
+    for (final lien in liens) {
+      if (lien.estPrincipale) return lien.dateAjout;
+    }
+    return null;
   }
 
   /// Ordre de l'onglet Mises à jour : dernière parution la plus récente

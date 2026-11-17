@@ -117,6 +117,19 @@ const String identifiantFormatExport = 'bibliotheque_perso-export';
 ///   inconnu de l'ancien format.
 const int versionFormatExport = 2;
 
+/// Durée pendant laquelle un chapitre non lu porte le badge « Nouveau »
+/// dans l'onglet Mises à jour (retour du client sur la 0.2.0-test), comptée
+/// depuis sa publication, sinon depuis sa découverte. Même valeur que
+/// `dureeNouveaute` de `lib/etat/constantes_etat.dart`.
+const Duration dureeNouveaute = Duration(days: 7);
+
+/// Marge après l'ajout d'un site à un titre pendant laquelle les chapitres
+/// découverts sont ceux reçus **lors de l'ajout** (lecture du site, puis
+/// enregistrement), donc jamais des nouveautés. Une heure couvre largement
+/// un ajout lent, et une vérification planifiée a rarement lieu dans
+/// l'heure qui suit un ajout.
+const Duration margeDecouverteApresAjout = Duration(hours: 1);
+
 /// Plus ancienne version du format JSON que l'import sait lire.
 const int versionFormatImportMinimale = 1;
 
