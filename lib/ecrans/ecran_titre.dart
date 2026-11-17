@@ -749,7 +749,8 @@ class _FiltreSite extends StatelessWidget {
               selected: etat.idSiteFiltre == null,
               onSelected: (_) => etat.filtrerParSite(null),
             ),
-            for (final site in etat.sites)
+            // Un lien seul sans chapitre n'a rien à filtrer (tâche T4).
+            for (final site in etat.sitesAvecChapitres)
               ChoiceChip(
                 label: Text(site.nomSite),
                 selected: etat.idSiteFiltre == site.idSource,

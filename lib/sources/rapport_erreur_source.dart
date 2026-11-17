@@ -196,6 +196,10 @@ class RapportErreurSource {
     ligne('Adresse', masquerDonneesPersonnelles(erreur.url));
     ligne('Domaine', Uri.tryParse(erreur.url)?.host);
     ligne('Code HTTP', erreur.codeStatut);
+    ligne(
+      'Protection anti-robot',
+      erreur.protectionAntiRobot ? 'oui (aucun contournement)' : null,
+    );
     ligne('Message', masquerDonneesPersonnelles(erreur.message));
     final cause = erreur.cause;
     if (cause != null) {

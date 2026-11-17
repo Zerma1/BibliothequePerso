@@ -22,7 +22,8 @@ import 'etat_lecteur.dart';
 import 'outils_chapitres.dart';
 
 // L'interface affiche les sites du titre sans importer les services.
-export '../services/service_bibliotheque.dart' show SiteDuTitre;
+export '../services/service_bibliotheque.dart'
+    show DiagnosticLisibilite, SiteDuTitre;
 
 /// Couverture proposée par le site, pour le choix du client.
 ///
@@ -212,9 +213,18 @@ class EtatTitre extends EtatNotifiant {
   /// Sites du titre, le principal d'abord (section « Sites » de la fiche).
   List<SiteDuTitre> get sites => _sites;
 
-  /// `true` si le titre est suivi sur plus d'un site : chaque chapitre
-  /// affiche alors le nom de son site, et le filtre par site apparaît.
-  bool get aPlusieursSites => _sites.length > 1;
+  /// Sites qui fournissent des chapitres : les sites lus, et les liens seuls
+  /// qui gardent des chapitres lus d'avant leur passage en lien seul (filtre
+  /// des chapitres par site).
+  List<SiteDuTitre> get sitesAvecChapitres => <SiteDuTitre>[
+    for (final site in _sites)
+      if (!site.estLienSeul || site.nombreChapitres > 0) site,
+  ];
+
+  /// `true` si les chapitres du titre viennent de plus d'un site : chaque
+  /// chapitre affiche alors le nom de son site, et le filtre par site
+  /// apparaît. Un lien seul sans chapitre ne compte pas (tâche T4).
+  bool get aPlusieursSites => sitesAvecChapitres.length > 1;
 
   /// Site choisi dans le filtre des chapitres, `null` = tous les sites.
   int? get idSiteFiltre => _idSiteFiltre;
@@ -302,6 +312,66 @@ class EtatTitre extends EtatNotifiant {
       final resultat = await _service.ajouterSiteAuTitre(idTitre, url.trim());
       return resultat.nombreNouveauxChapitres;
     });
+  }
+
+  /// `true` si l'échec [erreur] d'un ajout de site permet de proposer
+  /// « Ajouter quand même comme simple lien » (tâche T4) : site illisible,
+  /// injoignable ou non configuré, mais adresse valide et pas déjà liée.
+  static bool peutAjouterCommeLienSeul(DescriptionErreur erreur) {
+    final cause = erreur.cause;
+    return cause != null && ServiceBibliotheque.peutAjouterCommeLienSeul(cause);
+  }
+
+  /// Enregistre [url] comme **lien seul** du titre (tâche T4) : aucune
+  /// requête au site, aucun chapitre lu ; le client l'ouvre dans son
+  /// navigateur.
+  Future<ResultatAction<int>> ajouterLienSeul(String url) async {
+    if (url.trim().isEmpty) {
+      return const ResultatAction<int>.echec(
+        DescriptionErreur(NatureErreur.adresseVide),
+      );
+    }
+    return _modifierSites(() async {
+      final resultat = await _service.ajouterSiteAuTitre(
+        idTitre,
+        url.trim(),
+        lienSeul: true,
+      );
+      return resultat.nombreNouveauxChapitres;
+    });
+  }
+
+  /// Passe le site secondaire [idSource] en lien seul ; renvoie le nombre
+  /// de chapitres supprimés (non lus, non téléchargés). Ses archives passent
+  /// en suppression prévue (24 h), comme pour un retrait.
+  Future<ResultatAction<int>> passerEnLienSeul(int idSource) =>
+      _modifierSites(() => _service.marquerLienSeul(idTitre, idSource, true));
+
+  /// Essaie de lire le lien seul [idSource] (**ce site seulement**, une
+  /// requête). Le service lit d'abord le site ; il ne redevient un site lu
+  /// que si la lecture réussit. Sinon il reste lien seul et l'erreur de
+  /// lecture est renvoyée. Renvoie le nombre de chapitres trouvés.
+  Future<ResultatAction<int>> essayerDeLire(int idSource) => _modifierSites(
+    () async => (await _service.essayerDeLireLienSeul(
+      idTitre,
+      idSource,
+    )).nombreNouveauxChapitres,
+  );
+
+  /// Diagnostic de lisibilité de [url] (tâche T3, « Pourquoi ce site n'est
+  /// pas lisible ? ») : une requête au plus, faite par le service.
+  Future<ResultatAction<DiagnosticLisibilite>> diagnostiquerSite(
+    String url,
+  ) async {
+    try {
+      return ResultatAction<DiagnosticLisibilite>.reussite(
+        await _service.diagnostiquerSite(url.trim()),
+      );
+    } catch (erreur, pile) {
+      return ResultatAction<DiagnosticLisibilite>.echec(
+        DescriptionErreur.depuis(erreur, pile),
+      );
+    }
   }
 
   /// Retire le site secondaire [idSource] ; renvoie le nombre de chapitres

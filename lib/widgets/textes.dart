@@ -1542,6 +1542,163 @@ abstract final class Textes {
   static const String titreDejaPresent =
       'Ce titre est déjà dans votre bibliothèque.';
 
+  // ------------------------------------------ Liens seuls (tâche T4)
+
+  /// Pastille d'un site gardé comme simple lien.
+  static const String lienSeul = 'lien seul';
+
+  /// Sous-titre d'un lien seul dans la section « Sites ».
+  static const String explicationLigneLienSeul =
+      "Aucun chapitre lu ici : ce site s'ouvre dans votre navigateur.";
+
+  /// Bouton : ouvrir un lien seul dans le navigateur.
+  static const String ouvrirDansNavigateur = 'Ouvrir dans le navigateur';
+
+  /// Bouton : essayer de lire un lien seul.
+  static const String essayerDeLire = 'Essayer de le lire';
+
+  /// Bouton : passer un site lu en lien seul.
+  static const String passerEnLienSeul = 'Garder comme simple lien';
+
+  /// Bouton du dialogue d'ajout : enregistrer l'adresse comme lien seul.
+  static const String ajouterCommeLienSeul =
+      'Ajouter quand même comme simple lien';
+
+  /// Explication sous le bouton « Ajouter quand même comme simple lien ».
+  static const String explicationAjoutLienSeul =
+      "L'application ne pourra lire aucun chapitre sur ce site. Il sera "
+      "enregistré avec ce titre, et un bouton l'ouvrira dans votre "
+      'navigateur.';
+
+  /// Lien seul ajouté.
+  static const String lienSeulAjoute =
+      'Site ajouté comme simple lien (ouvert dans le navigateur).';
+
+  /// Titre de la confirmation du passage en lien seul.
+  static String titrePassageLienSeul(String nomSite) =>
+      '« $nomSite » comme simple lien ?';
+
+  /// Confirmation du passage d'un site lu en lien seul.
+  static String confirmationPassageLienSeul({
+    required int nombreNonLusRetires,
+    required int nombreTelecharges,
+  }) {
+    final debut =
+        "L'application ne lira plus ce site : il s'ouvrira seulement dans "
+        'votre navigateur. ';
+    final chapitres = switch (nombreNonLusRetires) {
+      0 => 'Aucun chapitre non lu de ce site ne sera retiré.',
+      1 => '1 chapitre non lu de ce site sera retiré.',
+      _ => '$nombreNonLusRetires chapitres non lus de ce site seront retirés.',
+    };
+    final lus = ' Les chapitres lus restent.';
+    final telecharges = switch (nombreTelecharges) {
+      0 => '',
+      1 =>
+        "\n\nLe chapitre téléchargé depuis ce site passera au rouge : son "
+            'archive sera supprimée dans 24 heures, sauf si vous la gardez.',
+      _ =>
+        "\n\nLes $nombreTelecharges chapitres téléchargés depuis ce site "
+            'passeront au rouge : leurs archives seront supprimées dans 24 '
+            'heures, sauf si vous les gardez.',
+    };
+    return '$debut$chapitres$lus$telecharges';
+  }
+
+  /// Site passé en lien seul.
+  static String sitePasseEnLienSeul(int nombreChapitres) =>
+      switch (nombreChapitres) {
+        0 => 'Site gardé comme simple lien.',
+        1 => 'Site gardé comme simple lien (1 chapitre retiré).',
+        _ =>
+          'Site gardé comme simple lien ($nombreChapitres chapitres '
+              'retirés).',
+      };
+
+  /// Lien seul relu avec succès.
+  static String lienSeulLu(int nombreChapitres) =>
+      'Le site est maintenant lu (${chapitresDuSite(nombreChapitres)}).';
+
+  /// Lien seul toujours illisible.
+  static String lienSeulToujoursIllisible(String message) =>
+      "Ce site n'est toujours pas lisible : il reste un simple lien. $message";
+
+  // ------------------------------- Critères de lecture (tâche T3)
+
+  /// Bouton / intertitre du diagnostic d'un site refusé.
+  static const String pourquoiIllisible =
+      "Pourquoi ce site n'est pas lisible ?";
+
+  /// Diagnostic en cours.
+  static const String diagnosticEnCours =
+      'Analyse de la page… (une seule requête au site)';
+
+  /// Diagnostic : la page est lisible.
+  static const String diagnosticLisible =
+      "D'après l'analyse, cette page respecte les critères de lecture. "
+      "L'échec vient peut-être d'une autre page (liste des chapitres, "
+      "chapitre) ou du site lui-même : exportez le rapport d'erreur.";
+
+  /// Intertitre des raisons du diagnostic.
+  static const String raisonsIllisible = 'Raisons :';
+
+  /// Intertitre des remarques du diagnostic.
+  static const String remarquesDiagnostic = 'Remarques :';
+
+  /// Explication d'une protection anti-robot.
+  static const String explicationProtectionAntiRobot =
+      'Protection anti-robot : le site bloque les programmes automatiques ; '
+      "l'application ne contourne jamais ces protections. Lisez ce site dans "
+      'votre navigateur, ou gardez-le comme simple lien.';
+
+  /// Diagnostic impossible.
+  static String diagnosticImpossible(String message) =>
+      "L'analyse n'a pas pu être faite. $message";
+
+  /// Intertitre repliable de l'aide « Critères de lecture ».
+  static const String criteresLecture = 'Critères de lecture';
+
+  /// Aide « Critères de lecture » de l'écran d'ajout de site.
+  static const String aideCriteresLecture =
+      "Pour qu'un site soit lu par l'application :\n"
+      '• les liens des chapitres sont explicites (« chapter-12 », '
+      '« chapitre-3 », « episode-5 » dans leur adresse ou leur texte) ;\n'
+      '• les pages des chapitres sont des images en clair (pas dessinées par '
+      'un script ni brouillées) ;\n'
+      '• pas de protection anti-robot (« Just a moment… ») : '
+      "l'application ne la contourne jamais.\n"
+      "Collez la page qui liste les chapitres, ou l'adresse d'un chapitre : "
+      "l'application remontera à la liste.";
+
+  /// Intertitre repliable des réglages avancés d'un site générique.
+  static const String reglagesAvancesSelecteurs =
+      'Réglages avancés (sélecteurs CSS)';
+
+  /// Explication des réglages avancés.
+  static const String explicationReglagesSelecteurs =
+      'Facultatif, pour un site de type générique seulement. Laissez vide '
+      "pour que l'application devine. Un sélecteur CSS désigne un élément "
+      'de la page (ex. « h1.titre », « .liste-chapitres a »).';
+
+  /// Libellé d'un réglage avancé d'un site générique, d'après sa clé.
+  static String libelleReglageSelecteur(String cle) => switch (cle) {
+    'selecteurTitre' => 'Nom du titre',
+    'selecteurCouverture' => 'Image de couverture',
+    'selecteurResume' => 'Résumé',
+    'selecteurAuteur' => 'Auteur',
+    'selecteurCategories' => 'Catégories (une par élément)',
+    'selecteurLiensChapitres' => 'Liens des chapitres',
+    'selecteurImagesChapitre' => "Images d'un chapitre",
+    'selecteurLienListeChapitres' =>
+      'Lien vers la liste des chapitres (depuis un chapitre)',
+    'motifNumeroChapitre' => 'Numéro de chapitre (expression régulière)',
+    _ => cle,
+  };
+
+  /// Expression régulière invalide.
+  static const String erreurMotifInvalide =
+      "Cette expression régulière n'est pas valide.";
+
   // ------------------------------------------------------------- Formatage
 
   /// Date au format français `jj/mm/aaaa`, en heure locale.

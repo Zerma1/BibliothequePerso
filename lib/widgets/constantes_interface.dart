@@ -4,10 +4,12 @@ library;
 
 /// Numéro de version affiché (« À propos », sous la navigation).
 ///
-/// Doit être identique à la version de `pubspec.yaml` sans le numéro de
-/// build (`X.Y.Z` de `version: X.Y.Z+N`) : un test le vérifie. Recopié ici
-/// car lire la version à l'exécution demanderait un paquet supplémentaire.
-const String versionApplication = '0.1.0';
+/// Suit la version de `pubspec.yaml` sans le numéro de build (`X.Y.Z` de
+/// `version: X.Y.Z+N`). Elle peut la précéder entre deux publications :
+/// `pubspec.yaml` n'est mis à jour qu'à la publication (tâche T7). Un test
+/// vérifie qu'elle est égale ou supérieure. Recopiée ici car lire la version
+/// à l'exécution demanderait un paquet supplémentaire.
+const String versionApplication = '0.2.0';
 
 // ---------------------------------------------------------------- Chapitres
 

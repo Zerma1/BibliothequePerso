@@ -91,10 +91,14 @@ class TitreExporte {
 /// Un site secondaire d'un titre exporté : l'adresse du titre sur ce site.
 class SiteExporte {
   /// Crée la ligne.
-  const SiteExporte({required this.url, this.source});
+  const SiteExporte({required this.url, this.source, this.estLienSeul = false});
 
   /// Adresse du titre sur ce site.
   final String url;
+
+  /// `true` pour un lien seul (tâche T4) : site seulement ouvert dans le
+  /// navigateur, aucun chapitre lu.
+  final bool estLienSeul;
 
   /// Site configuré, ou `null` s'il n'existe plus.
   final Source? source;
@@ -369,6 +373,7 @@ class ServiceExport {
                 SiteExporte(
                   url: lien.urlTitre,
                   source: sourcesParId[lien.idSource],
+                  estLienSeul: lien.estLienSeul,
                 ),
           ],
         ),
@@ -493,6 +498,8 @@ class ServiceExport {
             'source': exporte.source?.nom,
             'urlSource': exporte.source?.urlBase,
             'principal': true,
+            // Le site principal n'est jamais un lien seul (migration 8).
+            'lienSeul': false,
           },
           for (final site in exporte.sitesSecondaires)
             <String, Object?>{
@@ -500,6 +507,7 @@ class ServiceExport {
               'source': site.source?.nom,
               'urlSource': site.source?.urlBase,
               'principal': false,
+              'lienSeul': site.estLienSeul,
             },
         ],
         'listes': exporte.listes,
@@ -616,7 +624,7 @@ class ServiceExport {
           : echapperMarkdown(exporte.source!.nom),
       // Étape 8 : autres sites du titre, en liens cliquables.
       if (exporte.sitesSecondaires.isNotEmpty)
-        'autres sites : ${<String>[for (final site in exporte.sitesSecondaires) _lien(site.source?.nom ?? 'site inconnu', site.url)].join(', ')}',
+        'autres sites : ${<String>[for (final site in exporte.sitesSecondaires) '${_lien(site.source?.nom ?? 'site inconnu', site.url)}${site.estLienSeul ? ' (lien seul)' : ''}'].join(', ')}',
       if (exporte.categories.isNotEmpty)
         'catégories : ${echapperMarkdown(exporte.categories.join(', '))}',
       if (exporte.dernierChapitreLu case final chapitre?)

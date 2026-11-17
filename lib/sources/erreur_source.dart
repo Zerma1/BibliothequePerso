@@ -24,6 +24,7 @@ class ErreurSource implements Exception {
     this.duree,
     this.typeDetecte,
     this.extraitReponse,
+    this.protectionAntiRobot = false,
   });
 
   /// URL dont la lecture a échoué (ou URL saisie invalide).
@@ -60,6 +61,15 @@ class ErreurSource implements Exception {
   /// réponse n'a été reçue.
   final String? extraitReponse;
 
+  /// `true` si le site a répondu par une page de défi anti-robot
+  /// (Cloudflare « Just a moment… »…) : il ne peut pas être lu
+  /// automatiquement, et l'application ne contourne jamais cette protection
+  /// (PLAYBOOK.md section 10). L'interface peut alors proposer de lire le
+  /// site dans le navigateur ou d'enregistrer l'adresse comme simple lien.
+  ///
+  /// Voir `protection_anti_robot.dart` pour la reconnaissance du défi.
+  final bool protectionAntiRobot;
+
   /// Renvoie une copie complétée par [typeDetecte] et [extraitReponse].
   ///
   /// Une valeur déjà présente n'est jamais remplacée : l'information la plus
@@ -74,6 +84,7 @@ class ErreurSource implements Exception {
       duree: duree,
       typeDetecte: this.typeDetecte ?? typeDetecte,
       extraitReponse: this.extraitReponse ?? extraitReponse,
+      protectionAntiRobot: protectionAntiRobot,
     );
   }
 

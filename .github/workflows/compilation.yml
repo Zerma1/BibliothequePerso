@@ -2,7 +2,7 @@
 # Procédure et explications : docs/DEPLOIEMENT.md, section « Compilation automatique ».
 #
 # - push sur `test`      : vérification + 3 compilations, fichiers en artefacts du workflow ;
-# - étiquette `v*`        : idem + « release » GitHub (pre-release si l'étiquette contient -test.) ;
+# - étiquette `v*`        : idem + « release » GitHub (pre-release si l'étiquette finit par -test) ;
 # - lancement manuel      : onglet Actions > Compilation > « Run workflow ».
 # Rien n'est lancé sur `dev` (économie de minutes GitHub).
 #
@@ -75,7 +75,7 @@ jobs:
           PRERELEASE=false
 
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            # Étiquette vX.Y.Z ou vX.Y.Z-test.N : la version est celle de l'étiquette.
+            # Étiquette vX.Y.Z ou vX.Y.Z-test (anciennement vX.Y.Z-test.N) : la version est celle de l'étiquette.
             VERSION="${GITHUB_REF_NAME#v}"
             if [ "${VERSION%%-*}" != "${XYZ}" ]; then
               echo "::error::L'étiquette ${GITHUB_REF_NAME} ne correspond pas à pubspec.yaml (${VERSION_PUBSPEC})."
@@ -83,7 +83,7 @@ jobs:
             fi
             PUBLIER=true
             case "${VERSION}" in
-              *-test.*) PRERELEASE=true ;;
+              *-test|*-test.*) PRERELEASE=true ;;
             esac
           else
             # Push sur une branche ou lancement manuel : X.Y.Z-build.N.

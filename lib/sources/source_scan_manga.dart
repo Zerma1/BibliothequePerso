@@ -509,8 +509,9 @@ class SourceScanManga implements SourceSite {
         maintenant.difference(page.date) < dureeCachePageScanManga) {
       return page.html;
     }
-    // User-Agent par défaut de ClientHttpPoli (navigateur courant) : seul
-    // MangaDex exige le User-Agent de l'application.
+    // User-Agent par défaut de ClientHttpPoli (celui, honnête, de
+    // l'application). Une page de défi Cloudflare est signalée par
+    // ClientHttpPoli (`ErreurSource.protectionAntiRobot`).
     final html = await _client.recupererTexte(uri);
     _dernierePage = (url: url, html: html, date: maintenant);
     return html;

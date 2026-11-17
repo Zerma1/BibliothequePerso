@@ -505,7 +505,8 @@ class SourceWebtoons implements SourceSite {
 
   /// Télécharge une page de liste avec le User-Agent honnête de
   /// l'application : WEBTOON sert ses listes à ce User-Agent (vérifié le
-  /// 2026-11-17), il est donc inutile d'usurper un navigateur.
+  /// 2026-11-17). C'est aussi, depuis la tâche T1, le défaut de
+  /// ClientHttpPoli ; on le garde explicite ici par sûreté.
   Future<String> _recupererTexte(Uri uri) =>
       _client.recupererTexte(uri, userAgent: userAgentApplication);
 

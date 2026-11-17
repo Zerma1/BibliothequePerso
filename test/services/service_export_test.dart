@@ -287,6 +287,20 @@ void main() {
         etagere.id!,
         'https://etagere.example/manga/death',
       );
+      // Tâche T4 : un site enregistré comme simple lien.
+      final protege = await depotSources.enregistrerSource(
+        const Source(
+          nom: 'Protégé',
+          urlBase: 'https://protege.example',
+          typeSource: TypeSource.generique,
+        ),
+      );
+      await DepotTitresSources(base).ajouterSourceSecondaire(
+        premierTitre.id!,
+        protege.id!,
+        'https://protege.example/oeuvre/death',
+        lienSeul: true,
+      );
 
       final resultat = await service.exporter();
       final titres = (lireJson(resultat.cheminJson)['titres']! as List<Object?>)
@@ -298,12 +312,21 @@ void main() {
           'source': 'MangaDex',
           'urlSource': 'https://mangadex.org',
           'principal': true,
+          'lienSeul': false,
         },
         <String, Object?>{
           'url': 'https://etagere.example/manga/death',
           'source': "L'Étagère",
           'urlSource': 'https://etagere.example',
           'principal': false,
+          'lienSeul': false,
+        },
+        <String, Object?>{
+          'url': 'https://protege.example/oeuvre/death',
+          'source': 'Protégé',
+          'urlSource': 'https://protege.example',
+          'principal': false,
+          'lienSeul': true,
         },
       ]);
       final second = titres.firstWhere((t) => t['nom'] == 'Un *livre*');
@@ -314,7 +337,8 @@ void main() {
       expect(
         markdown,
         contains(
-          "autres sites : [L'Étagère](https://etagere.example/manga/death)",
+          "autres sites : [L'Étagère](https://etagere.example/manga/death), "
+          '[Protégé](https://protege.example/oeuvre/death) (lien seul)',
         ),
       );
     });

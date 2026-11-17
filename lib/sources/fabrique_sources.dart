@@ -4,6 +4,7 @@ library;
 import '../modeles/source.dart';
 import 'client_http_poli.dart';
 import 'erreur_source.dart';
+import 'source_generique.dart';
 import 'source_madara.dart';
 import 'source_mangadex.dart';
 import 'source_mangathemesia.dart';
@@ -29,8 +30,8 @@ class FabriqueSources {
   /// garde le défaut du site (MangaDex : tout sauf `pornographic`). Ignoré
   /// par les sites qui n'ont pas cette notion.
   ///
-  /// Lève une [ErreurSource] si le type n'a pas encore d'adaptateur (le type
-  /// générique, par sélecteurs CSS, n'est pas encore écrit).
+  /// Lève une [ErreurSource] si les réglages d'un site générique
+  /// (`Source.configurationSelecteurs`) sont illisibles.
   SourceSite creer(Source source, {List<String>? niveauxContenuRecherche}) {
     switch (source.typeSource) {
       case TypeSource.mangaDex:
@@ -78,11 +79,17 @@ class FabriqueSources {
           languesPreferees: source.langueParDefaut,
         );
       case TypeSource.generique:
-        throw ErreurSource(
-          source.urlBase,
-          'Aucun adaptateur disponible pour le type '
-          "« ${source.typeSource.name} » (sélecteurs CSS : prévu à l'étape 7)",
-          typeDetecte: source.typeSource,
+        // Sélecteurs CSS réglés par le client (JSON), sinon heuristiques
+        // des sites à liens explicites. Des réglages illisibles lèvent une
+        // ErreurSource dès maintenant, avant toute requête.
+        return SourceGenerique(
+          _client,
+          urlBase: source.urlBase,
+          configuration: ConfigurationGenerique.depuisJson(
+            source.configurationSelecteurs,
+            url: source.urlBase,
+          ),
+          languesPreferees: source.langueParDefaut,
         );
     }
   }

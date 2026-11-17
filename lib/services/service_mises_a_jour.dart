@@ -234,7 +234,9 @@ class ServiceMisesAJour {
         for (final lien in await _serviceBibliotheque.chargerLiensDuTitre(
           titre,
         )) {
-          if (!idsActifs.contains(lien.idSource)) continue;
+          // Lien seul (tâche T4) : site que l'application ne sait pas lire,
+          // jamais interrogé.
+          if (lien.estLienSeul || !idsActifs.contains(lien.idSource)) continue;
           if (lien.estPrincipale) cumul.idSourcePrincipale = lien.idSource;
           cumul.nombreSites++;
           parSource

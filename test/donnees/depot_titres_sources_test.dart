@@ -492,4 +492,107 @@ void main() {
       expect(await depotSources.chargerSource(idScanManga), isNull);
     });
   });
+
+  group('lien seul (migration 8)', () {
+    test('ajout en lien seul : enregistré et rechargé tel quel', () async {
+      final lien = await depot.ajouterSourceSecondaire(
+        idTitre,
+        idScanManga,
+        urlScanManga,
+        dateAjout: dateAjout,
+        lienSeul: true,
+      );
+      expect(lien.estLienSeul, isTrue);
+      expect(lien.estPrincipale, isFalse);
+      final liens = await depot.chargerLiensTitre(idTitre);
+      expect(liens.map((l) => l.estLienSeul), <bool>[false, true]);
+      expect(liens.last, lien);
+      expect(await depot.chargerLienParUrl(urlScanManga), lien);
+      // Par défaut, un site ajouté n'est pas un lien seul.
+      expect((await depot.chargerLienPrincipal(idTitre))!.estLienSeul, isFalse);
+    });
+
+    test('un lien seul ne peut pas devenir site principal', () async {
+      await depot.ajouterSourceSecondaire(
+        idTitre,
+        idScanManga,
+        urlScanManga,
+        lienSeul: true,
+      );
+      await expectLater(
+        depot.definirSourcePrincipale(idTitre, idScanManga),
+        erreurContenant('lien seul'),
+      );
+      // Rien n'a changé.
+      expect((await depot.chargerLienPrincipal(idTitre))!.idSource, idMangaDex);
+      expect((await depotTitres.chargerTitre(idTitre))!.idSource, idMangaDex);
+    });
+
+    test('le site principal ne peut pas être marqué lien seul ; site non '
+        'lié refusé', () async {
+      await expectLater(
+        depot.marquerLienSeul(idTitre, idMangaDex, true),
+        erreurContenant('site principal'),
+      );
+      await expectLater(
+        depot.marquerLienSeul(idTitre, idScanManga, true),
+        erreurContenant("n'est pas un site du titre"),
+      );
+      // Le principal marqué lisible : déjà le cas, rien à faire.
+      expect(await depot.marquerLienSeul(idTitre, idMangaDex, false), 0);
+      expect((await depot.chargerLienPrincipal(idTitre))!.estLienSeul, isFalse);
+    });
+
+    test('bascule : lien seul puis de nouveau lisible, et promotion '
+        'possible ensuite', () async {
+      await depot.ajouterSourceSecondaire(idTitre, idScanManga, urlScanManga);
+      await depotChapitres.enregistrerChapitres(<Chapitre>[
+        chapitre('https://www.scan-manga.com/c/1', 1),
+        chapitre('https://www.scan-manga.com/c/2', 2),
+      ], idSource: idScanManga);
+      final lu = (await depotChapitres.chargerChapitres(
+        idTitre,
+        idSource: idScanManga,
+      )).first;
+      await depotChapitres.marquerLu(lu.id!);
+
+      // Passage en lien seul : le chapitre non lu disparaît, le lu reste.
+      expect(await depot.marquerLienSeul(idTitre, idScanManga, true), 1);
+      expect((await depot.chargerLiensTitre(idTitre)).last.estLienSeul, isTrue);
+      expect(
+        (await depotChapitres.chargerChapitres(
+          idTitre,
+          idSource: idScanManga,
+        )).map((c) => c.id),
+        <int>[lu.id!],
+      );
+      // Déjà lien seul : rien à faire.
+      expect(await depot.marquerLienSeul(idTitre, idScanManga, true), 0);
+
+      // Aucun chapitre ne peut venir d'un lien seul.
+      await expectLater(
+        depotChapitres.enregistrerChapitres(<Chapitre>[
+          chapitre('https://www.scan-manga.com/c/3', 3),
+        ], idSource: idScanManga),
+        erreurContenant('lien seul'),
+      );
+
+      // Le site redevient lisible : chapitres acceptés, promotion permise.
+      expect(await depot.marquerLienSeul(idTitre, idScanManga, false), 0);
+      expect(
+        (await depot.chargerLiensTitre(idTitre)).last.estLienSeul,
+        isFalse,
+      );
+      expect(
+        await depotChapitres.enregistrerChapitres(<Chapitre>[
+          chapitre('https://www.scan-manga.com/c/3', 3),
+        ], idSource: idScanManga),
+        1,
+      );
+      await depot.definirSourcePrincipale(idTitre, idScanManga);
+      final principal = (await depot.chargerLienPrincipal(idTitre))!;
+      expect(principal.idSource, idScanManga);
+      expect(principal.estLienSeul, isFalse);
+    });
+  });
 }

@@ -130,7 +130,8 @@ class DepotChapitres {
   ///
   /// Lève une [ErreurBaseDeDonnees] si un chapitre n'a pas de
   /// [Chapitre.idTitre], si ce titre n'existe pas, ou si sa source n'est pas
-  /// l'un des sites du titre (`titres_sources`) ; rien n'est alors écrit.
+  /// l'un des sites du titre (`titres_sources`) ou est un lien seul
+  /// (migration 8) ; rien n'est alors écrit.
   Future<int> enregistrerChapitres(
     List<Chapitre> chapitres, {
     DateTime? dateDetection,
@@ -193,7 +194,7 @@ class DepotChapitres {
         for (final (idTitre, idSourceChapitre) in sitesAVerifier) {
           final liens = await txn.query(
             'titres_sources',
-            columns: <String>['id'],
+            columns: <String>['lien_seul'],
             where: 'id_titre = ? AND id_source = ?',
             whereArgs: <Object?>[idTitre, idSourceChapitre],
             limit: 1,
@@ -202,6 +203,15 @@ class DepotChapitres {
             throw ErreurBaseDeDonnees(
               "Impossible d'enregistrer les chapitres : la source "
               "n°$idSourceChapitre n'est pas un site du titre n°$idTitre.",
+            );
+          }
+          // Un lien seul (migration 8) n'est jamais lu : aucun chapitre ne
+          // peut en venir.
+          if (liens.first['lien_seul'] == valeurSqlVrai) {
+            throw ErreurBaseDeDonnees(
+              "Impossible d'enregistrer les chapitres : la source "
+              "n°$idSourceChapitre est un lien seul pour le titre n°$idTitre "
+              "(l'application n'y lit aucun chapitre).",
             );
           }
         }
