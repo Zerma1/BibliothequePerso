@@ -347,32 +347,15 @@ class EtatTitre extends EtatNotifiant {
   Future<ResultatAction<int>> passerEnLienSeul(int idSource) =>
       _modifierSites(() => _service.marquerLienSeul(idTitre, idSource, true));
 
-  /// Essaie de lire le lien seul [idSource] : il redevient un site lu, puis
-  /// **ce site seulement** est relu (une requête, pas tout le titre).
-  /// Renvoie le nombre de chapitres trouvés.
-  ///
-  /// Si le site reste illisible, il repasse en lien seul (le client n'a pas
-  /// à le faire lui-même) et l'erreur de lecture est renvoyée.
+  /// Essaie de lire le lien seul [idSource] (**ce site seulement**, une
+  /// requête). Le service lit d'abord le site ; il ne redevient un site lu
+  /// que si la lecture réussit. Sinon il reste lien seul et l'erreur de
+  /// lecture est renvoyée. Renvoie le nombre de chapitres trouvés.
   Future<ResultatAction<int>> essayerDeLire(int idSource) => _modifierSites(
-    () async {
-      await _service.marquerLienSeul(idTitre, idSource, false);
-      try {
-        final titre = await _service.chargerTitre(idTitre);
-        if (titre == null) throw const _TitreIntrouvable();
-        final resultat = await _service.actualiserSiteDuTitre(titre, idSource);
-        return resultat.nombreNouveauxChapitres;
-      } catch (erreur) {
-        try {
-          await _service.marquerLienSeul(idTitre, idSource, true);
-        } catch (erreurRetour, pile) {
-          // Le site reste « lu » : la prochaine actualisation signalera
-          // qu'il ne répond pas, et le client pourra le repasser en lien
-          // seul lui-même.
-          debugPrint('Retour en lien seul impossible : $erreurRetour\n$pile');
-        }
-        rethrow;
-      }
-    },
+    () async => (await _service.essayerDeLireLienSeul(
+      idTitre,
+      idSource,
+    )).nombreNouveauxChapitres,
   );
 
   /// Diagnostic de lisibilité de [url] (tâche T3, « Pourquoi ce site n'est

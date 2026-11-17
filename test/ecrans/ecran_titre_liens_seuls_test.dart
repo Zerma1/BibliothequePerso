@@ -160,10 +160,7 @@ void main() {
         await charger();
         final resultat = await etat.essayerDeLire(2);
         expect(resultat.estReussi, isTrue);
-        expect(service.journalSites, <String>[
-          'marquerLienSeul:1:2:false',
-          'actualiserSite:1:2',
-        ]);
+        expect(service.journalSites, <String>['essayerDeLireLienSeul:1:2']);
         expect(telechargement.reglesAppliquees, <int>[1]);
         expect(etat.sites.last.estLienSeul, isFalse);
       },
@@ -180,11 +177,7 @@ void main() {
       );
       final resultat = await etat.essayerDeLire(2);
       expect(resultat.erreur?.nature, NatureErreur.site);
-      expect(service.journalSites, <String>[
-        'marquerLienSeul:1:2:false',
-        'actualiserSite:1:2',
-        'marquerLienSeul:1:2:true',
-      ]);
+      expect(service.journalSites, <String>['essayerDeLireLienSeul:1:2']);
       expect(etat.sites.last.estLienSeul, isTrue);
       expect(etat.estEnModificationSites, isFalse);
     });

@@ -41,6 +41,10 @@ class _SiteSimule implements SourceSite {
   final List<String> appels = <String>[];
   bool enPanne = false;
 
+  /// Appelé au début de chaque lecture des chapitres (observation de la
+  /// base pendant la requête).
+  Future<void> Function()? pendantChapitres;
+
   void erreurSiPanne(String url) {
     if (enPanne) throw ErreurSource(url, 'site injoignable', codeStatut: 503);
   }
@@ -59,6 +63,7 @@ class _SiteSimule implements SourceSite {
   @override
   Future<List<Chapitre>> recupererChapitres(String urlTitre) async {
     appels.add('chapitres $urlTitre');
+    await pendantChapitres?.call();
     erreurSiPanne(urlTitre);
     return chapitres[urlTitre] ?? const <Chapitre>[];
   }
@@ -496,6 +501,85 @@ void main() {
       },
     );
 
+    test("essayer de lire un lien seul lit d'abord le site, puis le rend lu "
+        'et enregistre ses chapitres', () async {
+      final titre = await ajouterTitrePrincipal();
+      await service.ajouterSiteAuTitre(
+        titre.id!,
+        _urlScanManga,
+        lienSeul: true,
+      );
+      final idScan = (await sourceScanManga())!.id!;
+      // Le site n'est jamais « lu » tant que sa lecture n'a pas réussi.
+      bool? lienSeulPendantLaLecture;
+      scanManga.pendantChapitres = () async {
+        lienSeulPendantLaLecture = (await depotLiens.chargerLiensTitre(
+          titre.id!,
+        )).last.estLienSeul;
+      };
+
+      final resultat = await service.essayerDeLireLienSeul(titre.id!, idScan);
+
+      expect(lienSeulPendantLaLecture, isTrue);
+      expect(resultat.nombreNouveauxChapitres, 3);
+      // Une seule lecture, et des chapitres seulement (la fiche vient du
+      // site principal).
+      expect(scanManga.appels, <String>['chapitres $_urlScanManga']);
+      expect(
+        (await service.chargerSitesDuTitre(titre.id!)).last.estLienSeul,
+        isFalse,
+      );
+      expect(
+        await depotChapitres.chargerChapitres(titre.id!, idSource: idScan),
+        hasLength(3),
+      );
+    });
+
+    test("si la lecture d'un lien seul échoue, il reste lien seul, rien "
+        "n'est écrit et l'erreur remonte", () async {
+      final titre = await ajouterTitrePrincipal();
+      await service.ajouterSiteAuTitre(
+        titre.id!,
+        _urlScanManga,
+        lienSeul: true,
+      );
+      final idScan = (await sourceScanManga())!.id!;
+      scanManga.enPanne = true;
+
+      await expectLater(
+        service.essayerDeLireLienSeul(titre.id!, idScan),
+        throwsA(isA<ErreurSource>()),
+      );
+
+      expect(
+        (await depotLiens.chargerLiensTitre(titre.id!)).last.estLienSeul,
+        isTrue,
+      );
+      expect(scanManga.appels, <String>['chapitres $_urlScanManga']);
+      expect(
+        await depotChapitres.chargerChapitres(titre.id!, idSource: idScan),
+        isEmpty,
+      );
+    });
+
+    test("essayer de lire un site qui n'est pas lié au titre est refusé "
+        'sans requête', () async {
+      final titre = await ajouterTitrePrincipal();
+      final scan = await depotSources.enregistrerSource(
+        const Source(
+          nom: nomScanManga,
+          urlBase: urlBaseScanManga,
+          typeSource: TypeSource.scanManga,
+        ),
+      );
+
+      await expectLater(
+        service.essayerDeLireLienSeul(titre.id!, scan.id!),
+        throwsA(isA<ErreurService>()),
+      );
+      expect(scanManga.appels, isEmpty);
+    });
+
     test('refuse de marquer le site principal comme lien seul', () async {
       final titre = await ajouterTitrePrincipal();
       await expectLater(
@@ -606,6 +690,22 @@ void main() {
 
       expect(diagnostic.estLisible, isFalse);
       expect(diagnostic.raisons.single, contains('injoignable'));
+    });
+
+    test("une réponse 2xx refusée donne le message de l'erreur, pas « aucun "
+        'chapitre trouvé »', () {
+      final diagnostic = ServiceBibliotheque.diagnosticDepuisErreur(
+        const ErreurSource(
+          'https://lourd.test/',
+          'La page est trop volumineuse',
+          codeStatut: 200,
+        ),
+        Uri.parse('https://lourd.test/'),
+      );
+
+      expect(diagnostic.estLisible, isFalse);
+      expect(diagnostic.raisons, <String>['La page est trop volumineuse']);
+      expect(diagnostic.protectionAntiRobot, isFalse);
     });
 
     test('une adresse invalide ou un site à adaptateur dédié ne font aucune '

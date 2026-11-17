@@ -1366,11 +1366,9 @@ class ServiceTelechargement {
     return _client.recupererOctets(
       uri,
       referer: contenu.urlReferer ?? contexte.source.urlBase,
-      // MangaDex exige un User-Agent honnête sur tous ses serveurs
-      // (`uploads.mangadex.org`, nœuds `*.mangadex.network`…).
-      userAgent: SourceMangaDex.estServeurMangaDex(uri.host)
-          ? userAgentApplication
-          : null,
+      // Pas de User-Agent précisé : `ClientHttpPoli` envoie celui de
+      // l'application à tous les sites (tâche T1), ce qu'exigent aussi tous
+      // les serveurs MangaDex (`uploads.mangadex.org`, E10).
       // Une page anti-robot HTML servie en 200 (E10) ne doit jamais être
       // écrite dans l'archive comme une page du chapitre.
       // LIMITE : un site qui servirait ses images sans `Content-Type`

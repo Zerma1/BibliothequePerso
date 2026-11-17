@@ -30,7 +30,6 @@ import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
 import '../modeles/titre.dart';
 import '../sources/client_http_poli.dart';
-import '../sources/constantes_sources.dart';
 import '../sources/couverture_site.dart';
 import '../sources/detecteur_type_site.dart';
 import '../sources/erreur_source.dart';
@@ -596,16 +595,40 @@ class ServiceBibliotheque {
     String urlTitre, {
     bool classer = true,
   }) async {
-    final idTitre = titre.id!;
-    final idSource = source.id!;
-    final adaptateur = await _creerAdaptateur(source, titre: titre);
     // Réseau d'abord : un site qui ne répond pas n'écrit rien.
-    final List<Chapitre> chapitres;
+    final chapitres = await _recupererChapitresDuSite(titre, source, urlTitre);
+    return _enregistrerChapitresRecus(
+      titre,
+      source.id!,
+      chapitres,
+      classer: classer,
+    );
+  }
+
+  /// Chapitres de [urlTitre] sur le site secondaire [source] (réseau
+  /// seulement, rien n'est écrit).
+  Future<List<Chapitre>> _recupererChapitresDuSite(
+    Titre titre,
+    Source source,
+    String urlTitre,
+  ) async {
     try {
-      chapitres = await adaptateur.recupererChapitres(urlTitre);
+      final adaptateur = await _creerAdaptateur(source, titre: titre);
+      return await adaptateur.recupererChapitres(urlTitre);
     } on ErreurSource catch (erreur) {
       throw erreur.avecContexte(typeDetecte: source.typeSource);
     }
+  }
+
+  /// Enregistre les [chapitres] déjà récupérés du site [idSource] (base
+  /// seulement) ; [classer] : recalculer « En attente » à la fin.
+  Future<ResultatAjoutTitre> _enregistrerChapitresRecus(
+    Titre titre,
+    int idSource,
+    List<Chapitre> chapitres, {
+    bool classer = true,
+  }) async {
+    final idTitre = titre.id!;
     final nouveaux = await _depotChapitres.enregistrerChapitres(<Chapitre>[
       for (final chapitre in chapitres) chapitre.copierAvec(idTitre: idTitre),
     ], idSource: idSource);
@@ -1037,6 +1060,61 @@ class ServiceBibliotheque {
     return supprimes;
   }
 
+  /// Essaie de lire le lien seul [idSource] du titre [idTitre] (bouton
+  /// « Essayer de le lire », tâche T4) et renvoie le résultat de la lecture
+  /// (nombre de nouveaux chapitres).
+  ///
+  /// **Réseau d'abord** : les chapitres de ce site seulement sont demandés
+  /// (une lecture, pas tout le titre) pendant qu'il est encore lien seul.
+  /// Seulement si elle réussit, le site redevient un site lu, ses chapitres
+  /// sont enregistrés et « En attente » est recalculé. En cas d'échec, rien
+  /// n'est écrit : le site reste lien seul et l'erreur est relancée
+  /// (`ErreurSource` du site, complétée de son type).
+  ///
+  /// Lève une [ErreurService] si le titre n'existe plus ou si ce site ne lui
+  /// est pas lié. Un site déjà lu est simplement relu, comme
+  /// [actualiserSiteDuTitre]. Comme après [marquerLienSeul], l'interface
+  /// applique ensuite les règles de téléchargement du titre
+  /// (`ServiceTelechargement.appliquerRegles`) : ce service ne dépend pas du
+  /// service de téléchargement.
+  Future<ResultatAjoutTitre> essayerDeLireLienSeul(
+    int idTitre,
+    int idSource,
+  ) async {
+    final depot = _exigerDepotTitresSources();
+    final titre = await _exigerTitre(idTitre);
+    LienTitreSource? lien;
+    for (final candidat in await depot.chargerLiensTitre(idTitre)) {
+      if (candidat.idSource == idSource) lien = candidat;
+    }
+    if (lien == null) {
+      throw ErreurService("Ce site n'est plus lié à « ${titre.nom} ».");
+    }
+    final source = await _depotSources.chargerSource(idSource);
+    if (source == null) {
+      throw ErreurService('Le site de « ${titre.nom} » n\'existe plus.');
+    }
+    if (!lien.estLienSeul) return _actualiserLien(titre, lien, source);
+    // Le site reste lien seul pendant la requête : un échec (réseau, site
+    // illisible, type sans adaptateur) remonte sans rien avoir écrit, et
+    // l'actualisation d'une autre tâche ne l'interroge pas entre-temps.
+    final chapitres = await _recupererChapitresDuSite(
+      titre,
+      source,
+      lien.urlTitre,
+    );
+    // LIMITE : le passage en site lu et l'enregistrement des chapitres sont
+    // deux transactions (dépôts distincts). Si l'enregistrement échoue après
+    // le passage, le site reste lu sans ses chapitres : ils arrivent à la
+    // prochaine actualisation (comme après `marquerLienSeul(false)`).
+    try {
+      await depot.marquerLienSeul(idTitre, idSource, false);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      throw ErreurService(erreur.message, cause: erreur);
+    }
+    return _enregistrerChapitresRecus(titre, idSource, chapitres);
+  }
+
   /// Programme dans [delaiSuppressionDifferee] la suppression des archives
   /// du site [idSource] du titre (site retiré ou devenu lien seul), sauf
   /// chapitre gardé par le client ou suppression déjà prévue.
@@ -1150,6 +1228,12 @@ class ServiceBibliotheque {
       );
     }
     final code = erreur.codeStatut;
+    // Réponse 2xx refusée par le client (page trop lourde, illisible…) :
+    // l'analyser comme une page vide afficherait « aucun chapitre trouvé »,
+    // trompeur ; la vraie raison est dans le message de l'erreur.
+    if (code != null && code >= 200 && code < 300) {
+      return DiagnosticLisibilite(raisons: <String>[erreur.message]);
+    }
     if (code != null) {
       // Même formulation que le diagnostic d'une page reçue.
       return verifierLisibilite('', uri, codeStatut: code);
@@ -1727,14 +1811,12 @@ class ServiceBibliotheque {
     String? referer,
   ) async {
     final uri = Uri.parse(urlCouverture);
-    // Sous-domaines compris : avec le User-Agent de navigateur,
-    // `uploads.mangadex.org` renvoie une page anti-robot HTML en 200
-    // (journal des erreurs, E10).
-    final estMangaDex = SourceMangaDex.estServeurMangaDex(uri.host);
+    // Pas de User-Agent précisé : `ClientHttpPoli` envoie celui de
+    // l'application à tous les sites (tâche T1), ce qu'exige notamment
+    // `uploads.mangadex.org` (page anti-robot HTML en 200 sinon, E10).
     return _client.recupererOctets(
       uri,
       referer: referer,
-      userAgent: estMangaDex ? userAgentApplication : null,
       // Une page HTML (défi anti-robot, erreur) servie en 200 ne doit pas
       // passer pour une image ni être enregistrée sur l'appareil.
       exigerImage: true,

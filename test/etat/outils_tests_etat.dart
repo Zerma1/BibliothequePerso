@@ -638,6 +638,27 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
     return ResultatAjoutTitre(titre, 0);
   }
 
+  @override
+  Future<ResultatAjoutTitre> essayerDeLireLienSeul(
+    int idTitre,
+    int idSource,
+  ) async {
+    journalSites.add('essayerDeLireLienSeul:$idTitre:$idSource');
+    final titre = _titreParId(idTitre);
+    if (titre == null) throw const ErreurService("Ce titre n'existe plus.");
+    // Comme le vrai service : en cas d'échec, rien n'est écrit (le site
+    // reste lien seul).
+    final erreur = erreurActualisationSite;
+    if (erreur != null) throw erreur;
+    final secondaires = sitesSecondaires[idTitre] ?? <LienTitreSource>[];
+    final index = secondaires.indexWhere((l) => l.idSource == idSource);
+    if (index < 0) {
+      throw const ErreurService("Ce site n'est pas lié à ce titre.");
+    }
+    secondaires[index] = secondaires[index].copierAvec(estLienSeul: false);
+    return ResultatAjoutTitre(titre, 0);
+  }
+
   /// Langues du réglage général renvoyées par [chargerLanguesGenerales].
   List<String> languesGenerales = <String>['fr', 'en'];
 
