@@ -67,11 +67,22 @@ class GroupeChapitres {
 /// La version retenue est choisie par `PolitiqueTelechargement` (même règle
 /// que les téléchargements automatiques) ; les autres versions suivent, la
 /// plus récemment enregistrée d'abord.
+///
+/// Étape 8 (plusieurs sites) : [idSourcePrincipale] (site principal du
+/// titre) et [idsSourcesLiees] (sites encore liés) sont ceux que le service
+/// de téléchargement passe à la politique, pour que la version mise en avant
+/// soit bien celle qu'il télécharge.
 List<GroupeChapitres> regrouperParNumero(
   List<Chapitre> chapitres,
-  List<String> langues,
-) {
-  final politique = PolitiqueTelechargement(languesPreferees: langues);
+  List<String> langues, {
+  int? idSourcePrincipale,
+  Set<int>? idsSourcesLiees,
+}) {
+  final politique = PolitiqueTelechargement(
+    languesPreferees: langues,
+    idSourcePrincipale: idSourcePrincipale,
+    idsSourcesLiees: idsSourcesLiees,
+  );
   return <GroupeChapitres>[
     for (final version in politique.choisirVersions(chapitres))
       GroupeChapitres(

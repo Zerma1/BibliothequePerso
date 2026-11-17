@@ -227,7 +227,16 @@ class EtatLecteur extends EtatNotifiant {
     final langues = await _serviceBibliotheque.languesPourTitre(titre);
     // Ordre de lecture : numéros croissants, une version par numéro (celle
     // que le service télécharge, ou une autre déjà sur l'appareil).
-    _groupes = regrouperParNumero(chapitres, langues);
+    // Étape 8 : mêmes sites (principal, liés) que le service.
+    final liens = await _serviceBibliotheque.chargerLiensDuTitre(titre);
+    _groupes = regrouperParNumero(
+      chapitres,
+      langues,
+      idSourcePrincipale: idSource,
+      idsSourcesLiees: liens.isEmpty
+          ? null
+          : <int>{?idSource, for (final lien in liens) lien.idSource},
+    );
   }
 
   Chapitre? _trouver(int idChapitre) {

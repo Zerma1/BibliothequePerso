@@ -21,6 +21,9 @@ import 'description_erreur.dart';
 import 'etat_lecteur.dart';
 import 'outils_chapitres.dart';
 
+// L'interface affiche les sites du titre sans importer les services.
+export '../services/service_bibliotheque.dart' show SiteDuTitre;
+
 /// Couverture proposée par le site, pour le choix du client.
 ///
 /// Recopie de `CouvertureSite` (couche sources) : les états ne dépendent
@@ -130,6 +133,17 @@ class EtatTitre extends EtatNotifiant {
 
   Titre? _titre;
   Source? _source;
+
+  /// Sites du titre (étape 8), le principal d'abord.
+  List<SiteDuTitre> _sites = const <SiteDuTitre>[];
+
+  /// Site choisi dans le filtre des chapitres, `null` = tous les sites.
+  int? _idSiteFiltre;
+
+  /// Noms des sites qui n'ont pas répondu à la dernière actualisation.
+  List<String> _sitesSansReponse = const <String>[];
+
+  bool _estEnModificationSites = false;
   List<Categorie> _categories = const <Categorie>[];
   List<ListeLecture> _listes = const <ListeLecture>[];
   Set<int> _idsListesDuTitre = const <int>{};
@@ -193,6 +207,137 @@ class EtatTitre extends EtatNotifiant {
       ? ServiceBibliotheque.nomSiteExterne(chapitre.urlExterne!)
       : null;
 
+  // ------------------------------------------- Sites du titre (étape 8)
+
+  /// Sites du titre, le principal d'abord (section « Sites » de la fiche).
+  List<SiteDuTitre> get sites => _sites;
+
+  /// `true` si le titre est suivi sur plus d'un site : chaque chapitre
+  /// affiche alors le nom de son site, et le filtre par site apparaît.
+  bool get aPlusieursSites => _sites.length > 1;
+
+  /// Site choisi dans le filtre des chapitres, `null` = tous les sites.
+  int? get idSiteFiltre => _idSiteFiltre;
+
+  /// `true` pendant l'ajout, le retrait ou le changement de site principal.
+  bool get estEnModificationSites => _estEnModificationSites;
+
+  /// Noms des sites qui n'ont pas répondu à la dernière actualisation (vide
+  /// si tous ont répondu).
+  List<String> get sitesSansReponse => _sitesSansReponse;
+
+  /// Identifiant du site d'où vient [chapitre] : un chapitre sans site connu
+  /// (enregistré avant l'étape 8) vient du site principal.
+  int? idSiteDe(Chapitre chapitre) => chapitre.idSource ?? _titre?.idSource;
+
+  /// Nom du site d'où vient [chapitre], ou `null` s'il est inconnu.
+  String? nomSiteDe(Chapitre chapitre) {
+    final idSource = idSiteDe(chapitre);
+    for (final site in _sites) {
+      if (site.idSource == idSource) return site.nomSite;
+    }
+    return null;
+  }
+
+  /// Nombre de chapitres non lus et non téléchargés du site [idSource] :
+  /// ceux que le retrait de ce site supprime.
+  int nombreChapitresRetiresAvecSite(int idSource) => _chapitres
+      .where(
+        (chapitre) =>
+            idSiteDe(chapitre) == idSource &&
+            !chapitre.estLu &&
+            !chapitre.estTelecharge,
+      )
+      .length;
+
+  /// Nombre de chapitres téléchargés du site [idSource] : leur archive sera
+  /// supprimée 24 heures après le retrait de ce site (sauf si le client la
+  /// garde).
+  int nombreTelechargesDuSite(int idSource) => _chapitres
+      .where(
+        (chapitre) => idSiteDe(chapitre) == idSource && chapitre.estTelecharge,
+      )
+      .length;
+
+  /// Filtre la liste des chapitres sur le site [idSource] (`null` = tous les
+  /// sites). Local : aucune lecture de la base.
+  void filtrerParSite(int? idSource) {
+    if (_idSiteFiltre == idSource) return;
+    _idSiteFiltre = idSource;
+    _regrouper();
+    notifier();
+  }
+
+  /// Ajoute un autre site au titre : [url] est l'adresse du même titre sur
+  /// ce site. Renvoie le nombre de chapitres trouvés sur ce site.
+  ///
+  /// Les règles de téléchargement sont ensuite appliquées (une version
+  /// hébergée peut remplacer une version « lecture sur le site »), puis la
+  /// fiche est relue.
+  Future<ResultatAction<int>> ajouterSite(String url) async {
+    if (url.trim().isEmpty) {
+      return const ResultatAction<int>.echec(
+        DescriptionErreur(NatureErreur.adresseVide),
+      );
+    }
+    return _modifierSites(() async {
+      final resultat = await _service.ajouterSiteAuTitre(idTitre, url.trim());
+      return resultat.nombreNouveauxChapitres;
+    });
+  }
+
+  /// Retire le site secondaire [idSource] ; renvoie le nombre de chapitres
+  /// supprimés. Les archives de ce site passent en suppression prévue (24 h).
+  Future<ResultatAction<int>> retirerSite(int idSource) =>
+      _modifierSites(() => _service.retirerSiteDuTitre(idTitre, idSource));
+
+  /// Fait du site [idSource] le site principal (fiche, couverture, résumé
+  /// relus sur ce site).
+  Future<ResultatAction<int>> definirSitePrincipal(int idSource) =>
+      _modifierSites(() async {
+        final resultat = await _service.definirSitePrincipal(idTitre, idSource);
+        return resultat.nombreNouveauxChapitres;
+      });
+
+  /// Déroulement commun aux actions sur les sites : action du service,
+  /// règles de téléchargement du titre, puis relecture de la fiche (sites,
+  /// chapitres, file et suppressions prévues à jour d'un coup).
+  Future<ResultatAction<int>> _modifierSites(
+    Future<int> Function() action,
+  ) async {
+    _estEnModificationSites = true;
+    notifier();
+    try {
+      final nombre = await action();
+      final service = _serviceTelechargement;
+      if (service != null) {
+        try {
+          await service.appliquerRegles(idTitre);
+        } catch (erreur, pile) {
+          // L'action du client est faite ; les règles seront réappliquées
+          // plus tard (démarrage, mises à jour).
+          debugPrint(
+            'Règles de téléchargement non appliquées : $erreur\n$pile',
+          );
+        }
+      }
+      final numero = ++_numeroLecture;
+      final donnees = await _lireBase();
+      if (numero == _numeroLecture) _appliquer(donnees);
+      return ResultatAction<int>.reussite(nombre);
+    } on _TitreIntrouvable {
+      _signalerIntrouvable();
+      return const ResultatAction<int>.echec(
+        DescriptionErreur(NatureErreur.introuvable),
+      );
+    } catch (erreur, pile) {
+      return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnModificationSites = false;
+      notifier();
+    }
+  }
+
   /// État hors-ligne d'un chapitre (téléchargé, en file, en cours…).
   EtatHorsLigne etatHorsLigne(Chapitre chapitre) {
     final id = chapitre.id;
@@ -244,9 +389,19 @@ class EtatTitre extends EtatNotifiant {
       );
     }
     _estEnActualisation = true;
+    _sitesSansReponse = const <String>[];
     notifier();
     try {
       final resultat = await _service.actualiserTitre(titre);
+      // Étape 8 : un site en panne n'empêche pas les autres ; l'écran dit
+      // lesquels n'ont pas répondu.
+      _sitesSansReponse = <String>[
+        for (final idSource in resultat.erreursParSite.keys)
+          ?_sites
+              .where((site) => site.idSource == idSource)
+              .firstOrNull
+              ?.nomSite,
+      ];
       // Nouvelle génération : un chargement plus ancien encore en cours ne
       // doit pas écraser les données relues après l'actualisation.
       final numero = ++_numeroLecture;
@@ -783,9 +938,12 @@ class EtatTitre extends EtatNotifiant {
         ? const <List<Chapitre>>[]
         : await service.chargerDoublons(idTitre);
 
+    final sites = await _service.chargerSitesDuTitre(idTitre);
+
     return (
       titre: titre,
       source: source,
+      sites: sites,
       categories: categories,
       listes: listes,
       idsListesDuTitre: <int>{
@@ -819,6 +977,12 @@ class EtatTitre extends EtatNotifiant {
   void _appliquer(_DonneesTitre donnees) {
     _titre = donnees.titre;
     _source = donnees.source;
+    _sites = donnees.sites;
+    // Un site retiré entre-temps ne peut plus servir de filtre.
+    if (_idSiteFiltre != null &&
+        !_sites.any((site) => site.idSource == _idSiteFiltre)) {
+      _idSiteFiltre = null;
+    }
     _categories = donnees.categories;
     _listes = donnees.listes;
     _idsListesDuTitre = donnees.idsListesDuTitre;
@@ -831,8 +995,25 @@ class EtatTitre extends EtatNotifiant {
   }
 
   /// Une ligne par numéro (chaque oneshot à part), la plus récente en haut.
+  ///
+  /// Avec un filtre de site, seuls les chapitres de ce site sont regroupés.
+  /// La politique reçoit le site principal et les sites liés, comme dans
+  /// `ServiceTelechargement` : la version mise en avant est celle qu'il
+  /// télécharge.
   void _regrouper() {
-    _groupes = regrouperParNumero(_chapitres, _langues).reversed.toList();
+    final filtre = _idSiteFiltre;
+    final chapitres = filtre == null
+        ? _chapitres
+        : _chapitres.where((chapitre) => idSiteDe(chapitre) == filtre).toList();
+    final idPrincipal = _titre?.idSource;
+    _groupes = regrouperParNumero(
+      chapitres,
+      _langues,
+      idSourcePrincipale: idPrincipal,
+      idsSourcesLiees: _sites.isEmpty
+          ? null
+          : <int>{?idPrincipal, for (final site in _sites) site.idSource},
+    ).reversed.toList();
     _mettreAJourCompteARebours();
   }
 
@@ -876,6 +1057,7 @@ class EtatTitre extends EtatNotifiant {
 typedef _DonneesTitre = ({
   Titre titre,
   Source? source,
+  List<SiteDuTitre> sites,
   List<Categorie> categories,
   List<ListeLecture> listes,
   Set<int> idsListesDuTitre,

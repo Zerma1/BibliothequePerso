@@ -151,7 +151,9 @@ class LegendeHorsLigne extends StatelessWidget {
       children: <Widget>[
         Icon(icone, size: theme.textTheme.bodyMedium?.fontSize, color: couleur),
         const SizedBox(width: espacementPetit / 2),
-        Text(libelle, style: theme.textTheme.bodySmall),
+        // Flexible : sur un téléphone, un libellé long passe à la ligne au
+        // lieu de déborder de l'écran.
+        Flexible(child: Text(libelle, style: theme.textTheme.bodySmall)),
       ],
     );
     return Wrap(

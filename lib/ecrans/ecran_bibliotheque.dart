@@ -84,10 +84,11 @@ class _EtatEcranBibliotheque extends State<EcranBibliotheque> {
   }
 
   Future<void> _ajouterTitre() async {
-    final message = await afficherDialogueAjoutTitre(context);
-    if (message != null && mounted) {
-      afficherMessage(context, message);
-    }
+    final issue = await afficherDialogueAjoutTitre(context);
+    if (issue == null || !mounted) return;
+    afficherMessage(context, issue.message);
+    final idTitre = issue.idTitreAOuvrir;
+    if (idTitre != null) await _ouvrirFiche(idTitre);
   }
 
   Future<void> _ouvrirTitre(Titre titre) async {
@@ -95,6 +96,10 @@ class _EtatEcranBibliotheque extends State<EcranBibliotheque> {
     if (idTitre == null) {
       return;
     }
+    await _ouvrirFiche(idTitre);
+  }
+
+  Future<void> _ouvrirFiche(int idTitre) async {
     final etat = context.read<EtatBibliotheque>();
     await EcranTitre.ouvrir(context, idTitre);
     // Au retour, les compteurs de non-lus et les listes ont pu changer.

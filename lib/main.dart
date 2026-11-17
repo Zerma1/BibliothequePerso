@@ -24,6 +24,7 @@ import 'donnees/depot_parametres.dart';
 import 'donnees/depot_sources.dart';
 import 'donnees/depot_telechargements.dart';
 import 'donnees/depot_titres.dart';
+import 'donnees/depot_titres_sources.dart';
 import 'donnees/stockage_telechargements.dart';
 import 'ecrans/ecran_accueil.dart';
 import 'ecrans/ecran_erreur_demarrage.dart';
@@ -152,6 +153,9 @@ ServicesApplication assemblerServices(
   final depotTitres = DepotTitres(base);
   final depotListes = DepotListes(base);
   final depotChapitres = DepotChapitres(base);
+  // Sites de chaque titre (étape 8) : sans ce dépôt, l'ajout d'un autre site
+  // à un titre est refusé et seuls les sites principaux sont exportés.
+  final depotTitresSources = DepotTitresSources(base);
   final serviceAjoutSite = ServiceAjoutSite(
     depotSources,
     DetecteurTypeSite(clientUtilise),
@@ -171,6 +175,7 @@ ServicesApplication assemblerServices(
     serviceParametres: serviceParametres,
     // Couvertures enregistrées sur l'appareil, lisibles hors-ligne.
     stockage: stockage,
+    depotTitresSources: depotTitresSources,
   );
   final serviceMisesAJour = ServiceMisesAJour(
     depotTitres: depotTitres,
@@ -191,6 +196,7 @@ ServicesApplication assemblerServices(
     fabriqueSources: fabriqueSources,
     client: clientUtilise,
     serviceParametres: serviceParametres,
+    depotTitresSources: depotTitresSources,
   );
   return ServicesApplication(
     base: base,
@@ -219,6 +225,7 @@ ServicesApplication assemblerServices(
       ),
       serviceParametres: serviceParametres,
       versionApplication: versionApplication,
+      depotTitresSources: depotTitresSources,
     ),
   );
 }

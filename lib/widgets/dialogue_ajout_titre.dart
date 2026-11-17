@@ -13,12 +13,25 @@ import 'bouton_rapport_erreur.dart';
 import 'constantes_interface.dart';
 import 'textes.dart';
 
+/// Issue du dialogue d'ajout d'un titre.
+class IssueAjoutTitre {
+  /// Crée l'issue.
+  const IssueAjoutTitre(this.message, {this.idTitreAOuvrir});
+
+  /// Message de confirmation à afficher.
+  final String message;
+
+  /// Titre dont la fiche est à ouvrir : titre déjà présent dans la
+  /// bibliothèque (adresse d'un de ses sites, étape 8), sinon `null`.
+  final int? idTitreAOuvrir;
+}
+
 /// Ouvre la boîte de dialogue d'ajout d'un titre.
 ///
-/// Renvoie le message de confirmation à afficher, ou `null` si le client a
-/// annulé.
-Future<String?> afficherDialogueAjoutTitre(BuildContext context) {
-  return showDialog<String>(
+/// Renvoie le message de confirmation à afficher (et le titre à ouvrir s'il
+/// était déjà présent), ou `null` si le client a annulé.
+Future<IssueAjoutTitre?> afficherDialogueAjoutTitre(BuildContext context) {
+  return showDialog<IssueAjoutTitre>(
     context: context,
     // Pendant la lecture du site, un appui à côté ne doit pas fermer la
     // boîte : le client perdrait le résultat de l'ajout.
@@ -114,10 +127,26 @@ class _EtatDialogueAjoutTitre extends State<DialogueAjoutTitre> {
       });
       return;
     }
+    if (ajout.estDejaPresent) {
+      // Adresse d'un site secondaire d'un titre existant : rien n'a été
+      // créé, on emmène le client sur la fiche de ce titre.
+      Navigator.of(context).pop(
+        IssueAjoutTitre(
+          Textes.titreDejaPresent,
+          idTitreAOuvrir: ajout.titre.id,
+        ),
+      );
+      return;
+    }
     Navigator.of(context).pop(
-      ajout.estEnAttente
-          ? Textes.titreAjouteEnAttente(ajout.titre.nom)
-          : Textes.titreAjoute(ajout.titre.nom, ajout.nombreNouveauxChapitres),
+      IssueAjoutTitre(
+        ajout.estEnAttente
+            ? Textes.titreAjouteEnAttente(ajout.titre.nom)
+            : Textes.titreAjoute(
+                ajout.titre.nom,
+                ajout.nombreNouveauxChapitres,
+              ),
+      ),
     );
   }
 

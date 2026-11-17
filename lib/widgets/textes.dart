@@ -1403,6 +1403,143 @@ abstract final class Textes {
   static const String surveillanceEnregistree =
       'Surveillance des titres en attente enregistrée.';
 
+  // ---------------------------------- Étape 8 : plusieurs sites par titre
+
+  /// Intertitre de la section « Sites » de la fiche.
+  static const String sitesDuTitre = 'Sites';
+
+  /// Explication de la section « Sites ».
+  static const String explicationSitesDuTitre =
+      "Le site principal fournit la fiche (couverture, résumé, catégories). "
+      "Les autres sites ajoutent leurs chapitres : pour chaque numéro, "
+      "l'application télécharge une seule version (votre langue d'abord, "
+      "puis une version lisible dans l'application, puis le site principal).";
+
+  /// Pastille du site principal.
+  static const String sitePrincipal = 'Principal';
+
+  /// Pastille d'un site secondaire.
+  static const String siteSecondaire = 'Secondaire';
+
+  /// Nombre de chapitres connus d'un site.
+  static String chapitresDuSite(int nombre) => switch (nombre) {
+    0 => 'aucun chapitre',
+    1 => '1 chapitre',
+    _ => '$nombre chapitres',
+  };
+
+  /// Bouton : ajouter un autre site au titre.
+  static const String ajouterAutreSite = 'Ajouter un autre site';
+
+  /// Bouton : ouvrir la page du titre sur ce site.
+  static const String ouvrirCeSite = 'Ouvrir ce site';
+
+  /// Bouton : retirer un site secondaire.
+  static const String retirerSite = 'Retirer';
+
+  /// Bouton : faire d'un site secondaire le site principal.
+  static const String definirSitePrincipal = 'Définir comme site principal';
+
+  /// Explication du dialogue d'ajout d'un site.
+  static String explicationAjoutSite(String nomTitre) =>
+      "Collez l'adresse de « $nomTitre » sur un autre site (la page du "
+      "titre, pas celle d'un chapitre). Le site doit être configuré dans "
+      "« Sources », sauf MangaDex et Scan-Manga, reconnus automatiquement.";
+
+  /// Champ de l'adresse du titre sur l'autre site.
+  static const String champUrlAutreSite = 'Adresse du titre sur l\'autre site';
+
+  /// Lecture de l'autre site en cours.
+  static const String ajoutSiteEnCours =
+      'Lecture du site… (une requête par seconde au plus)';
+
+  /// Action décrite dans le rapport d'erreur.
+  static const String actionRapportAjoutSiteAuTitre =
+      "Ajout d'un autre site à un titre";
+
+  /// Site ajouté au titre.
+  static String siteAjouteAuTitre(int nombreChapitres) =>
+      'Site ajouté (${chapitresDuSite(nombreChapitres)}).';
+
+  /// Titre de la confirmation du retrait d'un site.
+  static String titreRetraitSite(String nomSite) => 'Retirer « $nomSite » ?';
+
+  /// Confirmation du retrait d'un site secondaire.
+  static String confirmationRetraitSite({
+    required int nombreNonLusRetires,
+    required int nombreTelecharges,
+  }) {
+    final retires = switch (nombreNonLusRetires) {
+      0 => 'Aucun chapitre non lu ne sera retiré.',
+      1 => '1 chapitre non lu de ce site sera retiré.',
+      _ => '$nombreNonLusRetires chapitres non lus de ce site seront retirés.',
+    };
+    final telecharges = switch (nombreTelecharges) {
+      0 => '',
+      1 =>
+        "\n\nLe chapitre téléchargé depuis ce site passera au rouge : son "
+            "archive sera supprimée dans 24 heures, sauf si vous le gardez.",
+      _ =>
+        "\n\nLes $nombreTelecharges chapitres téléchargés depuis ce site "
+            "passeront au rouge : leurs archives seront supprimées dans 24 "
+            "heures, sauf si vous les gardez.",
+    };
+    return '$retires Les chapitres lus restent dans votre historique.'
+        '$telecharges';
+  }
+
+  /// Site retiré.
+  static String siteRetire(int nombreChapitres) => switch (nombreChapitres) {
+    0 => 'Site retiré.',
+    1 => 'Site retiré (1 chapitre retiré).',
+    _ => 'Site retiré ($nombreChapitres chapitres retirés).',
+  };
+
+  /// Titre de la confirmation du changement de site principal.
+  static String titreChangementPrincipal(String nomSite) =>
+      '« $nomSite » comme site principal ?';
+
+  /// Explication du changement de site principal.
+  static const String explicationChangementPrincipal =
+      "La fiche (nom, couverture, résumé, catégories) sera relue sur ce site. "
+      "L'ancien site principal devient secondaire et garde ses chapitres.";
+
+  /// Bouton de confirmation du changement de site principal.
+  static const String confirmerPrincipal = 'Changer';
+
+  /// Site principal changé.
+  static String sitePrincipalChange(String nomSite) =>
+      '« $nomSite » est maintenant le site principal.';
+
+  /// Filtre des chapitres : tous les sites.
+  static const String tousLesSites = 'Tous les sites';
+
+  /// Étiquette du filtre des chapitres par site.
+  static const String filtreSite = 'Site des chapitres';
+
+  /// Légende : le nom du site sous chaque chapitre.
+  static const String legendeSiteChapitre =
+      'Sous chaque chapitre : le site d\'où il vient.';
+
+  /// Chapitre venant d'un site (sous son nom).
+  static String chapitreDuSite(String nomSite) => 'Site : $nomSite';
+
+  /// Actualisation dont certains sites n'ont pas répondu.
+  static String actualisationSitesSansReponse(
+    int nombreNouveaux,
+    List<String> nomsSites,
+  ) {
+    final debut = actualisationTerminee(nombreNouveaux);
+    final noms = nomsSites.map((nom) => '« $nom »').join(', ');
+    return nomsSites.length == 1
+        ? "$debut Le site $noms n'a pas répondu ; réessayez plus tard."
+        : "$debut Ces sites n'ont pas répondu : $noms ; réessayez plus tard.";
+  }
+
+  /// Ajout d'un titre déjà présent par l'adresse d'un de ses sites.
+  static const String titreDejaPresent =
+      'Ce titre est déjà dans votre bibliothèque.';
+
   // ------------------------------------------------------------- Formatage
 
   /// Date au format français `jj/mm/aaaa`, en heure locale.
