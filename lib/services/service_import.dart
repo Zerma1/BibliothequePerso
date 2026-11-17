@@ -846,12 +846,30 @@ class _Ecriture {
     if (hote != null) _sourcesParHote.putIfAbsent(hote, () => source);
   }
 
-  /// Site de la base pour l'adresse de base [urlSource] ou, à défaut, pour
-  /// l'hôte de l'adresse du titre [urlTitre] ; `null` s'il est inconnu.
+  /// Site de la base pour un site du fichier ; `null` s'il est inconnu.
+  ///
+  /// Adresses exactes d'abord : l'adresse de base [urlSource] donnée par le
+  /// fichier, puis la racine (`schéma://hôte`) de l'adresse du titre
+  /// [urlTitre]. La recherche par hôte (sans `www.` ni `m.`) ne sert qu'en
+  /// dernier recours, pour reconnaître un site enregistré sous une autre
+  /// forme (`https://www.exemple.com` pour `https://exemple.com`).
+  ///
+  /// LIMITE : si la base contient deux sites sur le même domaine (par
+  /// exemple `http://` et `https://`, ou avec et sans `www.`) et qu'aucune
+  /// adresse exacte ne correspond, le premier par ordre alphabétique du nom
+  /// est retenu ; le client peut ensuite déplacer le titre vers l'autre
+  /// site depuis sa fiche.
   Source? _trouverSource(String? urlSource, String urlTitre) {
     if (urlSource != null) {
       final exacte = _sourcesParUrl[urlSource];
       if (exacte != null) return exacte;
+    }
+    final uriTitre = Uri.tryParse(urlTitre);
+    if (uriTitre != null && uriTitre.host.isNotEmpty) {
+      final racine = _sourcesParUrl[ServiceAjoutSite.calculerUrlBase(uriTitre)];
+      if (racine != null) return racine;
+    }
+    if (urlSource != null) {
       final parHote = _sourcesParHote[ServiceImport._hote(urlSource)];
       if (parHote != null) return parHote;
     }

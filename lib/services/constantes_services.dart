@@ -119,8 +119,8 @@ const int versionFormatExport = 2;
 
 /// Durée pendant laquelle un chapitre non lu porte le badge « Nouveau »
 /// dans l'onglet Mises à jour (retour du client sur la 0.2.0-test), comptée
-/// depuis sa publication, sinon depuis sa découverte. Même valeur que
-/// `dureeNouveaute` de `lib/etat/constantes_etat.dart`.
+/// depuis sa publication, sinon depuis sa découverte (voir
+/// `ParutionTitre.estNouveaute`).
 const Duration dureeNouveaute = Duration(days: 7);
 
 /// Marge après l'ajout d'un site à un titre pendant laquelle les chapitres

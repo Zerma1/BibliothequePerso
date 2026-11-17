@@ -192,6 +192,34 @@ void main() {
     });
   });
 
+  group('listerExportsJson', () {
+    test('dossier absent : liste vide, sans erreur', () async {
+      expect(await service.listerExportsJson(), isEmpty);
+    });
+
+    test('ne garde que les .json, le plus récent d\'abord', () async {
+      final exports = Directory(
+        ServiceExport.cheminDossierExports(dossier.path),
+      )..createSync(recursive: true);
+      File creer(String nom, DateTime date) =>
+          File(chemins.join(exports.path, nom))
+            ..writeAsStringSync('{}')
+            ..setLastModifiedSync(date);
+      final ancien = creer('ancien.json', DateTime(2026, 1, 1));
+      final recent = creer('recent.JSON', DateTime(2026, 11, 1));
+      final moyen = creer('moyen.json', DateTime(2026, 6, 1));
+      creer('notes.md', DateTime(2026, 12, 1));
+      creer('export.json.part', DateTime(2026, 12, 1));
+      Directory(chemins.join(exports.path, 'dossier.json')).createSync();
+
+      expect(await service.listerExportsJson(), <String>[
+        recent.path,
+        moyen.path,
+        ancien.path,
+      ]);
+    });
+  });
+
   group('contenu JSON', () {
     test('contient la version de format, les réglages et les listes', () async {
       await remplir();

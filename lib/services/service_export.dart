@@ -218,23 +218,29 @@ class ServiceExport {
 
   /// Chemins des exports JSON présents dans [dossierExports], le plus récent
   /// d'abord (pour le dialogue d'import). Liste vide si le dossier n'existe
-  /// pas encore.
+  /// pas encore ou ne peut pas être parcouru. Ne lève jamais.
   Future<List<String>> listerExportsJson() async {
     final dossier = Directory(dossierExports);
-    if (!await dossier.exists()) return <String>[];
-    final fichiers = <File>[];
-    await for (final entree in dossier.list(followLinks: false)) {
-      if (entree is File &&
-          chemins.extension(entree.path).toLowerCase() == '.json') {
-        fichiers.add(entree);
+    final dates = <String, DateTime>{};
+    try {
+      if (!await dossier.exists()) return <String>[];
+      await for (final entree in dossier.list(followLinks: false)) {
+        if (entree is! File ||
+            chemins.extension(entree.path).toLowerCase() != '.json') {
+          continue;
+        }
+        try {
+          dates[entree.path] = await entree.lastModified();
+        } on FileSystemException {
+          // Fichier effacé ou renommé entre la liste et la lecture de sa
+          // date : il n'est simplement pas proposé.
+        }
       }
+    } on FileSystemException {
+      // Dossier devenu illisible pendant la lecture : on propose ce qui a
+      // déjà été trouvé plutôt que de faire échouer le dialogue d'import.
     }
-    final dates = <String, DateTime>{
-      for (final fichier in fichiers)
-        fichier.path: await fichier.lastModified(),
-    };
-    fichiers.sort((a, b) => dates[b.path]!.compareTo(dates[a.path]!));
-    return <String>[for (final fichier in fichiers) fichier.path];
+    return dates.keys.toList()..sort((a, b) => dates[b]!.compareTo(dates[a]!));
   }
 
   /// Lit la bibliothèque et écrit deux fichiers dans [dossierExports] :

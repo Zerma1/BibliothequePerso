@@ -619,13 +619,17 @@ class ServiceBibliotheque {
     LienTitreSource lien,
     Source source, {
     bool classer = true,
-  }) {
+  }) async {
+    // Lu avant la requête réseau : « aucun chapitre connu » décrit la base
+    // telle qu'elle était avant cette lecture du site.
+    final detection = await _detectionPremiereLecture(titre, lien);
     if (lien.estPrincipale) {
       return _enregistrerDepuisSource(
         source,
         lien.urlTitre,
         titre: titre,
         classer: classer,
+        dateDetection: detection,
       );
     }
     return _enregistrerChapitresDuSite(
@@ -633,7 +637,41 @@ class ServiceBibliotheque {
       source,
       lien.urlTitre,
       classer: classer,
+      dateDetection: detection,
     );
+  }
+
+  /// Date de découverte à donner aux chapitres de la **première lecture**
+  /// du site [lien] : sa date d'ajout au titre, ou `null` (maintenant) pour
+  /// une lecture ordinaire.
+  ///
+  /// Retour de relecture (badge « Nouveau ») : un titre importé, ou un site
+  /// importé sur un titre existant, n'a encore aucun chapitre ; sa première
+  /// vérification a souvent lieu plus d'une heure après l'import. Sans
+  /// cette règle, tous ses chapitres seraient « découverts après l'ajout »
+  /// (`ParutionTitre.estDecouvertApresAjout`) et, sur un site sans date de
+  /// publication, tous « Nouveau » pendant une semaine. Ils sont donc datés
+  /// de l'ajout du site : ce sont les chapitres déjà parus à ce moment-là.
+  ///
+  /// Première lecture = le site a été lié après la dernière vérification
+  /// du titre (ou le titre n'a jamais été vérifié) **et** aucun chapitre de
+  /// ce site n'est connu. Un titre « En attente », déjà vérifié sans
+  /// chapitre, n'est pas concerné : son premier chapitre reste une
+  /// nouveauté.
+  Future<DateTime?> _detectionPremiereLecture(
+    Titre titre,
+    LienTitreSource lien,
+  ) async {
+    final ajout = lien.dateAjout;
+    final idTitre = titre.id;
+    if (ajout == null || idTitre == null) return null;
+    final derniere = titre.dateDerniereVerification;
+    if (derniere != null && !ajout.isAfter(derniere)) return null;
+    final connus = await _depotChapitres.chargerChapitres(
+      idTitre,
+      idSource: lien.idSource,
+    );
+    return connus.isEmpty ? ajout : null;
   }
 
   /// Récupère les chapitres d'un site **secondaire** du titre et enregistre
@@ -644,6 +682,7 @@ class ServiceBibliotheque {
     Source source,
     String urlTitre, {
     bool classer = true,
+    DateTime? dateDetection,
   }) async {
     // Réseau d'abord : un site qui ne répond pas n'écrit rien.
     final chapitres = await _recupererChapitresDuSite(titre, source, urlTitre);
@@ -652,6 +691,7 @@ class ServiceBibliotheque {
       source.id!,
       chapitres,
       classer: classer,
+      dateDetection: dateDetection,
     );
   }
 
@@ -677,11 +717,16 @@ class ServiceBibliotheque {
     int idSource,
     List<Chapitre> chapitres, {
     bool classer = true,
+    DateTime? dateDetection,
   }) async {
     final idTitre = titre.id!;
-    final nouveaux = await _depotChapitres.enregistrerChapitres(<Chapitre>[
-      for (final chapitre in chapitres) chapitre.copierAvec(idTitre: idTitre),
-    ], idSource: idSource);
+    final nouveaux = await _depotChapitres.enregistrerChapitres(
+      <Chapitre>[
+        for (final chapitre in chapitres) chapitre.copierAvec(idTitre: idTitre),
+      ],
+      idSource: idSource,
+      dateDetection: dateDetection,
+    );
     await _depotTitres.enregistrerDateVerification(
       idTitre,
       DateTime.now().toUtc(),
@@ -1424,6 +1469,7 @@ class ServiceBibliotheque {
     List<int> idsListes = const <int>[],
     Titre? titre,
     bool classer = true,
+    DateTime? dateDetection,
   }) async {
     if (source.id == null) {
       throw ErreurService('Le site « ${source.nom} » n\'est pas enregistré.');
@@ -1452,6 +1498,7 @@ class ServiceBibliotheque {
       idsListes: idsListes,
       titre: titre,
       classer: classer,
+      dateDetection: dateDetection,
     );
   }
 
@@ -1460,7 +1507,9 @@ class ServiceBibliotheque {
   /// [titre] : titre déjà enregistré (actualisation, changement de site
   /// principal), mis à jour par son identifiant sans changer son adresse ;
   /// `null` pour un ajout. [ancien] : état d'avant, pour savoir si la
-  /// couverture du site a changé (par défaut [titre]).
+  /// couverture du site a changé (par défaut [titre]). [dateDetection] :
+  /// date de découverte donnée aux nouveaux chapitres (par défaut
+  /// maintenant ; voir [_detectionPremiereLecture]).
   Future<ResultatAjoutTitre> _ecrireDepuisSite(
     Source source,
     String urlTitre,
@@ -1470,6 +1519,7 @@ class ServiceBibliotheque {
     Titre? titre,
     Titre? ancien,
     bool classer = true,
+    DateTime? dateDetection,
   }) async {
     final idSource = source.id!;
     // Côté base, les écritures se font dans l'ordre d'importance pour le
@@ -1510,6 +1560,7 @@ class ServiceBibliotheque {
           .map((chapitre) => chapitre.copierAvec(idTitre: idTitre))
           .toList(),
       idSource: idSource,
+      dateDetection: dateDetection,
     );
     await _depotTitres.enregistrerDateVerification(
       idTitre,

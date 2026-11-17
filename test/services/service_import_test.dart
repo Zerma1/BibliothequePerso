@@ -384,6 +384,53 @@ void main() {
       expect(liens.last.estLienSeul, isTrue);
     });
 
+    test("l'adresse exacte du site l'emporte sur un autre site du même "
+        'domaine', () async {
+      // Deux sites sur le même domaine : « A » (sans www) vient en premier
+      // par ordre alphabétique, mais le titre est sur « B » (www).
+      await cible.sources.enregistrerSource(
+        const Source(
+          nom: 'A',
+          urlBase: 'https://exemple.org',
+          typeSource: TypeSource.madara,
+        ),
+      );
+      final b = await cible.sources.enregistrerSource(
+        const Source(
+          nom: 'B',
+          urlBase: 'https://www.exemple.org',
+          typeSource: TypeSource.madara,
+        ),
+      );
+      final json = jsonEncode(<String, Object?>{
+        'format': 'bibliotheque_perso-export',
+        'version': 1,
+        'titres': <Object?>[
+          // urlSource connue et exacte.
+          <String, Object?>{
+            'nom': 'Avec site',
+            'url': 'https://www.exemple.org/manga/un',
+            'urlSource': 'https://www.exemple.org',
+          },
+          // Sans urlSource : la racine exacte de l'adresse du titre.
+          <String, Object?>{
+            'nom': 'Sans site',
+            'url': 'https://www.exemple.org/manga/deux',
+          },
+        ],
+      });
+
+      final resultat = await cible.import.importerTexte(json);
+
+      expect(resultat.erreurs, isEmpty);
+      for (final url in <String>[
+        'https://www.exemple.org/manga/un',
+        'https://www.exemple.org/manga/deux',
+      ]) {
+        expect((await cible.titres.chargerTitreParUrl(url))!.idSource, b.id);
+      }
+    });
+
     test('les réglages généraux sont appliqués sur demande', () async {
       await remplirOrigine();
       await cible.parametres.enregistrerLangues(<String>['de']);
