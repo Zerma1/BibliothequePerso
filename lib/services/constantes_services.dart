@@ -138,17 +138,19 @@ const String identifiantFormatExport = 'bibliotheque_perso-export';
 ///   la main, migration 10 : noms de `ChampTitre`) et de
 ///   `reglages.archiveComplete` (booléen). Les formats 1 à 3 restent
 ///   lisibles (aucun champ verrouillé, réglage absent).
-const int versionFormatExport = 4;
+/// - 5 : ajout compatible de `titres[].descriptionPerso` (description
+///   personnelle du client, migration 12). Les formats 1 à 4 restent
+///   lisibles (aucune description importée).
+const int versionFormatExport = 5;
 
 /// Longueur maximale (en caractères) du nom d'une liste du client : assez
 /// pour un nom parlant, assez court pour tenir dans un onglet ou un menu.
 const int longueurMaxNomListe = 60;
 
-/// Longueur maximale (en caractères) du nom d'un titre ou d'un nom
-/// alternatif modifié à la main : les plus longs titres de light novels
-/// dépassent rarement 200 caractères ; la borne protège d'un collage
-/// accidentel d'un texte entier.
-const int longueurMaxNomTitre = 300;
+/// Longueur maximale (en caractères) de la description personnelle d'un
+/// titre : quelques paragraphes d'avis ou de notes tiennent largement ; la
+/// borne protège d'un collage accidentel d'un texte entier.
+const int longueurMaxDescriptionPerso = 5000;
 
 /// Durée pendant laquelle un chapitre non lu porte le badge « Nouveau »
 /// dans l'onglet Mises à jour, comptée depuis sa publication, sinon depuis

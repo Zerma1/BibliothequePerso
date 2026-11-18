@@ -15,9 +15,9 @@ Suite aux retours sur la 0.2.1-test :
   automatique sauf archive complète).
 - **Sites** : dans l'onglet Sources, toucher un site pour le modifier (nom, langues, **type**,
   réglages) ou le supprimer.
-- **Titres** : « Modifier la fiche » (nom, titres alternatifs, résumé, auteur, statut, catégories,
-  niveau de contenu). Les champs modifiés à la main ne sont plus écrasés par le site ; « Rendre au
-  site » annule. Ajout d'un titre par **recherche sur MangaDex**.
+- **Titres** : la fiche reste celle du site (décision du client) ; bloc **« Ma description »**
+  pour ajouter vos notes, jamais remplacées par le site (exportées et réimportées). Ajout d'un
+  titre par **recherche sur MangaDex**.
 - **Chapitres lus en lot** : appui long sur un chapitre puis glisser pour sélectionner ; « Marquer
   lus / non lus » ; « Marquer lus jusqu'ici » (menu ⋮ d'un chapitre ou barre de sélection).
 - **Archive complète** (Paramètres → Téléchargements) : tous les chapitres de tous les titres,

@@ -1,8 +1,7 @@
-// ServiceBibliotheque : modification d'un titre à la main (X6), champs
-// rendus au site, et gestion des listes personnelles (X4). Base en mémoire,
-// couvertures dans un dossier temporaire, aucun appel réseau.
+// ServiceBibliotheque : description personnelle d'un titre (la fiche du
+// site n'est pas modifiable) et gestion des listes personnelles (X4). Base
+// en mémoire, dossier temporaire, aucun appel réseau.
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:bibliotheque_perso/donnees/depot_categories.dart';
 import 'package:bibliotheque_perso/donnees/depot_chapitres.dart';
@@ -14,7 +13,6 @@ import 'package:bibliotheque_perso/donnees/stockage_telechargements.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
-import 'package:bibliotheque_perso/modeles/titre_alternatif.dart';
 import 'package:bibliotheque_perso/services/constantes_services.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/services/service_ajout_site.dart';
@@ -28,11 +26,6 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../donnees/outils_tests_donnees.dart';
 import '../sources/outils_tests_sources.dart';
-
-/// En-tête PNG : reconnu par ses octets.
-final Uint8List _png = Uint8List.fromList(<int>[
-  0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, //
-]);
 
 void main() {
   late Database base;
@@ -94,86 +87,66 @@ void main() {
     await base.close();
     await dossier.delete(recursive: true);
   });
-
-  group('modifier un titre', () {
-    test('les champs donnés sont nettoyés, écrits et protégés', () async {
-      final modifie = await service.modifierTitre(
-        titre.id!,
-        nom: '  Mon   nom  ',
-        resume: 'Mon résumé',
-        niveauContenu: ' Suggestive ',
-        titresAlternatifs: const <TitreAlternatif>[
-          TitreAlternatif(nom: ' Autre nom ', langue: 'FR'),
-          TitreAlternatif(nom: 'autre nom'),
-          TitreAlternatif(nom: 'Mon nom'),
-          TitreAlternatif(nom: '  '),
-        ],
-        categories: <String>['Comédie', ' comédie ', '', 'Drame'],
-      );
-      expect(modifie.nom, 'Mon nom');
-      expect(modifie.resume, 'Mon résumé');
-      expect(modifie.auteur, 'Auteur du site');
-      expect(modifie.niveauContenu, 'suggestive');
-      expect(
-        modifie.titresAlternatifs.map((a) => (a.nom, a.langue)),
-        <(String, String)>[('Autre nom', 'fr')],
-      );
-      expect(
-        (await depotCategories.chargerCategoriesDuTitre(titre.id!))
-            .map((c) => c.nom)
-            .toSet(),
-        <String>{'comédie', 'drame'},
-      );
-      expect(modifie.champsManuels, <ChampTitre>{
-        ChampTitre.nom,
-        ChampTitre.resume,
-        ChampTitre.niveauContenu,
-        ChampTitre.titresAlternatifs,
-        ChampTitre.categories,
-      });
-    });
-
+  group('description personnelle', () {
     test(
-      "l'actualisation depuis le site ne remplace pas un champ protégé",
+      'elle est nettoyée autour, garde ses paragraphes et est relue',
       () async {
-        await service.modifierTitre(titre.id!, nom: 'Mon nom');
-        await depotTitres.enregistrerTitre(
-          titre.copierAvec(nom: 'Nouveau nom du site', resume: 'Nouveau'),
+        final modifie = await service.enregistrerDescriptionPerso(
+          titre.id!,
+          "  \nMon avis : l'humour.\n\nÀ relire.  \n",
         );
-        final relu = (await depotTitres.chargerTitre(titre.id!))!;
-        expect(relu.nom, 'Mon nom');
-        expect(relu.resume, 'Nouveau');
+        expect(modifie.descriptionPerso, "Mon avis : l'humour.\n\nÀ relire.");
+        // La fiche du site n'est pas touchée.
+        expect(modifie.nom, 'Nom du site');
+        expect(modifie.resume, 'Résumé du site');
+        expect(
+          (await depotTitres.chargerTitre(titre.id!))!.descriptionPerso,
+          "Mon avis : l'humour.\n\nÀ relire.",
+        );
       },
     );
 
-    test('un nom vide, trop long ou un niveau inconnu est refusé', () async {
+    test('null ou un texte vide efface la description', () async {
+      for (final effacement in <String?>[null, '', '  \n ']) {
+        await service.enregistrerDescriptionPerso(titre.id!, 'Texte');
+        final efface = await service.enregistrerDescriptionPerso(
+          titre.id!,
+          effacement,
+        );
+        expect(efface.descriptionPerso, isNull, reason: '« $effacement »');
+      }
+    });
+
+    test('un texte trop long est refusé sans rien écrire', () async {
+      await service.enregistrerDescriptionPerso(titre.id!, 'Avant');
       await expectLater(
-        service.modifierTitre(titre.id!, nom: '   '),
-        throwsA(isA<ErreurService>()),
-      );
-      await expectLater(
-        service.modifierTitre(titre.id!, nom: 'x' * (longueurMaxNomTitre + 1)),
-        throwsA(isA<ErreurService>()),
-      );
-      await expectLater(
-        service.modifierTitre(titre.id!, niveauContenu: 'violent'),
+        service.enregistrerDescriptionPerso(
+          titre.id!,
+          'x' * (longueurMaxDescriptionPerso + 1),
+        ),
         throwsA(
           isA<ErreurService>().having(
             (e) => e.message,
             'message',
-            contains('Niveau de contenu inconnu'),
+            contains('trop longue'),
           ),
         ),
       );
       expect(
-        (await depotTitres.chargerTitre(titre.id!))!.champsManuels,
-        isEmpty,
+        (await depotTitres.chargerTitre(titre.id!))!.descriptionPerso,
+        'Avant',
       );
+      // Exactement la limite : acceptée.
+      final limite = await service.enregistrerDescriptionPerso(
+        titre.id!,
+        'y' * longueurMaxDescriptionPerso,
+      );
+      expect(limite.descriptionPerso, hasLength(longueurMaxDescriptionPerso));
     });
 
     test('un titre disparu donne une erreur claire', () async {
       await expectLater(
-        service.modifierTitre(999, nom: 'X'),
+        service.enregistrerDescriptionPerso(999, 'Texte'),
         throwsA(
           isA<ErreurService>().having(
             (e) => e.message,
@@ -184,44 +157,18 @@ void main() {
       );
     });
 
-    test('un texte vide efface la valeur, qui reste protégée', () async {
-      final modifie = await service.modifierTitre(titre.id!, auteur: '');
-      expect(modifie.auteur, isNull);
-      expect(modifie.estManuel(ChampTitre.auteur), isTrue);
-    });
-
-    test('la couverture enregistrée suit le titre renommé', () async {
-      await stockage.enregistrerCouverture(titre, _png, 'png');
-      final modifie = await service.modifierTitre(titre.id!, nom: 'Renommé');
-      expect(await stockage.cheminCouverture(titre), isNull);
-      final chemin = await stockage.cheminCouverture(modifie);
-      expect(chemin, isNotNull);
-      expect(chemin, endsWith('.png'));
-      expect(await stockage.chargerCouverture(modifie), _png);
-    });
-  });
-
-  group('rendre des champs au site', () {
     test(
-      'le verrou est retiré, la valeur attend la prochaine actualisation',
+      "l'actualisation depuis le site ne remplace pas la description",
       () async {
-        await service.modifierTitre(titre.id!, nom: 'Mon nom', resume: 'R');
-        final rendu = await service.rendreChampsAuSite(titre.id!, <ChampTitre>{
-          ChampTitre.nom,
-        });
-        expect(rendu.nom, 'Mon nom');
-        expect(rendu.champsManuels, <ChampTitre>{ChampTitre.resume});
-        await depotTitres.enregistrerTitre(titre.copierAvec(nom: 'Du site'));
-        expect((await depotTitres.chargerTitre(titre.id!))!.nom, 'Du site');
+        await service.enregistrerDescriptionPerso(titre.id!, 'Ma description');
+        await depotTitres.enregistrerTitre(
+          titre.copierAvec(resume: 'Nouveau résumé du site'),
+        );
+        final relu = (await depotTitres.chargerTitre(titre.id!))!;
+        expect(relu.resume, 'Nouveau résumé du site');
+        expect(relu.descriptionPerso, 'Ma description');
       },
     );
-
-    test('un titre disparu donne une erreur claire', () async {
-      await expectLater(
-        service.rendreChampsAuSite(999, <ChampTitre>{ChampTitre.nom}),
-        throwsA(isA<ErreurService>()),
-      );
-    });
   });
 
   group('listes personnelles', () {

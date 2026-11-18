@@ -130,7 +130,13 @@ class TitreImporte {
     this.auteur,
     this.statut,
     this.champsManuels = const <ChampTitre>{},
+    this.descriptionPerso,
   });
+
+  /// Description personnelle du client (format 5 ; `null` pour les formats
+  /// 1 à 4 ou si aucune), sans espaces autour et bornée à
+  /// `longueurMaxDescriptionPerso` caractères.
+  final String? descriptionPerso;
 
   /// Champs modifiés à la main sur l'appareil d'origine (format 4 ; vide
   /// pour les formats 1 à 3). Noms inconnus de cette version ignorés.
@@ -879,7 +885,21 @@ class ServiceImport {
           for (final champ in ChampTitre.values)
             if (champ.name == nomChamp) champ,
       },
+      descriptionPerso: _descriptionPerso(brut),
     );
+  }
+
+  /// Description personnelle (format 5) d'un titre du fichier : sans espaces
+  /// autour, `null` si absente ou vide. Un texte plus long que
+  /// [longueurMaxDescriptionPerso] (fichier modifié à la main : l'application
+  /// n'en écrit jamais) est coupé plutôt que refusé, pour ne pas perdre tout
+  /// le texte du client.
+  static String? _descriptionPerso(Map<String, Object?> brut) {
+    final texte = _texte(brut, 'descriptionPerso');
+    if (texte == null || texte.length <= longueurMaxDescriptionPerso) {
+      return texte;
+    }
+    return texte.substring(0, longueurMaxDescriptionPerso).trimRight();
   }
 
   /// Liste [cle] de [objet] ; vide si absente. Lève une [ErreurService] si
@@ -1426,6 +1446,8 @@ class _Ecriture {
         // Format 4 : les champs modifiés à la main restent protégés sur ce
         // nouvel appareil (sinon la première actualisation les écraserait).
         champsManuels: importe.champsManuels,
+        // Format 5 : la description personnelle suit le titre ajouté.
+        descriptionPerso: importe.descriptionPerso,
         // Date de vérification laissée vide : la prochaine vérification
         // traite ce titre comme jamais vérifié et récupère ses chapitres.
       ),
@@ -1526,6 +1548,17 @@ class _Ecriture {
       await _service._depotTitres.enregistrerCouvertureChoisie(
         idTitre,
         couverture,
+        executeur: _executeur,
+      );
+      complete = true;
+    }
+    // Description personnelle (format 5) : écrite seulement si ce titre n'en
+    // a pas encore sur cet appareil ; celle du client n'est jamais remplacée.
+    final description = importe.descriptionPerso;
+    if (existant.descriptionPerso == null && description != null) {
+      await _service._depotTitres.enregistrerDescriptionPerso(
+        idTitre,
+        description,
         executeur: _executeur,
       );
       complete = true;

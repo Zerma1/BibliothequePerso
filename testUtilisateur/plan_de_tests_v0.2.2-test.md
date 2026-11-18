@@ -5,8 +5,8 @@ Pour chaque test : notez **OK**, **KO** (avec ce qui s'est passé) ou **non test
 
 Avant de commencer : **sauvegardez votre base** (copie du dossier
 `%APPDATA%\io.github.zerma1\bibliotheque_perso`) et faites un export (Paramètres → Sauvegarde et
-export). La base passe en version 11 au premier lancement (catégories regroupées, champs modifiés
-à la main, liste « Terminés ») ; vos titres, listes et téléchargements sont gardés.
+export). La base passe en version 12 au premier lancement (catégories regroupées, liste « Terminés »,
+description personnelle) ; vos titres, listes et téléchargements sont gardés.
 
 ## A. Vos retours de la 0.2.1-test
 
@@ -36,9 +36,9 @@ export). La base passe en version 11 au premier lancement (catégories regroupé
 |---|------|---------|----------|
 | C1 | Onglet Sources → toucher un site | Dialogue de modification (nom, type, langues…) et bouton « Supprimer » | |
 | C2 | Changer le nom d'un site → Enregistrer | Nouveau nom affiché | |
-| C3 | Fiche d'un titre → « Modifier la fiche » → changer le nom et une catégorie | Fiche mise à jour, repère « Modifié à la main : nom, catégories » | |
-| C4 | « Rechercher les nouveaux chapitres » | Le nom et la catégorie modifiés **restent** | |
-| C5 | « Rendre au site » sur ces champs, puis rechercher les nouveaux chapitres | Les valeurs du site reviennent | |
+| C3 | Fiche d'un titre → « Ajouter une description » → écrire un texte | Bloc « Ma description » sous le résumé du site ; la fiche du site n'est pas modifiable | |
+| C4 | « Rechercher les nouveaux chapitres » | Votre description **reste** | |
+| C5 | « Effacer » la description (confirmation) | Le bloc revient à « Ajouter une description » | |
 | C6 | Ajouter un titre → onglet « Rechercher » → chercher « Ruri » | Résultats MangaDex ; on peut en ajouter un | |
 | C7 | **(D4 de la 0.2.1)** Exporter, supprimer un titre, puis importer l'export | Le titre revient avec ses listes et ses sites ; ses chapitres arrivent après la recherche des nouveaux chapitres | |
 
@@ -84,6 +84,8 @@ export). La base passe en version 11 au premier lancement (catégories regroupé
 - Le menu des listes s'ouvre par appui long / clic droit sur une puce : pratique ?
 - Sur téléphone, « + » et « Gérer les listes » sont au bout de la ligne des listes (défilement) :
   faut-il les mettre ailleurs ?
+- Le bouton « Modifier » de « Ma description » se confond-il avec un autre bouton « Modifier » de
+  la fiche ? (sinon : « Modifier ma description »)
 - Faut-il plus tard un vrai sélecteur de dossier (nouveau paquet) au lieu de coller le chemin ?
 
 ## Remarques libres

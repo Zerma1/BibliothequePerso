@@ -515,7 +515,7 @@ class ServiceExport {
   /// Contenu du fichier JSON (indenté, UTF-8 sans échappement des accents).
   /// Fonction pure.
   ///
-  /// Format `versionFormatExport` (4) : `format`, `version`, `dateExport`
+  /// Format `versionFormatExport` (5) : `format`, `version`, `dateExport`
   /// (UTC, ISO 8601), `versionApplication`, `reglages` (`langues`,
   /// `niveauxContenu`, `archiveComplete`), `listes`, `sources`, `titres`,
   /// `equivalences`. Les titres désignent
@@ -536,6 +536,9 @@ class ServiceExport {
   /// Format 4 (compatible) : `titres[].champsManuels` (noms de `ChampTitre`
   /// des champs modifiés à la main, liste vide si aucun) et
   /// `reglages.archiveComplete` (booléen).
+  ///
+  /// Format 5 (compatible) : `titres[].descriptionPerso` (description
+  /// personnelle du client, `null` si aucune).
   static String produireJson(ContenuExport contenu) {
     Map<String, Object?> versSource(Source source) => <String, Object?>{
       'nom': source.nom,
@@ -617,6 +620,9 @@ class ServiceExport {
           for (final champ in ChampTitre.values)
             if (titre.estManuel(champ)) champ.name,
         ],
+        // Format 5 : description personnelle du client (absente du site,
+        // elle serait perdue sans l'export).
+        'descriptionPerso': titre.descriptionPerso,
         'dernierChapitreLu': versChapitre(exporte.dernierChapitreLu),
         'nombreChapitres': exporte.nombreChapitres,
       };

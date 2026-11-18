@@ -14,6 +14,7 @@ import 'package:bibliotheque_perso/donnees/depot_titres_sources.dart';
 import 'package:bibliotheque_perso/donnees/gestionnaire_transactions.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
 import 'package:bibliotheque_perso/services/service_categories.dart';
+import 'package:bibliotheque_perso/services/constantes_services.dart';
 import 'package:bibliotheque_perso/services/service_export.dart';
 import 'package:bibliotheque_perso/services/service_import.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
@@ -127,8 +128,8 @@ void main() {
       final json = jsonDecode(
         ServiceExport.produireJson(contenu),
       ) as Map<String, Object?>;
-      // Format 4 depuis les champs protégés et l'archive complète.
-      expect(json['version'], 4);
+      // Format courant (les regroupements existent depuis le format 3).
+      expect(json['version'], versionFormatExport);
       expect(json['equivalences'], <Map<String, Object?>>[
         <String, Object?>{'categorie': 'comedy', 'reference': 'comédie'},
         <String, Object?>{'categorie': 'supervivencia', 'reference': 'survie'},
@@ -162,7 +163,7 @@ void main() {
       await remplirOrigine();
       final resultat = await cible.import().importerTexte(await origine.json());
 
-      expect(resultat.versionFormat, 4);
+      expect(resultat.versionFormat, versionFormatExport);
       expect(resultat.regroupementsAjoutes, 3);
       expect(resultat.erreurs, isEmpty);
       expect(resultat.resume, contains('3 catégories regroupées'));

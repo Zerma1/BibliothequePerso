@@ -10,7 +10,6 @@ import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
-import 'package:bibliotheque_perso/modeles/titre_alternatif.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/widgets/carte_titre.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
@@ -271,121 +270,8 @@ void main() {
     });
   });
 
-  group('X6 : modifier un titre', () {
-    Future<void> afficherFiche(WidgetTester tester) async {
-      fenetreLarge(tester, hauteur: 2400);
-      service.ajouterTitreDeTest(
-        'Shinigami',
-        idSource: 1,
-        nomsCategories: <String>['action'],
-        chapitres: _chapitres(2),
-      );
-      await tester.pumpWidget(
-        envelopper(
-          ChangeNotifierProvider<EtatTitre>(
-            create: (_) => EtatTitre(service, 1)..charger(),
-            child: const EcranTitre(),
-          ),
-          bibliotheque: service,
-        ),
-      );
-      await tester.pump();
-    }
-
-    testWidgets('« Modifier la fiche » : seuls les champs changés sont '
-        'envoyés ; repère et « Rendre au site »', (tester) async {
-      await afficherFiche(tester);
-
-      await tester.tap(find.byTooltip(Textes.modifierFiche));
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.widgetWithText(TextFormField, Textes.champNomTitre),
-        'Nouveau nom',
-      );
-      await tester.enterText(
-        find.widgetWithText(TextField, Textes.champAjoutCategorie),
-        'Fantasy',
-      );
-      await tester.tap(find.byTooltip(Textes.ajouter));
-      await tester.pump();
-      expect(find.widgetWithText(InputChip, 'Fantasy'), findsOneWidget);
-      await tester.tap(find.widgetWithText(TextButton, Textes.enregistrer));
-      await tester.pumpAndSettle();
-
-      expect(find.text(Textes.ficheModifiee), findsOneWidget);
-      final titre = service.titres.single;
-      expect(titre.nom, 'Nouveau nom');
-      expect(titre.champsManuels, <ChampTitre>{
-        ChampTitre.nom,
-        ChampTitre.categories,
-      });
-      expect(
-        find.text(
-          Textes.champsModifiesALaMain(<ChampTitre>[
-            ChampTitre.nom,
-            ChampTitre.categories,
-          ]),
-        ),
-        findsOneWidget,
-      );
-
-      // Le formulaire montre le repère ; « Rendre au site » le retire.
-      await tester.tap(find.byTooltip(Textes.modifierFiche));
-      await tester.pumpAndSettle();
-      expect(find.text(Textes.modifieALaMain), findsNWidgets(2));
-      await tester.tap(find.text(Textes.rendreAuSite).first);
-      await tester.pumpAndSettle();
-      expect(find.text(Textes.champRenduAuSite), findsOneWidget);
-      expect(service.titres.single.champsManuels, <ChampTitre>{
-        ChampTitre.categories,
-      });
-    });
-
-    testWidgets('formulaire inchangé : rien n\'est envoyé', (tester) async {
-      await afficherFiche(tester);
-      await tester.tap(find.byTooltip(Textes.modifierFiche));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, Textes.enregistrer));
-      await tester.pumpAndSettle();
-      expect(find.text(Textes.aucuneModification), findsOneWidget);
-      expect(service.titres.single.champsManuels, isEmpty);
-    });
-
-    testWidgets('niveau hors liste et alternatif sans nom venus du site : '
-        'formulaire inchangé, rien n\'est effacé', (tester) async {
-      fenetreLarge(tester, hauteur: 2400);
-      service.ajouterTitreDeTest('Shinigami', idSource: 1);
-      service.titres[0] = service.titres[0].copierAvec(
-        niveauContenu: 'valeur-du-site',
-        titresAlternatifs: const <TitreAlternatif>[
-          TitreAlternatif(nom: ' Autre nom ', langue: 'ja '),
-          TitreAlternatif(nom: '  ', langue: 'en'),
-        ],
-      );
-      await tester.pumpWidget(
-        envelopper(
-          ChangeNotifierProvider<EtatTitre>(
-            create: (_) => EtatTitre(service, 1)..charger(),
-            child: const EcranTitre(),
-          ),
-          bibliotheque: service,
-        ),
-      );
-      await tester.pump();
-
-      await tester.tap(find.byTooltip(Textes.modifierFiche));
-      await tester.pumpAndSettle();
-      // Le niveau inconnu de la liste est montré « Inconnu ».
-      expect(find.text(Textes.niveauInconnu), findsOneWidget);
-      await tester.tap(find.widgetWithText(TextButton, Textes.enregistrer));
-      await tester.pumpAndSettle();
-
-      expect(find.text(Textes.aucuneModification), findsOneWidget);
-      final titre = service.titres.single;
-      expect(titre.champsManuels, isEmpty);
-      expect(titre.niveauContenu, 'valeur-du-site');
-    });
-
+  group('X6 : ajout d'
+      'un titre par recherche', () {
     testWidgets('dialogue d\'ajout : rechercher sur MangaDex puis ajouter un '
         'résultat', (tester) async {
       fenetreLarge(tester);

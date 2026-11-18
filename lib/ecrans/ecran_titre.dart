@@ -18,6 +18,7 @@ import '../etat/etat_titre.dart';
 import '../etat/outils_chapitres.dart';
 import '../modeles/chapitre.dart';
 import '../modeles/titre.dart';
+import '../widgets/bloc_description_perso.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/dialogue_couverture.dart';
 import '../widgets/editeur_langues.dart';
@@ -29,7 +30,6 @@ import '../widgets/section_sites_titre.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
 import 'ecran_lecteur.dart';
-import 'ecran_modification_titre.dart';
 
 /// Actions du menu de la fiche.
 enum _ActionTitre { toutLu, toutNonLu, supprimer }
@@ -261,13 +261,6 @@ class EcranTitre extends StatelessWidget {
       ),
       actions: <Widget>[
         if (titre != null) ...<Widget>[
-          IconButton(
-            tooltip: Textes.modifierFiche,
-            icon: const Icon(Icons.edit_outlined),
-            onPressed: etat.estEnModificationFiche
-                ? null
-                : () => EcranModificationTitre.ouvrir(context, etat),
-          ),
           if (etat.estEnActualisation)
             const Padding(
               padding: EdgeInsets.all(espacementMoyen),
@@ -477,6 +470,10 @@ class _EnTete extends StatelessWidget {
                 ? Textes.aucunResume
                 : titre.resume!.trim(),
           ),
+          // Juste sous le résumé du site : le client compare d'un coup d'œil
+          // le texte du site et le sien, sans les confondre.
+          const SizedBox(height: espacementGrand),
+          BlocDescriptionPerso(etat: etat),
           const SizedBox(height: espacementGrand),
           Text(Textes.categories, style: theme.textTheme.titleMedium),
           const SizedBox(height: espacementPetit),
@@ -749,30 +746,6 @@ class _Informations extends StatelessWidget {
           Textes.derniereVerification(titre.dateDerniereVerification),
           style: theme.textTheme.bodySmall,
         ),
-        // Repère discret (X6) : le client sait quels champs ne suivent plus
-        // le site ; « Modifier la fiche » permet de les lui rendre.
-        if (titre.champsManuels.isNotEmpty)
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Icon(
-                Icons.edit_note,
-                size: theme.textTheme.bodySmall?.fontSize,
-                color: theme.colorScheme.tertiary,
-              ),
-              const SizedBox(width: espacementPetit / 2),
-              Flexible(
-                child: Text(
-                  Textes.champsModifiesALaMain(
-                    ChampTitre.values.where(titre.estManuel),
-                  ),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.tertiary,
-                  ),
-                ),
-              ),
-            ],
-          ),
         if (alternatifs.isNotEmpty)
           // Repliés par défaut : un titre MangaDex en a souvent une dizaine,
           // qui repousseraient le résumé et les chapitres hors de l'écran.

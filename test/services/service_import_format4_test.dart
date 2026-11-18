@@ -93,7 +93,8 @@ void main() {
   test("l'export contient les champs protégés et l'archive complète", () async {
     await remplirOrigine();
     final json = jsonDecode(await origine.json()) as Map<String, Object?>;
-    expect(json['version'], 4);
+    // Format 4 ou plus récent (5 : description personnelle).
+    expect(json['version'], greaterThanOrEqualTo(4));
     final reglages = json['reglages']! as Map<String, Object?>;
     expect(reglages['archiveComplete'], isTrue);
     final titre =

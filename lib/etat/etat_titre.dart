@@ -14,8 +14,8 @@ import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
 import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
-import '../modeles/titre_alternatif.dart';
 import '../services/classement_listes.dart';
+import '../services/constantes_services.dart';
 import '../services/service_bibliotheque.dart';
 import '../services/service_categories.dart';
 import '../services/service_telechargement.dart';
@@ -914,60 +914,36 @@ class EtatTitre extends EtatNotifiant {
     }
   }
 
-  // -------------------------------------- Modification de la fiche (X6)
+  // ------------------------------------ Description personnelle (client)
 
-  bool _estEnModificationFiche = false;
+  bool _estEnEnregistrementDescription = false;
 
-  /// `true` pendant l'enregistrement d'une modification de la fiche.
-  bool get estEnModificationFiche => _estEnModificationFiche;
+  /// `true` pendant l'enregistrement de la description personnelle.
+  bool get estEnEnregistrementDescription => _estEnEnregistrementDescription;
 
-  /// Niveaux de contenu possibles (formulaire de modification), du plus
-  /// sage au plus explicite.
-  static const List<String> niveauxContenuPossibles = niveauxContenu;
+  /// Nombre maximal de caractères de la description personnelle (au-delà,
+  /// le service refuse l'enregistrement).
+  static const int longueurMaxDescription = longueurMaxDescriptionPerso;
 
-  /// `true` si le champ [champ] du titre a été modifié à la main : il est
-  /// protégé de l'actualisation depuis le site.
-  bool estManuel(ChampTitre champ) => _titre?.estManuel(champ) ?? false;
+  /// Description personnelle du titre (distincte du résumé du site), ou
+  /// `null` s'il n'y en a pas.
+  String? get descriptionPerso => _titre?.descriptionPerso;
 
-  /// Modifie la fiche à la main ; seuls les champs donnés (non `null`)
-  /// changent, et ils deviennent protégés de l'actualisation.
+  /// Enregistre la description personnelle ; `null` ou un texte vide
+  /// l'efface. La fiche est relue ensuite.
   ///
-  /// Un texte vide efface [resume], [auteur] ou [statut] ; [niveauContenu]
-  /// vide = inconnu. [titresAlternatifs] et [categories] remplacent toutes
-  /// les valeurs. La fiche est relue ensuite (catégories regroupées).
-  Future<ResultatAction<bool>> modifierFiche({
-    String? nom,
-    List<TitreAlternatif>? titresAlternatifs,
-    String? resume,
-    String? auteur,
-    String? statut,
-    List<String>? categories,
-    String? niveauContenu,
-  }) => _changerFiche(
-    () => _service.modifierTitre(
-      idTitre,
-      nom: nom,
-      titresAlternatifs: titresAlternatifs,
-      resume: resume,
-      auteur: auteur,
-      statut: statut,
-      categories: categories,
-      niveauContenu: niveauContenu,
-    ),
-  );
-
-  /// « Rendre au site » : les [champs] ne sont plus protégés ; la prochaine
-  /// actualisation les remplace par les valeurs du site.
-  Future<ResultatAction<bool>> rendreAuSite(Set<ChampTitre> champs) =>
-      _changerFiche(() => _service.rendreChampsAuSite(idTitre, champs));
-
-  Future<ResultatAction<bool>> _changerFiche(
-    Future<Titre> Function() action,
+  /// Décision du client : la fiche venant du site n'est pas modifiable,
+  /// seule cette description lui appartient.
+  Future<ResultatAction<bool>> enregistrerDescriptionPerso(
+    String? texte,
   ) async {
-    _estEnModificationFiche = true;
+    if (_estEnEnregistrementDescription) {
+      return const ResultatAction<bool>.reussite(false);
+    }
+    _estEnEnregistrementDescription = true;
     notifier();
     try {
-      await action();
+      await _service.enregistrerDescriptionPerso(idTitre, texte);
       final numero = ++_numeroLecture;
       final donnees = await _lireBase();
       if (numero == _numeroLecture) _appliquer(donnees);
@@ -980,7 +956,7 @@ class EtatTitre extends EtatNotifiant {
     } catch (erreur, pile) {
       return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
     } finally {
-      _estEnModificationFiche = false;
+      _estEnEnregistrementDescription = false;
       notifier();
     }
   }

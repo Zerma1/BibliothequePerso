@@ -9,7 +9,6 @@ import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
-import 'package:bibliotheque_perso/modeles/titre_alternatif.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -230,23 +229,34 @@ void main() {
 
     tearDown(() => etat.dispose());
 
-    test('modifier la fiche protège les champs ; les rendre au site les '
-        'libère', () async {
-      final resultat = await etat.modifierFiche(
-        nom: 'Nouveau nom',
-        titresAlternatifs: const <TitreAlternatif>[
-          TitreAlternatif(nom: 'Autre', langue: 'en'),
-        ],
+    test('description personnelle : enregistrée puis effacée, la fiche '
+        'est relue', () async {
+      expect(etat.descriptionPerso, isNull);
+
+      final resultat = await etat.enregistrerDescriptionPerso(
+        '  Mes notes\n\nsur deux paragraphes  ',
       );
       expect(resultat.estReussi, isTrue);
-      expect(etat.titre!.nom, 'Nouveau nom');
-      expect(etat.estManuel(ChampTitre.nom), isTrue);
-      expect(etat.estManuel(ChampTitre.titresAlternatifs), isTrue);
-      expect(etat.estManuel(ChampTitre.resume), isFalse);
+      expect(etat.descriptionPerso, 'Mes notes\n\nsur deux paragraphes');
+      expect(etat.estEnEnregistrementDescription, isFalse);
 
-      await etat.rendreAuSite(<ChampTitre>{ChampTitre.nom});
-      expect(etat.estManuel(ChampTitre.nom), isFalse);
-      expect(etat.estManuel(ChampTitre.titresAlternatifs), isTrue);
+      await etat.enregistrerDescriptionPerso(null);
+      expect(etat.descriptionPerso, isNull);
+    });
+
+    test('description personnelle refusée : erreur lisible, rien ne '
+        'change', () async {
+      service.erreurDescription = const ErreurService(
+        'La description est trop longue (5000 caractères au plus).',
+      );
+
+      final resultat = await etat.enregistrerDescriptionPerso('Texte');
+
+      expect(resultat.estReussi, isFalse);
+      expect(resultat.erreur!.nature, NatureErreur.refus);
+      expect(resultat.erreur!.detail, contains('trop longue'));
+      expect(etat.descriptionPerso, isNull);
+      expect(etat.estEnEnregistrementDescription, isFalse);
     });
 
     test(

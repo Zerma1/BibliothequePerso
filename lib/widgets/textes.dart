@@ -2084,85 +2084,44 @@ abstract final class Textes {
   static const String aideModifierSource =
       'Touchez un site pour le modifier (nom, type, langues) ou le supprimer.';
 
-  // --------------------------------------------- Modifier un titre (X6)
+  // ------------------------------------- Description personnelle (client)
 
-  /// Bouton et titre du formulaire de modification d'une fiche.
-  static const String modifierFiche = 'Modifier la fiche';
+  /// Intitulé du bloc de la description personnelle, sous le résumé.
+  static const String maDescription = 'Ma description';
 
-  /// Champ du nom d'un titre.
-  static const String champNomTitre = 'Nom';
+  /// Explication sous l'intitulé : ce texte est au client, pas au site.
+  static const String aideMaDescription =
+      'Vos notes sur ce titre. Le site ne les remplace jamais.';
 
-  /// Nom d'un titre laissé vide.
-  static const String erreurNomTitreVide = 'Donnez un nom au titre.';
+  /// Bouton quand la description est vide.
+  static const String ajouterDescription = 'Ajouter une description';
 
-  /// Section des titres alternatifs du formulaire.
-  static const String sectionTitresAlternatifs = 'Titres alternatifs';
+  /// Bouton de modification de la description.
+  static const String modifierDescription = 'Modifier';
 
-  /// Champ d'un titre alternatif.
-  static const String champTitreAlternatif = 'Titre alternatif';
+  /// Bouton d'effacement de la description.
+  static const String effacerDescription = 'Effacer';
 
-  /// Champ de la langue d'un titre alternatif.
-  static const String champLangueAlternatif = 'Langue';
+  /// Champ de saisie du dialogue.
+  static const String champDescription = 'Description';
 
-  /// Bouton d'ajout d'un titre alternatif.
-  static const String ajouterTitreAlternatif = 'Ajouter un titre alternatif';
+  /// Question avant d'effacer la description.
+  static const String titreEffacerDescription = 'Effacer la description ?';
 
-  /// Info-bulle : retirer une ligne du formulaire.
-  static const String retirer = 'Retirer';
+  /// Détail de la confirmation d'effacement.
+  static const String confirmationEffacerDescription =
+      'Votre description de ce titre sera effacée. Le résumé du site ne '
+      'change pas.';
 
-  /// Champ d'ajout d'une catégorie.
-  static const String champAjoutCategorie = 'Ajouter une catégorie';
+  /// Message après l'enregistrement de la description.
+  static const String descriptionEnregistree = 'Description enregistrée.';
 
-  /// Libellé du niveau de contenu.
-  static const String niveauContenu = 'Niveau de contenu';
+  /// Message après l'effacement de la description.
+  static const String descriptionEffacee = 'Description effacée.';
 
-  /// Niveau de contenu inconnu.
-  static const String niveauInconnu = 'Inconnu';
-
-  /// Repère d'un champ modifié à la main.
-  static const String modifieALaMain = 'Modifié à la main';
-
-  /// Bouton « Rendre au site ».
-  static const String rendreAuSite = 'Rendre au site';
-
-  /// Explication du formulaire de modification.
-  static const String explicationModificationFiche =
-      "Les champs modifiés ici sont protégés : l'actualisation depuis le "
-      "site ne les remplace plus, jusqu'à ce que vous les rendiez au site.";
-
-  /// Message après « Rendre au site ».
-  static const String champRenduAuSite =
-      'Ce champ suivra de nouveau le site à la prochaine actualisation.';
-
-  /// Message après l'enregistrement de la fiche.
-  static const String ficheModifiee = 'Fiche modifiée.';
-
-  /// Message quand rien n'a changé dans le formulaire.
-  static const String aucuneModification = 'Aucune modification.';
-
-  /// Nom affiché d'un champ de la fiche.
-  static String libelleChampTitre(ChampTitre champ) {
-    switch (champ) {
-      case ChampTitre.nom:
-        return 'nom';
-      case ChampTitre.titresAlternatifs:
-        return 'titres alternatifs';
-      case ChampTitre.resume:
-        return 'résumé';
-      case ChampTitre.auteur:
-        return 'auteur';
-      case ChampTitre.statut:
-        return 'statut';
-      case ChampTitre.categories:
-        return 'catégories';
-      case ChampTitre.niveauContenu:
-        return 'niveau de contenu';
-    }
-  }
-
-  /// Repère discret de la fiche : champs modifiés à la main.
-  static String champsModifiesALaMain(Iterable<ChampTitre> champs) =>
-      '$modifieALaMain : ${champs.map(libelleChampTitre).join(', ')}';
+  /// Erreur de saisie : texte trop long.
+  static String descriptionTropLongue(int maximum) =>
+      'La description est trop longue ($maximum caractères au plus).';
 
   /// Choix « Adresse » du dialogue d'ajout d'un titre.
   static const String modeAdresse = 'Adresse';

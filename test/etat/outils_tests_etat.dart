@@ -36,7 +36,6 @@ import 'package:bibliotheque_perso/modeles/liste_lecture.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/telechargement.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
-import 'package:bibliotheque_perso/modeles/titre_alternatif.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/services/planification_mises_a_jour.dart';
 import 'package:bibliotheque_perso/services/politique_telechargement.dart';
@@ -808,6 +807,9 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
   /// réordonnancement des listes, si définie.
   Object? erreurListes;
 
+  /// Erreur levée par [enregistrerDescriptionPerso], si définie.
+  Object? erreurDescription;
+
   void _refuserListes() {
     final erreur = erreurListes;
     if (erreur != null) throw erreur;
@@ -886,50 +888,18 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
   }
 
   @override
-  Future<Titre> modifierTitre(
-    int idTitre, {
-    String? nom,
-    List<TitreAlternatif>? titresAlternatifs,
-    String? resume,
-    String? auteur,
-    String? statut,
-    List<String>? categories,
-    String? niveauContenu,
-  }) async {
+  Future<Titre> enregistrerDescriptionPerso(int idTitre, String? texte) async {
+    final erreur = erreurDescription;
+    if (erreur != null) throw erreur;
     final index = titres.indexWhere((titre) => titre.id == idTitre);
     if (index < 0) throw const ErreurService("Ce titre n'existe plus.");
-    final avant = titres[index];
-    final modifie = avant.copierAvec(
-      nom: nom ?? avant.nom,
-      titresAlternatifs: titresAlternatifs ?? avant.titresAlternatifs,
-      resume: resume ?? avant.resume,
-      auteur: auteur ?? avant.auteur,
-      statut: statut ?? avant.statut,
-      niveauContenu: niveauContenu ?? avant.niveauContenu,
-      champsManuels: <ChampTitre>{
-        ...avant.champsManuels,
-        if (nom != null) ChampTitre.nom,
-        if (titresAlternatifs != null) ChampTitre.titresAlternatifs,
-        if (resume != null) ChampTitre.resume,
-        if (auteur != null) ChampTitre.auteur,
-        if (statut != null) ChampTitre.statut,
-        if (categories != null) ChampTitre.categories,
-        if (niveauContenu != null) ChampTitre.niveauContenu,
-      },
+    final propre = texte?.trim() ?? '';
+    final modifie = titres[index].copierAvec(
+      descriptionPerso: propre.isEmpty ? null : propre,
+      effacerDescriptionPerso: propre.isEmpty,
     );
     titres[index] = modifie;
     return modifie;
-  }
-
-  @override
-  Future<Titre> rendreChampsAuSite(int idTitre, Set<ChampTitre> champs) async {
-    final index = titres.indexWhere((titre) => titre.id == idTitre);
-    if (index < 0) throw const ErreurService("Ce titre n'existe plus.");
-    final rendu = titres[index].copierAvec(
-      champsManuels: titres[index].champsManuels.difference(champs),
-    );
-    titres[index] = rendu;
-    return rendu;
   }
 
   @override
