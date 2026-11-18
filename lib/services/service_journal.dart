@@ -23,6 +23,7 @@ import '../modeles/journal.dart';
 import 'constantes_services.dart';
 import 'erreur_service.dart';
 import 'service_parametres.dart';
+import 'service_rapports_erreur.dart' show ServiceRapportsErreur;
 
 export '../donnees/journal_fichier.dart' show FichierJournal;
 
@@ -41,14 +42,19 @@ class ServiceJournal {
   ///   même que les rapports d'erreur, que le client sait déjà retrouver) ;
   /// - [depotParametres] : stockage du réglage [ServiceParametres.cleJournalDetaille]
   ///   (sans lui, le réglage n'est pas enregistré et vaut « désactivé ») ;
-  /// - [horloge] : heure courante (les tests la fixent).
+  /// - [horloge] : heure courante (les tests la fixent) ;
+  /// - [delaiJournal] : délai maximal accordé au journal installé pour
+  ///   écrire ses entrées en attente ([delaiMaxJournal] par défaut ; les
+  ///   tests le raccourcissent).
   ServiceJournal({
     required this.dossierJournaux,
     required this.dossierRapports,
     DepotParametres? depotParametres,
     DateTime Function()? horloge,
+    Duration delaiJournal = delaiMaxJournal,
   }) : _depotParametres = depotParametres,
-       _horloge = horloge ?? DateTime.now;
+       _horloge = horloge ?? DateTime.now,
+       _delaiJournal = delaiJournal;
 
   /// Crée le service sur les dossiers par défaut de l'application :
   /// `<dossier documents>/bibliotheque_perso/journaux/` et `…/rapports/`.
@@ -77,6 +83,7 @@ class ServiceJournal {
 
   final DepotParametres? _depotParametres;
   final DateTime Function() _horloge;
+  final Duration _delaiJournal;
 
   /// Export en cours : un double clic reçoit le même fichier au lieu d'en
   /// écrire un second.
@@ -244,14 +251,12 @@ class ServiceJournal {
     }
   }
 
-  /// Écrit les entrées en attente du journal installé. Ne lève jamais.
-  static Future<void> _viderJournal() async {
-    try {
-      await Journal.actuel.vider();
-    } catch (_) {
-      // Contrat du journal : jamais d'exception ; prudence quand même.
-    }
-  }
+  /// Écrit les entrées en attente du journal installé, au plus pendant le
+  /// délai du service : un journal bloqué (disque plein, fichier verrouillé)
+  /// n'empêche jamais la liste ni l'export, qui se font alors sans ces
+  /// entrées. Ne lève jamais.
+  Future<void> _viderJournal() =>
+      ServiceRapportsErreur.viderJournalBorne(Journal.actuel, _delaiJournal);
 
   // -------------------------------------------------------------- Réglage
 

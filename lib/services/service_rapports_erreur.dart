@@ -36,16 +36,22 @@ class ServiceRapportsErreur {
   /// un [JournalFichier] (par exemple dans les tests). Avec un
   /// [JournalFichier] installé, c'est lui qui est lu (entrées en attente
   /// écrites d'abord).
+  ///
+  /// [delaiJournal] : délai maximal accordé au journal pour écrire ses
+  /// entrées en attente, puis pour être relu ([delaiMaxJournal] par défaut ;
+  /// les tests le raccourcissent).
   ServiceRapportsErreur(
     this.dossierRapports, {
     String? versionApplication,
     String? systeme,
     DateTime Function()? horloge,
     String? dossierJournaux,
+    Duration delaiJournal = delaiMaxJournal,
   }) : _versionApplication = versionApplication,
        _systeme = systeme ?? Platform.operatingSystem,
        _horloge = horloge ?? DateTime.now,
-       _dossierJournaux = dossierJournaux;
+       _dossierJournaux = dossierJournaux,
+       _delaiJournal = delaiJournal;
 
   /// Crée le service sur le dossier par défaut :
   /// `<dossier documents>/bibliotheque_perso/rapports/`.
@@ -75,6 +81,7 @@ class ServiceRapportsErreur {
   final String _systeme;
   final DateTime Function() _horloge;
   final String? _dossierJournaux;
+  final Duration _delaiJournal;
 
   /// Titre de la section du rapport qui recopie la fin du journal.
   static const String titreSectionJournal = 'Dernières lignes du journal';
@@ -84,7 +91,11 @@ class ServiceRapportsErreur {
   ///
   /// Les lignes sont déjà masquées à l'écriture du journal
   /// (`masquerDonneesSensibles`) ; elles le sont une seconde fois ici, au
-  /// cas où un fichier ancien ou copié à la main serait lu.
+  /// cas où un fichier ancien ou copié à la main serait lu. Elles passent
+  /// aussi par `masquerDonneesPersonnelles`, comme le corps du rapport : le
+  /// journal garde les chemins complets (dossier personnel), les adresses IP
+  /// ou les courriels qui ne doivent pas sortir de l'appareil avec le
+  /// rapport.
   static String ajouterLignesJournal(String texte, List<String> lignes) {
     if (lignes.isEmpty) return texte;
     final tampon = StringBuffer(texte);
@@ -93,29 +104,53 @@ class ServiceRapportsErreur {
       ..writeln()
       ..writeln('--- $titreSectionJournal (${lignes.length}) ---');
     for (final ligne in lignes) {
-      tampon.writeln(masquerDonneesSensibles(ligne));
+      tampon.writeln(
+        masquerDonneesPersonnelles(masquerDonneesSensibles(ligne)),
+      );
     }
     return tampon.toString();
   }
 
   /// Les [nombreLignesJournalRapport] dernières lignes du journal, ou une
   /// liste vide s'il n'y en a pas (journal silencieux sans dossier connu,
-  /// fichier illisible). Ne lève jamais : un rapport sans journal vaut mieux
-  /// que pas de rapport.
+  /// fichier illisible, lecture trop longue). Ne lève jamais : un rapport
+  /// sans journal vaut mieux que pas de rapport.
+  ///
+  /// Le journal installé écrit d'abord ses entrées en attente, dans la
+  /// limite de [delaiMaxJournal] : un journal bloqué ne retient jamais le
+  /// rapport, qui part alors sans ces entrées (les lignes déjà écrites sont
+  /// quand même jointes).
   Future<List<String>> _chargerLignesJournal() async {
     try {
       final journal = Journal.actuel;
-      if (journal is JournalFichier) {
-        return await journal.chargerDernieresLignes(nombreLignesJournalRapport);
-      }
-      final dossier = _dossierJournaux;
+      await viderJournalBorne(journal, _delaiJournal);
+      // Le dossier du journal installé l'emporte sur celui donné au service.
+      // Lecture directe du fichier (et non `chargerDernieresLignes`, qui
+      // attendrait à nouveau sans limite les entrées en attente).
+      final dossier = journal is JournalFichier
+          ? journal.dossier
+          : _dossierJournaux;
       if (dossier == null) return const <String>[];
       return await chargerDernieresLignesJournal(
         dossier,
         nombreLignesJournalRapport,
-      );
+      ).timeout(_delaiJournal, onTimeout: () => const <String>[]);
     } catch (_) {
       return const <String>[];
+    }
+  }
+
+  /// Attend que [journal] écrive ses entrées en attente, au plus [delai].
+  /// Ne lève jamais : au-delà du délai, ou si le journal échoue, l'appelant
+  /// continue sans ces entrées.
+  ///
+  /// Partagé avec `ServiceJournal` (export du journal).
+  static Future<void> viderJournalBorne(Journal journal, Duration delai) async {
+    try {
+      await journal.vider().timeout(delai);
+    } catch (_) {
+      // Délai dépassé (TimeoutException) ou journal en échec malgré son
+      // contrat : l'export ou le rapport passe avant les entrées en attente.
     }
   }
 

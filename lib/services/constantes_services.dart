@@ -110,6 +110,14 @@ const int nombreMaximalRapports = 50;
 /// pour que le rapport reste lisible.
 const int nombreLignesJournalRapport = 200;
 
+/// Délai maximal accordé au journal pour écrire ses entrées en attente puis
+/// être relu, avant un export du journal ou un rapport d'erreur. Écrire un
+/// lot prend quelques millisecondes : au-delà de quelques secondes, le
+/// journal est bloqué (disque plein, fichier verrouillé) et l'export ou le
+/// rapport continue sans les entrées en attente plutôt que d'attendre sans
+/// fin.
+const Duration delaiMaxJournal = Duration(seconds: 3);
+
 /// Préfixe du nom d'un journal exporté
 /// (`journal_export_20261118_143000.log`), dans le dossier des rapports.
 const String prefixeFichierJournalExporte = 'journal_export_';

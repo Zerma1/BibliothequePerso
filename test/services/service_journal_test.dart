@@ -1,6 +1,7 @@
 // Tests de ServiceJournal (fichiers, export, réglage « journal détaillé »)
 // et de la fin du journal jointe aux rapports d'erreur : dossier temporaire
 // et base en mémoire, aucun réseau.
+import 'dart:async';
 import 'dart:io';
 
 import 'package:bibliotheque_perso/donnees/depot_parametres.dart';
@@ -272,8 +273,80 @@ void main() {
         'GET https://site.test/?token=abc123',
       ]);
 
-      expect(texte, contains('token=***'));
+      // Le marqueur exact dépend du dernier masquage appliqué (celui des
+      // rapports : `<masqué>`) : seule compte la disparition de la valeur.
+      expect(texte, contains('token='));
       expect(texte, isNot(contains('abc123')));
+    });
+
+    test('masque le dossier personnel et les adresses des lignes jointes', () {
+      final texte = ServiceRapportsErreur.ajouterLignesJournal('Rapport\n', [
+        r'ERREUR telechargement : C:\Users\jdupont\Documents\bibliotheque_perso',
+        'Connexion depuis 192.168.1.20 pour jean.dupont@exemple.fr',
+      ]);
+
+      expect(texte, isNot(contains('jdupont')));
+      expect(texte, contains(r'C:\Users\'));
+      expect(texte, contains('bibliotheque_perso'));
+      expect(texte, isNot(contains('192.168.1.20')));
+      expect(texte, isNot(contains('jean.dupont@exemple.fr')));
+    });
+
+    test('part sans attendre un journal bloqué', () async {
+      await ecrireJournal('journal-2026-11-18.log', 'ligne déjà écrite\n');
+      Journal.actuel = _JournalBloque();
+      final service = ServiceRapportsErreur(
+        dossierRapports,
+        dossierJournaux: dossierJournaux,
+        delaiJournal: const Duration(milliseconds: 50),
+      );
+
+      final chemin = await service
+          .exporterRapport(StateError('panne'))
+          .timeout(const Duration(seconds: 5));
+
+      expect(await File(chemin).readAsString(), contains('ligne déjà écrite'));
+    });
+  });
+
+  group('journal bloqué', () {
+    ServiceJournal creerServiceBorne() => ServiceJournal(
+      dossierJournaux: dossierJournaux,
+      dossierRapports: dossierRapports,
+      horloge: () => maintenant,
+      delaiJournal: const Duration(milliseconds: 50),
+    );
+
+    test("n'empêche pas l'export du journal déjà écrit", () async {
+      await ecrireJournal('journal-2026-11-18.log', 'déjà écrit\n');
+      Journal.actuel = _JournalBloque();
+
+      final chemin = await creerServiceBorne().exporterJournal().timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(await File(chemin).readAsString(), 'déjà écrit\n');
+    });
+
+    test("n'empêche pas la liste des fichiers", () async {
+      await ecrireJournal('journal-2026-11-18.log', 'x\n');
+      Journal.actuel = _JournalBloque();
+
+      final fichiers = await creerServiceBorne().listerFichiers().timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(fichiers.map((f) => f.nom), ['journal-2026-11-18.log']);
+    });
+
+    test('un vidage en échec est ignoré', () async {
+      await expectLater(
+        ServiceRapportsErreur.viderJournalBorne(
+          _JournalBloque(echoue: true),
+          const Duration(milliseconds: 50),
+        ),
+        completes,
+      );
     });
   });
 
@@ -294,4 +367,26 @@ void main() {
       );
     });
   });
+}
+
+/// Journal dont le vidage ne se termine jamais (disque bloqué), ou échoue
+/// si [echoue] (contrat du journal non respecté).
+class _JournalBloque extends Journal {
+  _JournalBloque({this.echoue = false});
+
+  final bool echoue;
+
+  @override
+  void journaliser(
+    NiveauJournal niveau,
+    String categorie,
+    String message, {
+    Object? erreur,
+    StackTrace? pile,
+  }) {}
+
+  @override
+  Future<void> vider() => echoue
+      ? Future<void>.error(StateError('disque plein'))
+      : Completer<void>().future;
 }
