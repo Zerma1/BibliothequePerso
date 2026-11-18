@@ -385,6 +385,18 @@ class EtatParametres extends EtatNotifiant {
     notifier();
   }
 
+  /// Applique les règles de téléchargement à toute la bibliothèque, par
+  /// exemple après un import (nouveaux titres suivis, archive complète
+  /// activée par le fichier). Une erreur est seulement journalisée : les
+  /// règles seront appliquées au prochain démarrage.
+  Future<void> appliquerReglesATous() async {
+    try {
+      await _serviceTelechargement.appliquerReglesATous();
+    } catch (erreur, pile) {
+      debugPrint('Règles non appliquées : $erreur\n$pile');
+    }
+  }
+
   /// Enregistre le brouillon puis applique les règles à tous les titres
   /// favoris et suivis.
   Future<ResultatAction<bool>> enregistrer() async {
