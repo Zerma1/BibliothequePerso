@@ -148,7 +148,8 @@ class DepotTitres {
     final (id, verrous) = await _enregistrerLigneTitre(txn, titre);
 
     // Noms et catégories modifiés à la main : gardés tels quels (migration
-    // 10), quoi que renvoie le site.
+    // 10), quoi que renvoie le site. Vaut pour une mise à jour seulement :
+    // à l'insertion, `verrous` est vide et tout est écrit.
     if (!verrous.contains(ChampTitre.titresAlternatifs)) {
       await _remplacerTitresAlternatifs(txn, id, titre.titresAlternatifs);
     }
@@ -227,7 +228,8 @@ class DepotTitres {
       };
 
   /// Insère ou met à jour la ligne `titres` et renvoie son identifiant et
-  /// ses champs manuels (verrouillés) tels qu'ils sont en base.
+  /// les champs manuels (verrouillés) à respecter : ceux déjà en base pour
+  /// une mise à jour, aucun pour une insertion.
   ///
   /// On n'utilise pas `INSERT OR REPLACE` : il supprime puis recrée la ligne,
   /// ce qui déclencherait les `ON DELETE CASCADE` et effacerait les chapitres,
@@ -262,7 +264,11 @@ class DepotTitres {
       ligne['couverture_choisie'] = _normaliserCouverture(
         titre.couvertureChoisie,
       );
-      return (await txn.insert('titres', ligne), titre.champsManuels);
+      // Les verrous ne protègent que des valeurs déjà en base : à
+      // l'insertion, aucun n'est appliqué (ensemble vide), pour que les noms
+      // alternatifs et les catégories fournis soient bien écrits. Les champs
+      // manuels sont tout de même enregistrés (colonne `champs_manuels`).
+      return (await txn.insert('titres', ligne), const <ChampTitre>{});
     }
     final verrous = Titre.decoderChampsManuels(
       existants.first['champs_manuels'] as String?,

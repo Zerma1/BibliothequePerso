@@ -767,8 +767,8 @@ Future<void> _migration11(DatabaseExecutor executeur) async {
 
   // Les listes en position 4 et au-delà sont décalées d'un cran pour laisser
   // la position 4 à « Terminés ». Contrairement à la migration 5, les listes
-  // système sont décalées aussi : depuis la migration 10, le client peut les
-  // déplacer (DepotListes.enregistrerOrdre), et décaler toutes les lignes
+  // système sont décalées aussi : le client peut les déplacer avec
+  // DepotListes.enregistrerOrdre, et décaler toutes les lignes
   // garde exactement l'ordre relatif qu'il a choisi.
   await executeur.rawUpdate(
     'UPDATE listes SET ordre = ordre + ? WHERE ordre >= ?',

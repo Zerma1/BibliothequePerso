@@ -452,6 +452,10 @@ class DepotChapitres {
   /// du titre [idTitre] dont le numéro est inférieur ou égal à [numero], et
   /// renvoie le nombre de chapitres dont l'état a **changé**.
   ///
+  /// Les chapitres de numéro 0 (oneshots, chapitres sans numéro) ne sont
+  /// concernés que si [numero] vaut 0 : « jusqu'au chapitre 5 » ne marque pas
+  /// un oneshot.
+  ///
   /// Toutes les langues et tous les sites du titre sont concernés, chapitres
   /// externes ([Chapitre.urlExterne]) compris. Comme [marquerLus], seule la
   /// colonne `est_lu` est écrite, et les chapitres déjà dans l'état demandé
@@ -477,10 +481,14 @@ class DepotChapitres {
       return await GestionnaireTransactions.executerAtomiquement(
         _baseDeDonnees,
         executeur,
+        // Numéro 0 = oneshot ou chapitre sans numéro : il n'est pas « avant »
+        // le chapitre 1, donc exclu quand numero > 0. Avec numero == 0 (ou
+        // négatif), la borne basse 0 n'exclut rien de plus que `numero <= ?`.
         (txn) => txn.rawUpdate(
           'UPDATE chapitres SET est_lu = ? '
-          'WHERE id_titre = ? AND est_lu != ? AND numero <= ?',
-          <Object?>[valeur, idTitre, valeur, numero],
+          'WHERE id_titre = ? AND est_lu != ? AND numero <= ? '
+          'AND (? <= 0 OR numero > 0)',
+          <Object?>[valeur, idTitre, valeur, numero, numero],
         ),
       );
     } on DatabaseException catch (erreur) {

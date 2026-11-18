@@ -213,6 +213,24 @@ void main() {
       expect(await lus(idTitre), isEmpty);
     });
 
+    test('les chapitres de numéro 0 (oneshots) ne sont marqués qu\'avec '
+        'numero 0', () async {
+      await depot.enregistrerChapitres(<Chapitre>[
+        chapitre(0),
+        chapitre(0, langue: 'fr'),
+      ]);
+      expect(await depot.marquerLusJusqua(idTitre, 2.5), 6);
+      expect(await lus(idTitre), isNot(contains('0.0.en')));
+      expect(await lus(idTitre), isNot(contains('0.0.fr')));
+
+      expect(await depot.marquerLusJusqua(idTitre, 0), 2);
+      expect(await lus(idTitre), containsAll(<String>['0.0.en', '0.0.fr']));
+      expect(await lus(idTitre), hasLength(8));
+
+      expect(await depot.marquerLusJusqua(idTitre, 0, lu: false), 2);
+      expect(await lus(idTitre), hasLength(6));
+    });
+
     test('un titre inconnu ne marque rien', () async {
       expect(await depot.marquerLusJusqua(999, 100), 0);
     });

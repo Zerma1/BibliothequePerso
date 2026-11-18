@@ -265,4 +265,44 @@ void main() {
     );
     expect(importe.champsManuels, <ChampTitre>{ChampTitre.auteur});
   });
+
+  test('à l\'insertion, les noms alternatifs et catégories verrouillés sont '
+      'écrits, puis protégés', () async {
+    final importe = await depot.enregistrerTitre(
+      depuisLeSite.copierAvec(
+        urlTitre: 'https://mangadex.org/title/importe',
+        titresAlternatifs: const <TitreAlternatif>[
+          TitreAlternatif(nom: 'Alias perso'),
+        ],
+        champsManuels: <ChampTitre>{
+          ChampTitre.titresAlternatifs,
+          ChampTitre.categories,
+        },
+      ),
+      categories: <String>['Perso'],
+    );
+    expect(importe.titresAlternatifs.map((a) => a.nom), <String>[
+      'Alias perso',
+    ]);
+    expect(await categoriesDe(importe.id!), <String>['perso']);
+    expect(importe.champsManuels, <ChampTitre>{
+      ChampTitre.titresAlternatifs,
+      ChampTitre.categories,
+    });
+
+    // Actualisation suivante depuis le site : les verrous jouent.
+    final actualise = await depot.enregistrerTitre(
+      depuisLeSite.copierAvec(
+        urlTitre: 'https://mangadex.org/title/importe',
+        titresAlternatifs: const <TitreAlternatif>[
+          TitreAlternatif(nom: 'Alias du site'),
+        ],
+      ),
+      categories: <String>['Action'],
+    );
+    expect(actualise.titresAlternatifs.map((a) => a.nom), <String>[
+      'Alias perso',
+    ]);
+    expect(await categoriesDe(importe.id!), <String>['perso']);
+  });
 }
