@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
@@ -245,6 +247,76 @@ void main() {
           .toList();
       expect(numeros, List<int>.generate(400, (i) => i));
     }
+  });
+
+  test(
+    'écriture qui ne se termine jamais : vider rend la main, un seul vidage',
+    () async {
+      final ecritureBloquee = Completer<void>();
+      final appels = <String>[];
+      final journal = JournalFichier(
+        dossier,
+        delaiMaxVidage: const Duration(milliseconds: 100),
+        ecrivain: (chemin, octets) {
+          appels.add(utf8.decode(octets));
+          return appels.length == 1
+              ? ecritureBloquee.future
+              : Future<void>.value();
+        },
+      );
+      journal.info(CategorieJournal.base, 'premier lot');
+      final chrono = Stopwatch()..start();
+      await journal.vider();
+      // Beaucoup d'entrées et de vidages pendant le blocage.
+      for (var i = 0; i < 50; i++) {
+        journal.erreur(CategorieJournal.base, 'en attente $i');
+        await journal.vider();
+      }
+      await journal.fermer();
+      chrono.stop();
+      // Chaque vidage a rendu la main après ~100 ms, sans attendre le disque.
+      expect(chrono.elapsed, lessThan(const Duration(seconds: 15)));
+      // Une seule écriture lancée : les demandes ne s'empilent pas.
+      expect(appels, hasLength(1));
+      expect(appels.single, contains('premier lot'));
+
+      // Le disque se débloque : un seul tour de plus écrit tout le reste.
+      ecritureBloquee.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(appels, hasLength(2));
+      expect(appels[1], contains('en attente 0'));
+      expect(appels[1], contains('en attente 49'));
+    },
+  );
+
+  test('verrou tenu ailleurs : le journal ne reste pas figé', () async {
+    final journal = JournalFichier(
+      dossier,
+      horloge: () => DateTime(2026, 11, 18, 12),
+      delaiMaxVerrou: const Duration(milliseconds: 200),
+    );
+    journal.info(CategorieJournal.base, 'avant');
+    await journal.vider();
+    final fichier = File(p.join(dossier, nomFichierJournal('2026-11-18', 1)));
+    // Autre ouverture qui garde le verrou (sur Windows, le verrou départage
+    // les ouvertures ; sur Linux, il appartient au processus et ne bloque
+    // pas). Sur Windows, l'écriture sans verrou est alors refusée par le
+    // système : ce lot est perdu, mais le journal continue ensuite.
+    final autre = await fichier.open(mode: FileMode.append);
+    try {
+      await autre.lock(FileLock.exclusive);
+      journal.info(CategorieJournal.base, 'pendant le verrou');
+      final chrono = Stopwatch()..start();
+      await journal.vider();
+      expect(chrono.elapsed, lessThan(const Duration(seconds: 3)));
+    } finally {
+      await autre.close();
+    }
+    journal.info(CategorieJournal.base, 'après le verrou');
+    await journal.fermer();
+    final contenu = await fichier.readAsString();
+    expect(contenu, contains('avant'));
+    expect(contenu, contains('après le verrou'));
   });
 
   test('ouvrir et installer dans Journal.actuel', () async {

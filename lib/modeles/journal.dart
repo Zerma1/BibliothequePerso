@@ -305,7 +305,9 @@ const String valeurMasqueeJournal = '***';
 /// `access_token`, `apiKey`, `password`, `PHPSESSID`, `auth_code`…
 ///
 /// `auth` seul n'y est pas : il masquerait aussi `author` / `authors[]`
-/// (filtres MangaDex), utiles pour comprendre une requête.
+/// (filtres MangaDex), utiles pour comprendre une requête. `sid` non plus :
+/// il masquerait `side` ou `inside` ; il est traité à part
+/// ([motsSeparesSensiblesJournal]).
 const List<String> motsSensiblesJournal = [
   'token',
   'key',
@@ -314,7 +316,6 @@ const List<String> motsSensiblesJournal = [
   'secret',
   'session',
   'sessid',
-  'sid',
   'auth_',
   '_auth',
   'authorization',
@@ -334,7 +335,19 @@ const List<String> enTetesSensiblesJournal = [
   'x-csrf-token',
 ];
 
-final String _motifMots = motsSensiblesJournal.join('|');
+/// Mots sensibles seulement quand ils forment le nom entier ou un morceau
+/// séparé du nom (`sid`, `connect.sid`, `user_sid`, mais pas `side`,
+/// `inside` ni `consider`).
+const List<String> motsSeparesSensiblesJournal = ['sid'];
+
+/// Motif des noms sensibles : un mot de [motsSensiblesJournal] n'importe
+/// où, ou un mot de [motsSeparesSensiblesJournal] sans lettre ni chiffre
+/// collé avant et sans lettre collée après.
+final String _motifMots = [
+  ...motsSensiblesJournal.map(RegExp.escape),
+  for (final mot in motsSeparesSensiblesJournal)
+    '(?<![a-z0-9])${RegExp.escape(mot)}(?![a-z])',
+].join('|');
 
 /// `?token=abc` ou `&api_key=abc` (le nom du paramètre contient un mot
 /// sensible) : on garde le nom, on masque la valeur.
@@ -358,16 +371,27 @@ final RegExp _champJsonSensible = RegExp(
   caseSensitive: false,
 );
 
-/// `Bearer abc…` isolé (sans le nom de l'en-tête).
+/// `Bearer abc…` isolé (sans le nom de l'en-tête, déjà traité par
+/// [_enTeteSensible]) : masqué seulement si la valeur fait au moins 20
+/// caractères, longueur d'un vrai jeton. Un texte ordinaire comme
+/// « Basic Instinct » (titre d'œuvre) reste lisible.
 final RegExp _jetonPorteur = RegExp(
-  r'\b(Bearer|Basic)\s+[A-Za-z0-9\-._~+/]+=*',
+  r'\b(Bearer|Basic)\s+[A-Za-z0-9\-._~+/]{20,}=*',
   caseSensitive: false,
 );
 
-/// Jeton de session MangaDex placé dans le chemin des images :
-/// `https://xyz.mangadex.network/<jeton>/data/<hash>/<page>`.
+/// Jeton de session MangaDex placé dans le chemin des images, avec ou sans
+/// port : `https://xyz.mangadex.network:44300/<jeton>/data/<hash>/<page>`.
 final RegExp _jetonCheminMangaDex = RegExp(
-  r'(\.mangadex\.network/)[^/\s]+(/data(?:-saver)?/)',
+  r'(\.mangadex\.network(?::\d+)?/)[^/\s]+(/data(?:-saver)?/)',
+  caseSensitive: false,
+);
+
+/// Identifiants placés dans une URL : `https://utilisateur:motdepasse@hote`.
+/// Le schéma est gardé ; l'utilisateur et le mot de passe sont masqués
+/// ensemble. Une adresse sans `:` avant le `@` n'est pas touchée.
+final RegExp _identifiantsUrl = RegExp(
+  r'(\b[a-z][a-z0-9+.\-]*://)[^/?#\s:@]*:[^/?#\s@]*@',
   caseSensitive: false,
 );
 
@@ -376,11 +400,13 @@ final RegExp _jetonCheminMangaDex = RegExp(
 ///
 /// Masque :
 /// - la valeur des paramètres de requête dont le nom contient un mot de
-///   [motsSensiblesJournal] (`?token=***`, `&api_key=***`) ;
+///   [motsSensiblesJournal] ou de [motsSeparesSensiblesJournal]
+///   (`?token=***`, `&api_key=***`, `&sid=***`) ;
 /// - la valeur des en-têtes de [enTetesSensiblesJournal]
 ///   (`Authorization: ***`, `Cookie: ***`) ;
 /// - les champs JSON sensibles (`"password": "***"`) ;
-/// - les jetons `Bearer …` et `Basic …` isolés ;
+/// - les jetons `Bearer …` et `Basic …` isolés d'au moins 20 caractères ;
+/// - les identifiants d'une URL (`https://***@hote`) ;
 /// - le jeton de session MangaDex dans le chemin des images.
 ///
 /// Le reste du texte est inchangé. Pure et sans exception : utilisable par
@@ -403,6 +429,10 @@ String masquerDonneesSensibles(String texte) {
   resultat = resultat.replaceAllMapped(
     _parametreSensible,
     (m) => '${m[1]}$valeurMasqueeJournal',
+  );
+  resultat = resultat.replaceAllMapped(
+    _identifiantsUrl,
+    (m) => '${m[1]}$valeurMasqueeJournal@',
   );
   resultat = resultat.replaceAllMapped(
     _jetonCheminMangaDex,

@@ -58,6 +58,24 @@ const int nombreMaxFichiersJournalParJour = 10;
 /// délai) pour ne pas être perdue si l'application s'arrête.
 const Duration intervalleVidageJournal = Duration(seconds: 2);
 
+/// Durée maximale d'attente du verrou du fichier pour un lot.
+///
+/// Au-delà (verrou tenu par un processus bloqué, système de fichiers sans
+/// verrous), le lot est écrit sans verrou : mieux vaut un très rare
+/// chevauchement de lignes qu'un journal figé.
+const Duration delaiMaxVerrouJournal = Duration(seconds: 2);
+
+/// Intervalle entre deux essais de prise du verrou du fichier.
+const Duration intervalleEssaisVerrouJournal = Duration(milliseconds: 20);
+
+/// Durée maximale pendant laquelle [JournalFichier.vider] fait attendre son
+/// appelant (fermeture, mise en pause, export…).
+///
+/// L'écriture continue en arrière-plan au-delà ; seul l'appelant cesse
+/// d'attendre. Un peu plus que [delaiMaxVerrouJournal] pour qu'un lot
+/// retardé par le verrou ait le temps d'être écrit.
+const Duration delaiMaxVidageJournal = Duration(seconds: 5);
+
 /// Nombre d'entrées en attente qui déclenche une écriture immédiate.
 const int seuilVidageImmediatJournal = 200;
 
@@ -325,8 +343,13 @@ class _EntreeEnAttente {
 ///   supprimé, droits) est ignorée et le lot est perdu.
 /// - **Plusieurs isolats** (application et tâche de fond Android) peuvent
 ///   écrire dans le même fichier : chaque lot ouvre le fichier en ajout,
-///   prend un verrou exclusif, se place à la fin, écrit en un seul appel et
-///   ferme le fichier.
+///   prend un verrou exclusif (attendu au plus [delaiMaxVerrouJournal],
+///   sinon écriture sans verrou), se place à la fin, écrit en un seul appel
+///   et ferme le fichier.
+/// - **Jamais figé** : [vider] fait attendre son appelant au plus
+///   [delaiMaxVidageJournal]. LIMITE : si une écriture ne se termine jamais
+///   (disque figé), plus rien n'est écrit pendant cette session, mais la
+///   mémoire reste bornée (entrées en attente plafonnées, un seul vidage).
 /// - **Rotation** : un fichier par jour, [joursConservationJournaux] jours
 ///   gardés, fichier suivant du même jour au-delà de
 ///   [tailleMaxFichierJournal].
@@ -347,7 +370,11 @@ class JournalFichier extends Journal {
   ///   [nomIsolatFond]) ;
   /// - [horloge] : heure courante (les tests la fixent) ;
   /// - [intervalleVidage], [tailleMaxFichier] et [joursConservation] :
-  ///   réglages de la rotation (les tests les réduisent).
+  ///   réglages de la rotation (les tests les réduisent) ;
+  /// - [delaiMaxVerrou] et [delaiMaxVidage] : attentes maximales du verrou
+  ///   du fichier et de [vider] (les tests les réduisent) ;
+  /// - [ecrivain] : remplace l'ajout d'un lot à un fichier (les tests
+  ///   simulent ainsi une écriture qui ne se termine jamais).
   JournalFichier(
     this.dossier, {
     this.niveauMinimal = NiveauJournal.info,
@@ -356,6 +383,9 @@ class JournalFichier extends Journal {
     this.intervalleVidage = intervalleVidageJournal,
     this.tailleMaxFichier = tailleMaxFichierJournal,
     this.joursConservation = joursConservationJournaux,
+    this.delaiMaxVerrou = delaiMaxVerrouJournal,
+    this.delaiMaxVidage = delaiMaxVidageJournal,
+    this.ecrivain,
   }) : _horloge = horloge ?? DateTime.now;
 
   /// Crée le journal dans `<dossierApplication>/journaux/` et supprime les
@@ -424,6 +454,18 @@ class JournalFichier extends Journal {
   /// Nombre de jours de fichiers gardés, aujourd'hui compris.
   final int joursConservation;
 
+  /// Attente maximale du verrou du fichier pour un lot (au-delà : écriture
+  /// sans verrou).
+  final Duration delaiMaxVerrou;
+
+  /// Attente maximale de l'appelant de [vider].
+  final Duration delaiMaxVidage;
+
+  /// Écriture de [octets] à la fin du fichier [chemin], à la place de
+  /// l'écriture réelle (ouverture en ajout, verrou, écriture, fermeture).
+  /// `null` hors tests.
+  final Future<void> Function(String chemin, List<int> octets)? ecrivain;
+
   final DateTime Function() _horloge;
 
   /// Entrées formatées, pas encore écrites.
@@ -432,9 +474,16 @@ class JournalFichier extends Journal {
   /// Minuterie du prochain vidage, s'il est planifié.
   Timer? _minuterie;
 
-  /// Fin de la dernière écriture lancée : les lots s'enchaînent, un seul à
-  /// la fois pour ce journal.
-  Future<void> _ecritureEnCours = Future<void>.value();
+  /// Boucle d'écriture en cours, ou `null` : un seul vidage à la fois pour
+  /// ce journal.
+  Future<void>? _vidageEnCours;
+
+  /// Un vidage a été demandé pendant la boucle en cours : elle fait un tour
+  /// de plus. Un simple drapeau plutôt qu'une chaîne de `Future` : si une
+  /// écriture ne se termine jamais, les demandes suivantes ne s'accumulent
+  /// pas (les entrées en attente restent plafonnées par
+  /// [nombreMaxEntreesEnAttenteJournal]).
+  bool _vidageDemande = false;
 
   /// Numéro du fichier en cours pour chaque jour (cache : évite de tester
   /// les fichiers 1, 2… à chaque lot).
@@ -497,17 +546,50 @@ class JournalFichier extends Journal {
     }
   }
 
+  /// Écrit les entrées en attente.
+  ///
+  /// Un seul vidage tourne à la fois : un appel pendant un vidage demande
+  /// un tour de plus à la boucle en cours (les entrées arrivées entre-temps
+  /// sont écrites par ce tour).
+  ///
+  /// Ne fait jamais attendre l'appelant plus de [delaiMaxVidage] : si
+  /// l'écriture est bloquée (disque figé), le `Future` se termine quand même
+  /// et l'écriture continue en arrière-plan. Ne lève jamais d'exception.
   @override
   Future<void> vider() {
-    _minuterie?.cancel();
-    _minuterie = null;
-    final suite = _ecritureEnCours.then((_) => _ecrireLot()).catchError((
-      Object _,
-    ) {
-      // Écriture impossible : le lot est perdu, sans conséquence.
-    });
-    _ecritureEnCours = suite;
-    return suite;
+    try {
+      _minuterie?.cancel();
+      _minuterie = null;
+      final enCours = _vidageEnCours;
+      final Future<void> attente;
+      if (enCours != null) {
+        _vidageDemande = true;
+        attente = enCours;
+      } else {
+        attente = _vidageEnCours = _boucleVidage();
+      }
+      return attente
+          .timeout(delaiMaxVidage, onTimeout: () {})
+          .catchError((Object _) {});
+    } catch (_) {
+      return Future<void>.value();
+    }
+  }
+
+  /// Écrit les lots tant que de nouveaux vidages sont demandés.
+  Future<void> _boucleVidage() async {
+    try {
+      do {
+        _vidageDemande = false;
+        try {
+          await _ecrireLot();
+        } catch (_) {
+          // Écriture impossible : le lot est perdu, sans conséquence.
+        }
+      } while (_vidageDemande);
+    } finally {
+      _vidageEnCours = null;
+    }
   }
 
   @override
@@ -604,16 +686,17 @@ class JournalFichier extends Journal {
       break;
     }
     _numeroParJour[cleJour] = numero;
+    final ecrivainTest = ecrivain;
+    if (ecrivainTest != null) {
+      await ecrivainTest(fichier.path, octets);
+      return;
+    }
     final acces = await fichier.open(mode: FileMode.append);
     try {
-      try {
-        // Verrou exclusif : un autre isolat ou processus attend la fin de
-        // cette écriture (voir la LIMITE de la classe pour Android et Linux).
-        await acces.lock(FileLock.blockingExclusive);
-      } catch (_) {
-        // Verrous indisponibles (système de fichiers réseau…) : on écrit
-        // quand même.
-      }
+      // Verrou exclusif : un autre isolat ou processus attend la fin de
+      // cette écriture (voir la LIMITE de la classe pour Android et Linux).
+      // Au-delà de [delaiMaxVerrou], on écrit sans verrou.
+      await _prendreVerrou(acces);
       // Fin réelle du fichier, une fois le verrou obtenu : un autre isolat a
       // pu écrire depuis l'ouverture.
       await acces.setPosition(await acces.length());
@@ -621,6 +704,32 @@ class JournalFichier extends Journal {
     } finally {
       // La fermeture libère aussi le verrou.
       await acces.close();
+    }
+  }
+
+  /// Essaie de prendre le verrou exclusif de [acces] pendant au plus
+  /// [delaiMaxVerrou] ; renvoie `true` s'il est pris.
+  ///
+  /// Essais non bloquants répétés plutôt qu'un `lock` bloquant coupé par un
+  /// `timeout` : un `RandomAccessFile` refuse toute autre opération tant
+  /// qu'un appel est en cours, et un verrou bloquant abandonné laisserait le
+  /// fichier inutilisable (impossible d'écrire sans verrou ensuite). Un
+  /// échec (verrou tenu ailleurs, ou verrous indisponibles sur un système de
+  /// fichiers réseau) est réessayé jusqu'au délai.
+  ///
+  /// LIMITE : sur Windows, une écriture sans verrou dans une zone verrouillée
+  /// par une autre ouverture est refusée par le système ; le lot est alors
+  /// perdu, mais le journal n'est pas figé.
+  Future<bool> _prendreVerrou(RandomAccessFile acces) async {
+    final chrono = Stopwatch()..start();
+    while (true) {
+      try {
+        await acces.lock(FileLock.exclusive);
+        return true;
+      } catch (_) {
+        if (chrono.elapsed >= delaiMaxVerrou) return false;
+        await Future<void>.delayed(intervalleEssaisVerrouJournal);
+      }
     }
   }
 }

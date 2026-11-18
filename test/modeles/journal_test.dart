@@ -91,8 +91,12 @@ void main() {
 
     test('jeton Bearer isolé et champ JSON', () {
       expect(
-        masquerDonneesSensibles('envoi de Bearer abc.def-ghi='),
+        masquerDonneesSensibles('envoi de Bearer eyJhbGciOiJIUzI1.abc-def='),
         'envoi de Bearer ***',
+      );
+      expect(
+        masquerDonneesSensibles('Basic dXRpbGlzYXRldXI6bW90ZGVwYXNzZQ=='),
+        'Basic ***',
       );
       expect(
         masquerDonneesSensibles('{"username":"moi","password":"p\\"a"}'),
@@ -106,6 +110,53 @@ void main() {
           'https://abc.xyz.mangadex.network/JETON123/data/hash/1.png',
         ),
         'https://abc.xyz.mangadex.network/***/data/hash/1.png',
+      );
+      expect(
+        masquerDonneesSensibles(
+          'GET https://x.mangadex.network:44300/JETON/data-saver/h/2.jpg : 200',
+        ),
+        'GET https://x.mangadex.network:44300/***/data-saver/h/2.jpg : 200',
+      );
+    });
+
+    test("Bearer ou Basic court hors en-tête : texte ordinaire gardé", () {
+      const texte = 'Recherche « Basic Instinct » puis « Bearer of bad news »';
+      expect(masquerDonneesSensibles(texte), texte);
+      // Dans un en-tête, la valeur est masquée quelle que soit sa longueur.
+      expect(
+        masquerDonneesSensibles('Authorization: Basic abc'),
+        'Authorization: ***',
+      );
+      expect(
+        masquerDonneesSensibles('{Authorization: Bearer xyz, Accept: */*}'),
+        '{Authorization: ***, Accept: */*}',
+      );
+    });
+
+    test("identifiants dans l'URL", () {
+      expect(
+        masquerDonneesSensibles('https://moi:secret@nas.local:5005/livres'),
+        'https://***@nas.local:5005/livres',
+      );
+      expect(
+        masquerDonneesSensibles('ftp://moi:@hote/x et http://hote:8080/a@b'),
+        'ftp://***@hote/x et http://hote:8080/a@b',
+      );
+    });
+
+    test('sid : nom exact ou séparé seulement', () {
+      expect(
+        masquerDonneesSensibles(
+          'https://site.org/a?sid=ABC&connect.sid=DEF&user_sid=GHI&page=1',
+        ),
+        'https://site.org/a?sid=***&connect.sid=***&user_sid=***&page=1',
+      );
+      const ordinaire =
+          'https://site.org/a?side=left&inside=1&consider=2&sidebar=0';
+      expect(masquerDonneesSensibles(ordinaire), ordinaire);
+      expect(
+        masquerDonneesSensibles('{"sid":"ABC","side":"gauche"}'),
+        '{"sid":"***","side":"gauche"}',
       );
     });
 
