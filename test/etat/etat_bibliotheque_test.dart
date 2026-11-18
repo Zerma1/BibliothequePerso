@@ -42,11 +42,14 @@ void main() {
       etat.listes.map((liste) => liste.nom),
       containsAll(<String>[nomListeFavoris, nomListeSuivis]),
     );
-    expect(etat.idsListesParDefaut, hasLength(2));
+    // X3 : seule Suivis est cochée par défaut (Favoris reste proposée).
+    expect(etat.idsListesParDefaut, <int>{
+      etat.listes.firstWhere((liste) => liste.nom == nomListeSuivis).id!,
+    });
   });
 
   test(
-    'ajoute un titre MangaDex dans Favoris et Suivis puis le filtre',
+    'ajoute un titre MangaDex dans Suivis (liste par défaut) puis le filtre',
     () async {
       await etat.charger();
       final resultat = await etat.ajouterTitre(
@@ -64,11 +67,16 @@ void main() {
       );
       expect(etat.estEnAjout, isFalse);
 
+      final suivis = etat.listes.firstWhere(
+        (liste) => liste.nom == nomListeSuivis,
+      );
+      await etat.choisirListe(suivis.id);
+      expect(etat.titres, hasLength(1));
       final favoris = etat.listes.firstWhere(
         (liste) => liste.nom == nomListeFavoris,
       );
       await etat.choisirListe(favoris.id);
-      expect(etat.titres, hasLength(1));
+      expect(etat.titres, isEmpty);
 
       final autreListe = await services.bibliotheque.creerListe('Plus tard');
       await etat.choisirListe(autreListe.id);

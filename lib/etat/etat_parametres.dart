@@ -293,6 +293,43 @@ class EtatParametres extends EtatNotifiant {
     }
   }
 
+  // -------------------------------------------------- Archive complète (X7)
+
+  bool _archiveComplete = ServiceParametres.archiveCompleteParDefaut;
+  bool _estEnEnregistrementArchive = false;
+
+  /// `true` si « Archive complète » est active : tous les chapitres de tous
+  /// les titres sont téléchargés, et aucun n'est supprimé automatiquement.
+  bool get archiveComplete => _archiveComplete;
+
+  /// `true` pendant l'enregistrement de « Archive complète ».
+  bool get estEnEnregistrementArchive => _estEnEnregistrementArchive;
+
+  /// Active ou désactive « Archive complète » (enregistré aussitôt), puis
+  /// applique les règles à toute la bibliothèque : à l'activation, tous les
+  /// chapitres de tous les titres entrent dans la file.
+  Future<ResultatAction<bool>> modifierArchiveComplete(bool active) async {
+    _estEnEnregistrementArchive = true;
+    notifier();
+    try {
+      await _serviceParametres.enregistrerArchiveComplete(active);
+      _archiveComplete = await _serviceParametres.chargerArchiveComplete();
+      try {
+        await _serviceTelechargement.appliquerReglesATous();
+      } catch (erreur, pile) {
+        // Réglage enregistré : il sera appliqué au prochain démarrage ou à
+        // la prochaine recherche de nouveaux chapitres.
+        debugPrint('Règles non appliquées (archive complète) : $erreur\n$pile');
+      }
+      return ResultatAction<bool>.reussite(_archiveComplete);
+    } catch (erreur, pile) {
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnEnregistrementArchive = false;
+      notifier();
+    }
+  }
+
   /// Lit les réglages enregistrés.
   Future<void> charger() async {
     _estEnChargement = true;
@@ -300,6 +337,7 @@ class EtatParametres extends EtatNotifiant {
     notifier();
     try {
       final reglages = await _serviceParametres.chargerReglagesTelechargement();
+      _archiveComplete = await _serviceParametres.chargerArchiveComplete();
       _langues = await _serviceParametres.chargerLangues();
       _planification = await _serviceParametres.chargerPlanification();
       _heuresEnAttente = await _serviceParametres.chargerHeuresEnAttente();

@@ -2,8 +2,11 @@
 library;
 
 import 'dart:math' as math;
+import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/gestures.dart' show HitTestResult;
+import 'package:flutter/rendering.dart' show RenderMetaData;
 
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
@@ -26,6 +29,7 @@ import '../widgets/section_sites_titre.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
 import 'ecran_lecteur.dart';
+import 'ecran_modification_titre.dart';
 
 /// Actions du menu de la fiche.
 enum _ActionTitre { toutLu, toutNonLu, supprimer }
@@ -130,55 +134,147 @@ class EcranTitre extends StatelessWidget {
     }
   }
 
+  /// Marque la sélection lue ou non lue, puis affiche le bilan.
+  Future<void> _marquerSelection(
+    BuildContext context,
+    EtatTitre etat, {
+    required bool lu,
+  }) async {
+    final resultat = await etat.marquerSelection(lu: lu);
+    if (context.mounted) {
+      afficherResultat(
+        context,
+        resultat,
+        succes: Textes.chapitresMarques(resultat.donnee ?? 0, lu: lu),
+      );
+    }
+  }
+
+  /// Barre du mode sélection (X10) : nombre de lignes choisies et actions
+  /// sur la sélection, à la place de la barre habituelle.
+  PreferredSizeWidget _barreSelection(BuildContext context, EtatTitre etat) {
+    final occupe = etat.estEnMarquageLot;
+    final aucune = etat.nombreSelectionnes == 0;
+    // Libellés visibles sur grand écran, icônes seules (avec info-bulle)
+    // sur téléphone, où la barre est trop étroite pour quatre textes.
+    final avecLibelles =
+        MediaQuery.sizeOf(context).width >= largeurMinNavigationLaterale;
+    Widget action(String libelle, IconData icone, VoidCallback? surAppui) =>
+        Tooltip(
+          message: libelle,
+          child: avecLibelles
+              ? TextButton.icon(
+                  onPressed: surAppui,
+                  icon: Icon(icone),
+                  label: Text(libelle),
+                )
+              : IconButton(onPressed: surAppui, icon: Icon(icone)),
+        );
+    return AppBar(
+      leading: IconButton(
+        tooltip: Textes.annulerSelection,
+        icon: const Icon(Icons.close),
+        onPressed: occupe ? null : etat.annulerSelection,
+      ),
+      title: Text(Textes.chapitresSelectionnes(etat.nombreSelectionnes)),
+      actions: <Widget>[
+        action(
+          Textes.toutSelectionner,
+          Icons.select_all,
+          occupe || etat.toutEstSelectionne ? null : etat.toutSelectionner,
+        ),
+        action(
+          Textes.marquerSelectionLus,
+          Icons.done_all,
+          occupe || aucune
+              ? null
+              : () => _marquerSelection(context, etat, lu: true),
+        ),
+        action(
+          Textes.marquerSelectionNonLus,
+          Icons.remove_done,
+          occupe || aucune
+              ? null
+              : () => _marquerSelection(context, etat, lu: false),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final etat = context.watch<EtatTitre>();
     final titre = etat.titre;
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          titre?.nom ?? '',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        actions: <Widget>[
-          if (titre != null) ...<Widget>[
-            if (etat.estEnActualisation)
-              const Padding(
-                padding: EdgeInsets.all(espacementMoyen),
-                child: SizedBox.square(
-                  dimension: espacementGrand,
-                  child: CircularProgressIndicator(),
-                ),
-              )
-            else
-              IconButton(
-                tooltip: Textes.actualiser,
-                icon: const Icon(Icons.refresh),
-                onPressed: () => _actualiser(context, etat),
-              ),
-            PopupMenuButton<_ActionTitre>(
-              onSelected: (action) => _executer(context, etat, action),
-              itemBuilder: (_) => const <PopupMenuEntry<_ActionTitre>>[
-                PopupMenuItem<_ActionTitre>(
-                  value: _ActionTitre.toutLu,
-                  child: Text(Textes.toutMarquerLu),
-                ),
-                PopupMenuItem<_ActionTitre>(
-                  value: _ActionTitre.toutNonLu,
-                  child: Text(Textes.toutMarquerNonLu),
-                ),
-                PopupMenuDivider(),
-                PopupMenuItem<_ActionTitre>(
-                  value: _ActionTitre.supprimer,
-                  child: Text(Textes.supprimerTitre),
-                ),
-              ],
-            ),
-          ],
-        ],
+    // En mode sélection, « retour » quitte la sélection au lieu de fermer
+    // la fiche (geste attendu sur Android).
+    return PopScope(
+      canPop: !etat.estEnSelection,
+      onPopInvokedWithResult: (aQuitte, _) {
+        if (!aQuitte) etat.annulerSelection();
+      },
+      child: Scaffold(
+        appBar: etat.estEnSelection
+            ? _barreSelection(context, etat)
+            : _barreFiche(context, etat, titre),
+        body: _contenu(context, etat),
       ),
-      body: _contenu(context, etat),
+    );
+  }
+
+  PreferredSizeWidget _barreFiche(
+    BuildContext context,
+    EtatTitre etat,
+    Titre? titre,
+  ) {
+    return AppBar(
+      title: Text(
+        titre?.nom ?? '',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      actions: <Widget>[
+        if (titre != null) ...<Widget>[
+          IconButton(
+            tooltip: Textes.modifierFiche,
+            icon: const Icon(Icons.edit_outlined),
+            onPressed: etat.estEnModificationFiche
+                ? null
+                : () => EcranModificationTitre.ouvrir(context, etat),
+          ),
+          if (etat.estEnActualisation)
+            const Padding(
+              padding: EdgeInsets.all(espacementMoyen),
+              child: SizedBox.square(
+                dimension: espacementGrand,
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else
+            IconButton(
+              tooltip: Textes.actualiser,
+              icon: const Icon(Icons.refresh),
+              onPressed: () => _actualiser(context, etat),
+            ),
+          PopupMenuButton<_ActionTitre>(
+            onSelected: (action) => _executer(context, etat, action),
+            itemBuilder: (_) => const <PopupMenuEntry<_ActionTitre>>[
+              PopupMenuItem<_ActionTitre>(
+                value: _ActionTitre.toutLu,
+                child: Text(Textes.toutMarquerLu),
+              ),
+              PopupMenuItem<_ActionTitre>(
+                value: _ActionTitre.toutNonLu,
+                child: Text(Textes.toutMarquerNonLu),
+              ),
+              PopupMenuDivider(),
+              PopupMenuItem<_ActionTitre>(
+                value: _ActionTitre.supprimer,
+                child: Text(Textes.supprimerTitre),
+              ),
+            ],
+          ),
+        ],
+      ],
     );
   }
 
@@ -626,6 +722,30 @@ class _Informations extends StatelessWidget {
           Textes.derniereVerification(titre.dateDerniereVerification),
           style: theme.textTheme.bodySmall,
         ),
+        // Repère discret (X6) : le client sait quels champs ne suivent plus
+        // le site ; « Modifier la fiche » permet de les lui rendre.
+        if (titre.champsManuels.isNotEmpty)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Icon(
+                Icons.edit_note,
+                size: theme.textTheme.bodySmall?.fontSize,
+                color: theme.colorScheme.tertiary,
+              ),
+              const SizedBox(width: espacementPetit / 2),
+              Flexible(
+                child: Text(
+                  Textes.champsModifiesALaMain(
+                    ChampTitre.values.where(titre.estManuel),
+                  ),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.tertiary,
+                  ),
+                ),
+              ),
+            ],
+          ),
         if (alternatifs.isNotEmpty)
           // Repliés par défaut : un titre MangaDex en a souvent une dizaine,
           // qui repousseraient le résumé et les chapitres hors de l'écran.
@@ -690,6 +810,8 @@ class _LegendeChapitres extends StatelessWidget {
             const LegendeHorsLigne(),
             const SizedBox(height: espacementPetit),
           ],
+          Text(Textes.aideSelectionChapitres, style: theme.textTheme.bodySmall),
+          const SizedBox(height: espacementPetit),
           if (etat.aPlusieursSites) ...<Widget>[
             Text(Textes.legendeSiteChapitre, style: theme.textTheme.bodySmall),
             const SizedBox(height: espacementPetit),
@@ -827,34 +949,88 @@ class _EtatLigneGroupe extends State<_LigneGroupe> {
             horsLigne.statut == StatutHorsLigne.telecharge);
   });
 
+  /// Ligne (numéro) sous le point [position] de l'écran, pendant un glisser
+  /// de sélection : chaque ligne porte son groupe dans un [MetaData], que le
+  /// test de toucher retrouve même hors de la ligne de départ.
+  GroupeChapitres? _groupeSous(Offset position) {
+    final resultat = HitTestResult();
+    WidgetsBinding.instance.hitTestInView(
+      resultat,
+      position,
+      View.of(context).viewId,
+    );
+    for (final entree in resultat.path) {
+      final cible = entree.target;
+      if (cible is RenderMetaData && cible.metaData is GroupeChapitres) {
+        return cible.metaData as GroupeChapitres;
+      }
+    }
+    return null;
+  }
+
+  void _etendre(Offset position) {
+    final groupe = _groupeSous(position);
+    if (groupe != null) widget.etat.etendreGlisser(groupe);
+  }
+
   @override
   Widget build(BuildContext context) {
     final groupe = widget.groupe;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        _LigneChapitre(
-          etat: widget.etat,
-          chapitre: groupe.retenu,
-          estLu: groupe.estLu,
-          surBasculerLu: () =>
-              widget.etat.marquerGroupeLu(groupe, estLu: !groupe.estLu),
-          autresVersions: groupe.autres.length,
-          autresATrier: _autresDemandentAction,
-          estDeplie: _estDeplie,
-          surDeplier: () => setState(() => _estDeplie = !_estDeplie),
-        ),
-        if (_estDeplie)
-          for (final autre in groupe.autres)
-            _LigneChapitre(
-              etat: widget.etat,
-              chapitre: autre,
-              estLu: autre.estLu,
-              surBasculerLu: () =>
-                  widget.etat.marquerLu(autre, estLu: !autre.estLu),
-              estSecondaire: true,
+    final etat = widget.etat;
+    final estSelectionne = etat.estEnSelection && etat.estSelectionne(groupe);
+    // Deux gestes de sélection (X10) : appui long puis glisser (doigt, ou
+    // souris tenue immobile), et clic maintenu puis glisser à la souris.
+    // Le glisser à la souris ne gêne pas le défilement : à la souris, la
+    // liste défile à la molette, pas en la tirant.
+    return GestureDetector(
+      onLongPressStart: (_) => etat.commencerGlisser(groupe),
+      onLongPressMoveUpdate: (details) => _etendre(details.globalPosition),
+      onLongPressEnd: (_) => etat.terminerGlisser(),
+      child: GestureDetector(
+        supportedDevices: const <PointerDeviceKind>{PointerDeviceKind.mouse},
+        onPanStart: (_) => etat.commencerGlisser(groupe),
+        onPanUpdate: (details) => _etendre(details.globalPosition),
+        onPanEnd: (_) => etat.terminerGlisser(),
+        child: MetaData(
+          metaData: groupe,
+          behavior: HitTestBehavior.translucent,
+          child: Ink(
+            // Fond teinté : la sélection se voit d'un coup d'œil en
+            // faisant défiler, en plus de la case cochée.
+            color: estSelectionne
+                ? Theme.of(context).colorScheme.secondaryContainer
+                : null,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                _LigneChapitre(
+                  etat: etat,
+                  groupe: groupe,
+                  chapitre: groupe.retenu,
+                  estLu: groupe.estLu,
+                  surBasculerLu: () =>
+                      etat.marquerGroupeLu(groupe, estLu: !groupe.estLu),
+                  autresVersions: groupe.autres.length,
+                  autresATrier: _autresDemandentAction,
+                  estDeplie: _estDeplie,
+                  surDeplier: () => setState(() => _estDeplie = !_estDeplie),
+                ),
+                if (_estDeplie)
+                  for (final autre in groupe.autres)
+                    _LigneChapitre(
+                      etat: etat,
+                      groupe: groupe,
+                      chapitre: autre,
+                      estLu: autre.estLu,
+                      surBasculerLu: () =>
+                          etat.marquerLu(autre, estLu: !autre.estLu),
+                      estSecondaire: true,
+                    ),
+              ],
             ),
-      ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -867,6 +1043,7 @@ class _EtatLigneGroupe extends State<_LigneGroupe> {
 class _LigneChapitre extends StatelessWidget {
   const _LigneChapitre({
     required this.etat,
+    required this.groupe,
     required this.chapitre,
     required this.estLu,
     required this.surBasculerLu,
@@ -878,6 +1055,9 @@ class _LigneChapitre extends StatelessWidget {
   });
 
   final EtatTitre etat;
+
+  /// Numéro auquel appartient la ligne (unité de la sélection).
+  final GroupeChapitres groupe;
   final Chapitre chapitre;
   final bool estLu;
   final Future<ResultatAction<bool>> Function() surBasculerLu;
@@ -891,6 +1071,12 @@ class _LigneChapitre extends StatelessWidget {
   final bool estSecondaire;
 
   Future<void> _surAppui(BuildContext context) async {
+    // En mode sélection, un appui coche ou décoche la ligne au lieu de
+    // l'ouvrir.
+    if (etat.estEnSelection) {
+      etat.basculerSelection(groupe);
+      return;
+    }
     final horsLigne = etat.etatHorsLigne(chapitre);
     if (horsLigne.statut == StatutHorsLigne.telecharge) {
       await _lire(context);
@@ -962,6 +1148,14 @@ class _LigneChapitre extends StatelessWidget {
               onTap: () =>
                   Navigator.of(contexteMenu).pop(_ActionChapitre.basculerLu),
             ),
+            // Reprendre un titre en cours (X10) : tous les chapitres
+            // jusqu'à celui-ci, toutes langues, d'un seul geste.
+            ListTile(
+              leading: const Icon(Icons.done_all),
+              title: const Text(Textes.marquerLusJusquIci),
+              onTap: () =>
+                  Navigator.of(contexteMenu).pop(_ActionChapitre.lusJusquIci),
+            ),
           ],
         ),
       ),
@@ -984,6 +1178,15 @@ class _LigneChapitre extends StatelessWidget {
       case _ActionChapitre.basculerLu:
         final resultat = await surBasculerLu();
         if (context.mounted) afficherResultat(context, resultat);
+      case _ActionChapitre.lusJusquIci:
+        final resultat = await etat.marquerLusJusqua(chapitre.numero);
+        if (context.mounted) {
+          afficherResultat(
+            context,
+            resultat,
+            succes: Textes.chapitresMarques(resultat.donnee ?? 0, lu: true),
+          );
+        }
     }
   }
 
@@ -1056,8 +1259,13 @@ class _LigneChapitre extends StatelessWidget {
     final nomSite = etat.nomSiteExterneDe(chapitre);
     // Site d'origine, seulement quand le titre en a plusieurs.
     final siteOrigine = etat.aPlusieursSites ? etat.nomSiteDe(chapitre) : null;
+    // Clic droit (ordinateur) : le menu du chapitre, même pour un chapitre
+    // téléchargé, dont l'appui ouvre directement le lecteur.
     return InkWell(
       onTap: () => _surAppui(context),
+      onSecondaryTap: etat.estEnSelection
+          ? null
+          : () => _afficherMenu(context, horsLigne),
       child: Ink(
         // Fond rouge léger : la ligne se repère en faisant défiler une longue
         // liste, même avant d'en lire le texte.
@@ -1077,156 +1285,173 @@ class _LigneChapitre extends StatelessWidget {
           ),
           child: _ColonnesChapitre(
             avecHorsLigne: etat.gereTelechargements,
-            nom: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            // Case à cocher dans la colonne du nom (mode sélection) : les
+            // autres colonnes restent alignées sur la légende.
+            nom: Row(
               children: <Widget>[
-                Text(
-                  Textes.nomChapitre(chapitre.nom, chapitre.numero),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: couleurTexte,
-                    fontWeight: estLu || estSecondaire ? null : FontWeight.w600,
+                if (etat.estEnSelection && !estSecondaire)
+                  Checkbox(
+                    value: etat.estSelectionne(groupe),
+                    onChanged: (_) => etat.basculerSelection(groupe),
                   ),
-                ),
-                if (siteOrigine != null)
-                  Text(
-                    Textes.chapitreDuSite(siteOrigine),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: styleDetail,
-                  ),
-                // Mention sous le nom, visible même sans la colonne
-                // hors-ligne : le client sait d'emblée où se lit ce chapitre.
-                if (nomSite != null)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Icon(
-                        iconeLienExterne,
-                        size: theme.textTheme.bodySmall?.fontSize,
-                        color: couleurHorsLigne(
-                          StatutHorsLigne.externe,
-                          couleurs,
+                      Text(
+                        Textes.nomChapitre(chapitre.nom, chapitre.numero),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: couleurTexte,
+                          fontWeight: estLu || estSecondaire
+                              ? null
+                              : FontWeight.w600,
                         ),
                       ),
-                      const SizedBox(width: espacementPetit / 2),
-                      Flexible(
-                        child: Text(
-                          Textes.publieSur(nomSite),
+                      if (siteOrigine != null)
+                        Text(
+                          Textes.chapitreDuSite(siteOrigine),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: styleDetail,
                         ),
-                      ),
-                    ],
-                  ),
-                if (autresVersions > 0)
-                  InkWell(
-                    onTap: surDeplier,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        Flexible(
-                          child: Text(
-                            autresATrier
-                                ? '${Textes.autresVersions(autresVersions)} · '
-                                      '${Textes.versionsATrier}'
-                                : Textes.autresVersions(autresVersions),
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: autresATrier
-                                  ? couleurDoublon(couleurs)
-                                  : couleurs.primary,
-                            ),
-                          ),
-                        ),
-                        Icon(
-                          estDeplie ? Icons.expand_less : Icons.expand_more,
-                          size: theme.textTheme.bodySmall?.fontSize,
-                          color: couleurs.primary,
-                        ),
-                      ],
-                    ),
-                  ),
-                if (aSuppression && reste != null) ...<Widget>[
-                  Text(
-                    Textes.suppressionDans(reste),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: couleurAlerte,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  Text(
-                    Textes.explicationSuppressionPrevue,
-                    style: theme.textTheme.bodySmall,
-                  ),
-                  _ActionsArchive(
-                    enfants: <Widget>[
-                      TextButton(
-                        onPressed: () => _garder(context),
-                        child: const Text(Textes.garder),
-                      ),
-                      TextButton(
-                        style: TextButton.styleFrom(
-                          foregroundColor: couleurAlerte,
-                        ),
-                        onPressed: () => _supprimerMaintenant(context),
-                        child: const Text(Textes.supprimerMaintenant),
-                      ),
-                    ],
-                  ),
-                ],
-                if (estDoublon) ...<Widget>[
-                  Text(
-                    Textes.explicationDoublon,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: couleurAlerte,
-                    ),
-                  ),
-                  _ActionsArchive(
-                    enfants: <Widget>[
-                      TextButton(
-                        style: TextButton.styleFrom(
-                          foregroundColor: couleurAlerte,
-                        ),
-                        onPressed: () => _supprimerDoublon(context),
-                        child: const Text(Textes.supprimerCeDoublon),
-                      ),
-                    ],
-                  ),
-                ],
-                // Repère « gardé » : le client sait pourquoi ce chapitre
-                // échappe aux règles, et peut revenir dessus.
-                if (chapitre.estGarde &&
-                    horsLigne.statut == StatutHorsLigne.telecharge)
-                  _ActionsArchive(
-                    enfants: <Widget>[
-                      Tooltip(
-                        message: Textes.infoGarde,
-                        child: Row(
+                      // Mention sous le nom, visible même sans la colonne
+                      // hors-ligne : le client sait d'emblée où se lit ce chapitre.
+                      if (nomSite != null)
+                        Row(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
                             Icon(
-                              Icons.push_pin,
+                              iconeLienExterne,
                               size: theme.textTheme.bodySmall?.fontSize,
-                              color: couleurs.primary,
+                              color: couleurHorsLigne(
+                                StatutHorsLigne.externe,
+                                couleurs,
+                              ),
                             ),
                             const SizedBox(width: espacementPetit / 2),
-                            Text(
-                              Textes.garde,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: couleurs.primary,
+                            Flexible(
+                              child: Text(
+                                Textes.publieSur(nomSite),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: styleDetail,
                               ),
                             ),
                           ],
                         ),
-                      ),
-                      TextButton(
-                        onPressed: () => _nePlusGarder(context),
-                        child: const Text(Textes.nePlusGarder),
-                      ),
+                      if (autresVersions > 0)
+                        InkWell(
+                          onTap: surDeplier,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              Flexible(
+                                child: Text(
+                                  autresATrier
+                                      ? '${Textes.autresVersions(autresVersions)} · '
+                                            '${Textes.versionsATrier}'
+                                      : Textes.autresVersions(autresVersions),
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: autresATrier
+                                        ? couleurDoublon(couleurs)
+                                        : couleurs.primary,
+                                  ),
+                                ),
+                              ),
+                              Icon(
+                                estDeplie
+                                    ? Icons.expand_less
+                                    : Icons.expand_more,
+                                size: theme.textTheme.bodySmall?.fontSize,
+                                color: couleurs.primary,
+                              ),
+                            ],
+                          ),
+                        ),
+                      if (aSuppression && reste != null) ...<Widget>[
+                        Text(
+                          Textes.suppressionDans(reste),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: couleurAlerte,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          Textes.explicationSuppressionPrevue,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                        _ActionsArchive(
+                          enfants: <Widget>[
+                            TextButton(
+                              onPressed: () => _garder(context),
+                              child: const Text(Textes.garder),
+                            ),
+                            TextButton(
+                              style: TextButton.styleFrom(
+                                foregroundColor: couleurAlerte,
+                              ),
+                              onPressed: () => _supprimerMaintenant(context),
+                              child: const Text(Textes.supprimerMaintenant),
+                            ),
+                          ],
+                        ),
+                      ],
+                      if (estDoublon) ...<Widget>[
+                        Text(
+                          Textes.explicationDoublon,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: couleurAlerte,
+                          ),
+                        ),
+                        _ActionsArchive(
+                          enfants: <Widget>[
+                            TextButton(
+                              style: TextButton.styleFrom(
+                                foregroundColor: couleurAlerte,
+                              ),
+                              onPressed: () => _supprimerDoublon(context),
+                              child: const Text(Textes.supprimerCeDoublon),
+                            ),
+                          ],
+                        ),
+                      ],
+                      // Repère « gardé » : le client sait pourquoi ce chapitre
+                      // échappe aux règles, et peut revenir dessus.
+                      if (chapitre.estGarde &&
+                          horsLigne.statut == StatutHorsLigne.telecharge)
+                        _ActionsArchive(
+                          enfants: <Widget>[
+                            Tooltip(
+                              message: Textes.infoGarde,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  Icon(
+                                    Icons.push_pin,
+                                    size: theme.textTheme.bodySmall?.fontSize,
+                                    color: couleurs.primary,
+                                  ),
+                                  const SizedBox(width: espacementPetit / 2),
+                                  Text(
+                                    Textes.garde,
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: couleurs.primary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () => _nePlusGarder(context),
+                              child: const Text(Textes.nePlusGarder),
+                            ),
+                          ],
+                        ),
                     ],
                   ),
+                ),
               ],
             ),
             langue: Text(
@@ -1336,7 +1561,13 @@ class _ActionsArchive extends StatelessWidget {
 }
 
 /// Actions du menu d'un chapitre non téléchargé.
-enum _ActionChapitre { telecharger, ouvrirSite, lireSurSiteExterne, basculerLu }
+enum _ActionChapitre {
+  telecharger,
+  ouvrirSite,
+  lireSurSiteExterne,
+  basculerLu,
+  lusJusquIci,
+}
 
 /// Ligne « Libellé : valeur ».
 class _LigneInfo extends StatelessWidget {

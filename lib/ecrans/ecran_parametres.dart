@@ -10,9 +10,9 @@ import '../etat/etat_mises_a_jour.dart';
 import '../etat/etat_parametres.dart';
 import '../etat/etat_sources.dart';
 import '../modeles/source.dart';
-import '../widgets/champs_reglages_generiques.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/dialogue_import.dart';
+import '../widgets/dialogue_site.dart';
 import '../widgets/editeur_langues.dart';
 import '../widgets/messages.dart';
 import '../widgets/section_categories_regroupees.dart';
@@ -378,10 +378,60 @@ class _SectionTelechargements extends StatelessWidget {
     );
   }
 
+  /// Interrupteur « Archive complète » : l'activation est confirmée (elle
+  /// peut lancer des milliers de téléchargements), la désactivation non.
+  Future<void> _basculerArchive(
+    BuildContext context,
+    EtatParametres etat,
+    bool active,
+  ) async {
+    if (active) {
+      final confirme = await showDialog<bool>(
+        context: context,
+        builder: (contexteDialogue) => AlertDialog(
+          title: const Text(Textes.activerArchiveComplete),
+          content: const Text(Textes.confirmationArchiveComplete),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(contexteDialogue).pop(false),
+              child: const Text(Textes.annuler),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(contexteDialogue).pop(true),
+              child: const Text(Textes.activer),
+            ),
+          ],
+        ),
+      );
+      if (confirme != true || !context.mounted) return;
+    }
+    final resultat = await etat.modifierArchiveComplete(active);
+    if (context.mounted) {
+      afficherResultat(
+        context,
+        resultat,
+        succes: Textes.archiveCompleteModifiee(resultat.donnee ?? active),
+      );
+    }
+  }
+
   Widget _contenu(BuildContext context, ThemeData theme, EtatParametres etat) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
+        // En tête de section : quand elle est active, les limites qui
+        // suivent ne s'appliquent plus (tout est gardé).
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          secondary: const Icon(Icons.inventory_2_outlined),
+          title: const Text(Textes.archiveComplete),
+          subtitle: const Text(Textes.explicationArchiveComplete),
+          value: etat.archiveComplete,
+          onChanged: etat.estEnEnregistrementArchive
+              ? null
+              : (active) => _basculerArchive(context, etat, active),
+        ),
+        const Divider(),
         Text(
           Textes.introReglesTelechargement,
           style: theme.textTheme.bodyMedium,
@@ -481,64 +531,19 @@ class _LigneLimite extends StatelessWidget {
 class _SectionSites extends StatelessWidget {
   const _SectionSites();
 
+  // Dialogue commun avec l'onglet Sources (tâche X5) : même formulaire,
+  // type modifiable et suppression aux deux endroits.
   Future<void> _modifier(
     BuildContext context,
     EtatSources etat,
     Source source,
-  ) async {
-    final saisie = await showDialog<_SaisieSite>(
-      context: context,
-      builder: (_) => _DialogueSite(source: source),
-    );
-    if (saisie == null || !context.mounted) return;
-    final resultat = await etat.modifierSource(
-      source,
-      nom: saisie.nom,
-      langues: saisie.langues,
-      estActive: saisie.estActive,
-      reglagesGeneriques: saisie.reglagesGeneriques,
-    );
-    if (context.mounted) {
-      afficherResultat(
-        context,
-        resultat,
-        succes: Textes.siteModifie(resultat.donnee?.nom ?? saisie.nom),
-      );
-    }
-  }
+  ) => modifierSiteAvecDialogue(context, etat, source);
 
   Future<void> _supprimer(
     BuildContext context,
     EtatSources etat,
     Source source,
-  ) async {
-    final confirme = await showDialog<bool>(
-      context: context,
-      builder: (contexteDialogue) => AlertDialog(
-        title: const Text(Textes.supprimerSite),
-        content: Text(Textes.confirmationSuppressionSite(source.nom)),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(contexteDialogue).pop(false),
-            child: const Text(Textes.annuler),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(contexteDialogue).pop(true),
-            child: const Text(Textes.supprimer),
-          ),
-        ],
-      ),
-    );
-    if (confirme != true || !context.mounted) return;
-    final resultat = await etat.supprimerSource(source);
-    if (context.mounted) {
-      afficherResultat(
-        context,
-        resultat,
-        succes: Textes.siteSupprime(source.nom),
-      );
-    }
-  }
+  ) => supprimerSiteAvecConfirmation(context, etat, source);
 
   @override
   Widget build(BuildContext context) {
@@ -601,176 +606,6 @@ class _SectionSites extends StatelessWidget {
           ? Textes.nombreSites(etat.sources.length)
           : null,
       enfants: <Widget>[contenu],
-    );
-  }
-}
-
-/// Valeurs saisies dans le dialogue d'un site.
-class _SaisieSite {
-  const _SaisieSite({
-    required this.nom,
-    required this.langues,
-    required this.estActive,
-    this.reglagesGeneriques,
-  });
-
-  final String nom;
-  final String langues;
-  final bool estActive;
-
-  /// Réglages avancés saisis (site générique seulement), sinon `null`.
-  final Map<String, String>? reglagesGeneriques;
-}
-
-/// Dialogue de modification d'un site.
-class _DialogueSite extends StatefulWidget {
-  const _DialogueSite({required this.source});
-
-  final Source source;
-
-  @override
-  State<_DialogueSite> createState() => _EtatDialogueSite();
-}
-
-class _EtatDialogueSite extends State<_DialogueSite> {
-  final GlobalKey<FormState> _formulaire = GlobalKey<FormState>();
-  late final TextEditingController _nom = TextEditingController(
-    text: widget.source.nom,
-  );
-  late final TextEditingController _langues = TextEditingController(
-    text: widget.source.langueParDefaut,
-  );
-  late bool _estActive = widget.source.estActive;
-
-  /// `true` pour un site générique : seul type qui lit les réglages avancés.
-  bool get _estGenerique => widget.source.typeSource == TypeSource.generique;
-
-  /// Réglages enregistrés du site, par clé (préremplissage).
-  late final Map<String, String> _reglagesInitiaux =
-      EtatSources.reglagesGeneriquesDepuisJson(
-        widget.source.configurationSelecteurs,
-      );
-
-  /// Un champ par réglage avancé, prérempli.
-  late final Map<String, TextEditingController> _reglages =
-      <String, TextEditingController>{
-        for (final cle in EtatSources.clesReglagesGeneriques)
-          cle: TextEditingController(text: _reglagesInitiaux[cle] ?? ''),
-      };
-
-  @override
-  void dispose() {
-    _nom.dispose();
-    _langues.dispose();
-    for (final controleur in _reglages.values) {
-      controleur.dispose();
-    }
-    super.dispose();
-  }
-
-  /// Codes séparés par des virgules, variantes régionales acceptées
-  /// (« fr,pt-br ») : même règle que le service.
-  String? _validerLangues(String? valeur) =>
-      EtatSources.languesValides(valeur ?? '') ? null : Textes.erreurLangues;
-
-  void _valider() {
-    if (!(_formulaire.currentState?.validate() ?? false)) return;
-    Navigator.of(context).pop(
-      _SaisieSite(
-        nom: _nom.text,
-        langues: _langues.text,
-        estActive: _estActive,
-        reglagesGeneriques: _estGenerique
-            ? <String, String>{
-                for (final entree in _reglages.entries)
-                  entree.key: entree.value.text,
-              }
-            : null,
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text(Textes.modifierSite),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: largeurMaxFormulaire),
-        child: Form(
-          key: _formulaire,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                Text(widget.source.urlBase),
-                const SizedBox(height: espacementMoyen),
-                TextFormField(
-                  controller: _nom,
-                  decoration: const InputDecoration(
-                    labelText: Textes.champNomSiteObligatoire,
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (valeur) => (valeur ?? '').trim().isEmpty
-                      ? Textes.erreurNomVide
-                      : null,
-                ),
-                const SizedBox(height: espacementMoyen),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text(Textes.siteActif),
-                  subtitle: const Text(Textes.aideSiteActif),
-                  value: _estActive,
-                  onChanged: (valeur) => setState(() => _estActive = valeur),
-                ),
-                // Réglage avancé, replié : « Mes langues » (Paramètres) et
-                // les langues de chaque titre suffisent dans presque tous
-                // les cas. Déplié d'office si le site a déjà des langues
-                // propres, pour que le client voie ce qui s'applique.
-                ExpansionTile(
-                  tilePadding: EdgeInsets.zero,
-                  initiallyExpanded: widget.source.langueParDefaut.isNotEmpty,
-                  title: const Text(Textes.reglageAvanceLangues),
-                  childrenPadding: const EdgeInsets.only(
-                    bottom: espacementPetit,
-                  ),
-                  children: <Widget>[
-                    TextFormField(
-                      controller: _langues,
-                      decoration: const InputDecoration(
-                        labelText: Textes.champLangues,
-                        helperText: Textes.aideLangues,
-                        helperMaxLines: 5,
-                        border: OutlineInputBorder(),
-                      ),
-                      validator: _validerLangues,
-                    ),
-                  ],
-                ),
-                // Sélecteurs CSS : seulement pour un site générique (les
-                // autres types ne les lisent pas). Dépliés d'office si le
-                // site en a déjà, comme les langues ci-dessus.
-                if (_estGenerique)
-                  ChampsReglagesGeneriques(
-                    controleurs: _reglages,
-                    valeursInitiales: _reglagesInitiaux,
-                    estDeplieeAuDepart: _reglagesInitiaux.isNotEmpty,
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-      actions: <Widget>[
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text(Textes.annuler),
-        ),
-        FilledButton(
-          onPressed: _valider,
-          child: const Text(Textes.enregistrer),
-        ),
-      ],
     );
   }
 }

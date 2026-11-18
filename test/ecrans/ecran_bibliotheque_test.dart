@@ -299,8 +299,8 @@ void main() {
   });
 
   testWidgets(
-    'le dialogue coche Favoris et Suivis même si les listes n\'étaient pas '
-    'chargées',
+    'le dialogue coche Suivis (pas Favoris) même si les listes n\'étaient '
+    'pas chargées',
     (tester) async {
       service.erreurLecture = const ErreurSource('https://x.test', 'Panne');
       await afficher(tester);
@@ -317,14 +317,14 @@ void main() {
           .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
           .map((caseListe) => caseListe.value)
           .toList();
-      // Favoris, Suivis, Planifié, À lire plus tard (« En attente » est
-      // automatique : pas de case).
-      expect(cases, <bool?>[true, true, false, false]);
+      // Favoris (décochée : X3), Suivis, Planifié, Terminés, À lire plus
+      // tard (« En attente » est automatique : pas de case).
+      expect(cases, <bool?>[false, true, false, false, false]);
     },
   );
 
   testWidgets(
-    'le dialogue d\'ajout coche Favoris et Suivis et ajoute le titre',
+    'le dialogue d\'ajout coche Suivis seulement et ajoute le titre',
     (tester) async {
       await afficher(tester);
       await tester.pump();
@@ -337,10 +337,23 @@ void main() {
       final cases = tester
           .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
           .toList();
-      expect(cases, hasLength(4));
+      expect(cases, hasLength(5));
+      expect(
+        tester
+            .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
+            .map((caseListe) => (caseListe.title! as Text).data),
+        <String>[
+          'Favoris',
+          'Suivis',
+          'Planifié',
+          'Terminés',
+          'À lire plus tard',
+        ],
+      );
       expect(cases.map((caseListe) => caseListe.value), <bool?>[
+        false,
         true,
-        true,
+        false,
         false,
         false,
       ]);
@@ -360,7 +373,7 @@ void main() {
       expect(find.byType(AlertDialog), findsNothing);
       expect(find.textContaining('3 nouveaux chapitres'), findsOneWidget);
       expect(find.byType(CarteTitre), findsOneWidget);
-      expect(service.listesParTitre[1], <int>{1, 2});
+      expect(service.listesParTitre[1], <int>{2});
     },
   );
 

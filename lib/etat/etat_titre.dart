@@ -3,6 +3,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -13,6 +14,7 @@ import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
 import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
+import '../modeles/titre_alternatif.dart';
 import '../services/classement_listes.dart';
 import '../services/service_bibliotheque.dart';
 import '../services/service_categories.dart';
@@ -894,15 +896,257 @@ class EtatTitre extends EtatNotifiant {
     );
   }
 
-  /// Applique les règles de conservation si [idListe] est Favoris ou Suivis
-  /// (les seules listes qui déclenchent des téléchargements).
+  /// Applique les règles de conservation si [idListe] est Favoris, Suivis
+  /// (les listes qui déclenchent des téléchargements) ou Terminés (qui les
+  /// arrête, sauf archive complète).
   Future<void> _appliquerReglesSiSysteme(int idListe) async {
     final liste = _listes.where((liste) => liste.id == idListe).firstOrNull;
     if (liste == null ||
         liste.nom == nomListeFavoris ||
-        liste.nom == nomListeSuivis) {
+        liste.nom == nomListeSuivis ||
+        liste.nom == nomListeTermines) {
       await _appliquerRegles();
     }
+  }
+
+  // -------------------------------------- Modification de la fiche (X6)
+
+  bool _estEnModificationFiche = false;
+
+  /// `true` pendant l'enregistrement d'une modification de la fiche.
+  bool get estEnModificationFiche => _estEnModificationFiche;
+
+  /// Niveaux de contenu possibles (formulaire de modification), du plus
+  /// sage au plus explicite.
+  static const List<String> niveauxContenuPossibles = niveauxContenu;
+
+  /// `true` si le champ [champ] du titre a été modifié à la main : il est
+  /// protégé de l'actualisation depuis le site.
+  bool estManuel(ChampTitre champ) => _titre?.estManuel(champ) ?? false;
+
+  /// Modifie la fiche à la main ; seuls les champs donnés (non `null`)
+  /// changent, et ils deviennent protégés de l'actualisation.
+  ///
+  /// Un texte vide efface [resume], [auteur] ou [statut] ; [niveauContenu]
+  /// vide = inconnu. [titresAlternatifs] et [categories] remplacent toutes
+  /// les valeurs. La fiche est relue ensuite (catégories regroupées).
+  Future<ResultatAction<bool>> modifierFiche({
+    String? nom,
+    List<TitreAlternatif>? titresAlternatifs,
+    String? resume,
+    String? auteur,
+    String? statut,
+    List<String>? categories,
+    String? niveauContenu,
+  }) => _changerFiche(
+    () => _service.modifierTitre(
+      idTitre,
+      nom: nom,
+      titresAlternatifs: titresAlternatifs,
+      resume: resume,
+      auteur: auteur,
+      statut: statut,
+      categories: categories,
+      niveauContenu: niveauContenu,
+    ),
+  );
+
+  /// « Rendre au site » : les [champs] ne sont plus protégés ; la prochaine
+  /// actualisation les remplace par les valeurs du site.
+  Future<ResultatAction<bool>> rendreAuSite(Set<ChampTitre> champs) =>
+      _changerFiche(() => _service.rendreChampsAuSite(idTitre, champs));
+
+  Future<ResultatAction<bool>> _changerFiche(
+    Future<Titre> Function() action,
+  ) async {
+    _estEnModificationFiche = true;
+    notifier();
+    try {
+      await action();
+      final numero = ++_numeroLecture;
+      final donnees = await _lireBase();
+      if (numero == _numeroLecture) _appliquer(donnees);
+      return const ResultatAction<bool>.reussite(true);
+    } on _TitreIntrouvable {
+      _signalerIntrouvable();
+      return const ResultatAction<bool>.echec(
+        DescriptionErreur(NatureErreur.introuvable),
+      );
+    } catch (erreur, pile) {
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnModificationFiche = false;
+      notifier();
+    }
+  }
+
+  // ------------------------------------------- Sélection de chapitres (X10)
+
+  /// Lignes sélectionnées, par identifiant de leur version retenue
+  /// (`GroupeChapitres.retenu`) : une ligne = un numéro, toutes langues.
+  Set<int> _idsSelection = const <int>{};
+
+  /// Sélection d'avant le glisser en cours : le glisser y ajoute la plage
+  /// entre la ligne de départ et la ligne survolée.
+  Set<int> _selectionAvantGlisser = const <int>{};
+
+  /// Ligne où le glisser a commencé, ou `null`.
+  int? _ancreGlisser;
+
+  bool _estEnSelection = false;
+  bool _estEnMarquageLot = false;
+
+  /// `true` en mode sélection (cases à cocher, barre d'actions).
+  bool get estEnSelection => _estEnSelection;
+
+  /// `true` pendant l'enregistrement d'un marquage en lot.
+  bool get estEnMarquageLot => _estEnMarquageLot;
+
+  /// Nombre de lignes sélectionnées (parmi celles affichées).
+  int get nombreSelectionnes => _groupesSelectionnes.length;
+
+  /// `true` si toutes les lignes affichées sont sélectionnées.
+  bool get toutEstSelectionne =>
+      _groupes.isNotEmpty && nombreSelectionnes == _groupes.length;
+
+  /// `true` si la ligne [groupe] est sélectionnée.
+  bool estSelectionne(GroupeChapitres groupe) =>
+      _idsSelection.contains(groupe.retenu.id);
+
+  List<GroupeChapitres> get _groupesSelectionnes => <GroupeChapitres>[
+    for (final groupe in _groupes)
+      if (_idsSelection.contains(groupe.retenu.id)) groupe,
+  ];
+
+  /// Entre en mode sélection avec [groupe] sélectionné (appui long).
+  void commencerSelection(GroupeChapitres groupe) {
+    final id = groupe.retenu.id;
+    if (id == null) return;
+    _estEnSelection = true;
+    _idsSelection = <int>{..._idsSelection, id};
+    notifier();
+  }
+
+  /// Ajoute ou retire [groupe] de la sélection (appui ou case en mode
+  /// sélection). La sélection reste ouverte même vide : le client la ferme
+  /// avec « Annuler ».
+  void basculerSelection(GroupeChapitres groupe) {
+    final id = groupe.retenu.id;
+    if (id == null) return;
+    _estEnSelection = true;
+    _idsSelection = _idsSelection.contains(id)
+        ? (Set<int>.of(_idsSelection)..remove(id))
+        : <int>{..._idsSelection, id};
+    notifier();
+  }
+
+  /// Début d'un glisser de sélection sur [groupe] (appui long suivi d'un
+  /// glisser, ou clic maintenu à la souris).
+  void commencerGlisser(GroupeChapitres groupe) {
+    final id = groupe.retenu.id;
+    if (id == null) return;
+    _estEnSelection = true;
+    _selectionAvantGlisser = _idsSelection;
+    _ancreGlisser = id;
+    _idsSelection = <int>{..._idsSelection, id};
+    notifier();
+  }
+
+  /// Le glisser survole [groupe] : la sélection devient celle d'avant le
+  /// glisser, plus toutes les lignes entre la ligne de départ et celle-ci.
+  void etendreGlisser(GroupeChapitres groupe) {
+    final ancre = _ancreGlisser;
+    if (ancre == null) return;
+    final debut = _groupes.indexWhere((g) => g.retenu.id == ancre);
+    final fin = _groupes.indexWhere((g) => g.retenu.id == groupe.retenu.id);
+    if (debut < 0 || fin < 0) return;
+    final plage = <int>{
+      for (var i = math.min(debut, fin); i <= math.max(debut, fin); i++)
+        ?_groupes[i].retenu.id,
+    };
+    final nouvelle = <int>{..._selectionAvantGlisser, ...plage};
+    if (setEquals(nouvelle, _idsSelection)) return;
+    _idsSelection = nouvelle;
+    notifier();
+  }
+
+  /// Fin du glisser de sélection.
+  void terminerGlisser() {
+    _ancreGlisser = null;
+    _selectionAvantGlisser = const <int>{};
+  }
+
+  /// Sélectionne toutes les lignes affichées (filtre de site compris).
+  void toutSelectionner() {
+    _estEnSelection = true;
+    _idsSelection = <int>{for (final groupe in _groupes) ?groupe.retenu.id};
+    notifier();
+  }
+
+  /// Quitte le mode sélection sans rien changer.
+  void annulerSelection() {
+    _estEnSelection = false;
+    _idsSelection = const <int>{};
+    terminerGlisser();
+    notifier();
+  }
+
+  /// Marque lues (ou non lues si [lu] vaut `false`) toutes les versions des
+  /// lignes sélectionnées, en une fois, puis quitte le mode sélection.
+  /// Renvoie le nombre de chapitres dont l'état a changé.
+  Future<ResultatAction<int>> marquerSelection({bool lu = true}) async {
+    final ids = <int>{
+      for (final groupe in _groupesSelectionnes)
+        for (final chapitre in groupe.versions) ?chapitre.id,
+    };
+    if (ids.isEmpty) return const ResultatAction<int>.reussite(0);
+    _estEnMarquageLot = true;
+    notifier();
+    try {
+      final nombre = await _service.marquerChapitresLus(idTitre, ids, lu: lu);
+      _marquerLocalement((chapitre) => ids.contains(chapitre.id), lu);
+      _estEnSelection = false;
+      _idsSelection = const <int>{};
+      terminerGlisser();
+      notifier();
+      await _appliquerRegles();
+      return ResultatAction<int>.reussite(nombre);
+    } catch (erreur, pile) {
+      return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnMarquageLot = false;
+      notifier();
+    }
+  }
+
+  /// « Marquer lus jusqu'ici » : tous les chapitres de numéro inférieur ou
+  /// égal à [numero] (toutes langues, tous sites) deviennent lus. Renvoie
+  /// le nombre de chapitres dont l'état a changé.
+  Future<ResultatAction<int>> marquerLusJusqua(double numero) async {
+    _estEnMarquageLot = true;
+    notifier();
+    try {
+      final nombre = await _service.marquerLusJusqua(idTitre, numero);
+      _marquerLocalement((chapitre) => chapitre.numero <= numero, true);
+      notifier();
+      await _appliquerRegles();
+      return ResultatAction<int>.reussite(nombre);
+    } catch (erreur, pile) {
+      return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnMarquageLot = false;
+      notifier();
+    }
+  }
+
+  /// Mise à jour locale après un marquage en lot (la liste ne saute pas).
+  void _marquerLocalement(bool Function(Chapitre) choisi, bool lu) {
+    _chapitres = <Chapitre>[
+      for (final chapitre in _chapitres)
+        choisi(chapitre) ? chapitre.copierAvec(estLu: lu) : chapitre,
+    ];
+    _mettreAJourNonLus();
+    _regrouper();
   }
 
   /// Demande au service d'appliquer les règles de conservation à ce titre.

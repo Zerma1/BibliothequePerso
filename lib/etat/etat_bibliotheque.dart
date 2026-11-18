@@ -8,11 +8,13 @@ import 'package:flutter/foundation.dart';
 
 import '../modeles/constantes.dart';
 import '../modeles/liste_lecture.dart';
+import '../modeles/source.dart';
 import '../modeles/titre.dart';
 import '../services/classement_listes.dart';
 import '../services/service_bibliotheque.dart';
 import '../services/service_categories.dart';
 import '../services/service_parametres.dart';
+import '../services/service_sources_par_defaut.dart';
 import '../services/service_telechargement.dart';
 import 'constantes_etat.dart';
 import 'description_erreur.dart';
@@ -97,8 +99,9 @@ class EtatBibliotheque extends EtatNotifiant {
   /// Titres qui correspondent aux filtres.
   List<Titre> get titres => _titres;
 
-  /// Toutes les listes (système d'abord : Favoris, Suivis, Planifié, En
-  /// attente).
+  /// Toutes les listes, dans l'ordre choisi par le client (système d'abord
+  /// tant qu'il ne l'a pas changé : Favoris, Suivis, Planifié, En attente,
+  /// Terminés).
   List<ListeLecture> get listes => _listes;
 
   /// Catégories proposées dans le filtre : avec les catégories regroupées,
@@ -197,18 +200,120 @@ class EtatBibliotheque extends EtatNotifiant {
   /// `true` si le chargement a abouti sans aucun titre à afficher.
   bool get estVide => _estCharge && _erreur == null && _titres.isEmpty;
 
-  /// Listes cochées par défaut lors de l'ajout d'un titre : Favoris et Suivis.
+  /// Listes cochées par défaut lors de l'ajout d'un titre : Suivis
+  /// seulement (retour X3 du client sur la 0.2.1-test : Favoris reste
+  /// proposée, mais décochée).
   Set<int> get idsListesParDefaut => <int>{
     for (final liste in _listes)
-      if (liste.id != null &&
-          (liste.nom == nomListeFavoris || liste.nom == nomListeSuivis))
-        liste.id!,
+      if (liste.id != null && liste.nom == nomListeSuivis) liste.id!,
   };
 
   /// `true` si [liste] est tenue automatiquement par l'application (« En
   /// attente ») : le client ne peut pas y ranger un titre à la main.
   bool estListeAutomatique(ListeLecture liste) =>
       ClassementListes.listesAutomatiques.contains(liste.nom);
+
+  /// `true` si [liste] peut être renommée et supprimée par le client (liste
+  /// personnelle) ; les listes système (Favoris, Suivis, Planifié, En
+  /// attente, Terminés) ne le peuvent pas.
+  bool estListeModifiable(ListeLecture liste) =>
+      liste.id != null && !liste.estSysteme;
+
+  // ------------------------------------------- Listes personnelles (X4)
+
+  /// Crée une liste personnelle nommée [nom], puis relit la bibliothèque.
+  /// Le service nettoie le nom et refuse un nom vide, trop long ou déjà
+  /// pris.
+  Future<ResultatAction<ListeLecture>> creerListe(String nom) =>
+      _modifierListes(() => _service.creerListe(nom));
+
+  /// Renomme la liste personnelle [idListe], puis relit la bibliothèque.
+  Future<ResultatAction<ListeLecture>> renommerListe(int idListe, String nom) =>
+      _modifierListes(() => _service.renommerListe(idListe, nom));
+
+  /// Supprime la liste personnelle [idListe] (ses titres restent dans la
+  /// bibliothèque), puis relit la bibliothèque. Un filtre posé sur cette
+  /// liste est abandonné au rechargement.
+  Future<ResultatAction<bool>> supprimerListe(int idListe) =>
+      _modifierListes(() async {
+        await _service.supprimerListe(idListe);
+        return true;
+      });
+
+  /// Enregistre l'ordre d'affichage des listes ([idsDansLOrdre] : de la
+  /// première à la dernière).
+  ///
+  /// L'ordre est appliqué tout de suite à l'écran (glisser-déposer sans
+  /// saut), puis enregistré ; en cas d'échec, la bibliothèque est relue et
+  /// l'ancien ordre revient.
+  Future<ResultatAction<bool>> reordonnerListes(List<int> idsDansLOrdre) async {
+    final parId = <int, ListeLecture>{
+      for (final liste in _listes)
+        if (liste.id != null) liste.id!: liste,
+    };
+    _listes = <ListeLecture>[
+      for (final id in idsDansLOrdre) ?parId[id],
+      for (final liste in _listes)
+        if (!idsDansLOrdre.contains(liste.id)) liste,
+    ];
+    notifier();
+    try {
+      _listes = await _service.reordonnerListes(idsDansLOrdre);
+      notifier();
+      return const ResultatAction<bool>.reussite(true);
+    } catch (erreur, pile) {
+      await charger();
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    }
+  }
+
+  /// Déroulement commun aux changements de listes : action du service puis
+  /// relecture de la bibliothèque (puces, filtre).
+  Future<ResultatAction<T>> _modifierListes<T>(
+    Future<T> Function() action,
+  ) async {
+    try {
+      final resultat = await action();
+      await charger();
+      return ResultatAction<T>.reussite(resultat);
+    } catch (erreur, pile) {
+      return ResultatAction<T>.echec(DescriptionErreur.depuis(erreur, pile));
+    }
+  }
+
+  // ------------------------------------------ Recherche sur MangaDex (X6)
+
+  /// Cherche [requete] sur MangaDex (onglet « Rechercher » du dialogue
+  /// d'ajout). Les résultats ne sont pas enregistrés : le client en choisit
+  /// un, qui est ensuite ajouté par son adresse ([ajouterTitre]).
+  ///
+  /// Le site MangaDex configuré est utilisé s'il existe, sinon la source
+  /// MangaDex par défaut (non enregistrée) : une recherche ne crée rien.
+  Future<ResultatAction<List<Titre>>> rechercherSurMangaDex(
+    String requete,
+  ) async {
+    final texte = requete.trim();
+    if (texte.isEmpty) {
+      return const ResultatAction<List<Titre>>.reussite(<Titre>[]);
+    }
+    try {
+      final sources = await _service.chargerSources();
+      final source =
+          sources
+              .where((source) => source.typeSource == TypeSource.mangaDex)
+              .firstOrNull ??
+          sourcesParDefaut
+              .firstWhere((defaut) => defaut.typeSource == TypeSource.mangaDex)
+              .versSource();
+      return ResultatAction<List<Titre>>.reussite(
+        await _service.rechercherSurSource(source, texte),
+      );
+    } catch (erreur, pile) {
+      return ResultatAction<List<Titre>>.echec(
+        DescriptionErreur.depuis(erreur, pile),
+      );
+    }
+  }
 
   /// Catégories qui contiennent [filtre] (sans tenir compte de la casse ni
   /// des accents), regroupées par initiale (« A », « B »… ; « # » pour un

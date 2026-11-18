@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/foundation.dart';
 
+import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/source.dart';
 import '../services/erreur_service.dart';
 import '../services/service_ajout_site.dart';
@@ -198,6 +199,10 @@ class EtatSources extends EtatNotifiant {
         nom: nom,
         langueParDefaut: langueParDefaut,
         typeForce: typeForce,
+        // Une page générique est vérifiée avec les réglages que le client
+        // s'apprête à enregistrer (sans eux, une page lisible grâce à ses
+        // sélecteurs serait refusée).
+        configurationSelecteurs: json,
       );
       if (json != null && source.typeSource == TypeSource.generique) {
         // Méthode existante de modification : elle garde le champ
@@ -239,14 +244,36 @@ class EtatSources extends EtatNotifiant {
     }
   }
 
+  /// Motif du refus du type [type] pour le site d'adresse [urlBase], ou
+  /// `null` s'il est cohérent (règle du service : les types reconnus par le
+  /// domaine ne se changent pas et ne se donnent pas à un autre site).
+  static String? erreurTypeSite(String urlBase, TypeSource type) =>
+      ServiceAjoutSite.erreurTypeSite(urlBase, type);
+
+  /// `true` si passer [source] au type [nouveauType] effacera ses réglages
+  /// avancés (sélecteurs CSS) : seul le type générique les lit, le service
+  /// les efface quand on le quitte.
+  static bool changementTypeEffaceReglages(
+    Source source,
+    TypeSource nouveauType,
+  ) =>
+      source.typeSource == TypeSource.generique &&
+      nouveauType != TypeSource.generique &&
+      reglagesGeneriquesDepuisJson(source.configurationSelecteurs).isNotEmpty;
+
   /// Modifie le nom, les langues (« fr,en », par ordre de préférence),
-  /// l'activation et, pour un site générique, les réglages avancés d'un
-  /// site.
+  /// l'activation, le type et, pour un site générique, les réglages avancés
+  /// d'un site.
+  ///
+  /// [typeSource] (tâche X5) : `null` garde le type actuel. Un type
+  /// incohérent ([erreurTypeSite]) est refusé par le service sans rien
+  /// écrire. Quitter le type générique efface les réglages avancés.
   ///
   /// [reglagesGeneriques] (par clé de [clesReglagesGeneriques]) : `null`
   /// laisse les réglages tels quels ; tous vides, ils sont effacés (retour
-  /// aux heuristiques). Ignorés pour un site qui n'est pas générique. Le
-  /// service les vérifie et refuse un réglage invalide (rien n'est écrit).
+  /// aux heuristiques). Ignorés si le site (avec son nouveau type) n'est pas
+  /// générique. Le service les vérifie et refuse un réglage invalide (rien
+  /// n'est écrit).
   ///
   /// Si les langues changent, les règles de téléchargement sont
   /// réappliquées : la version retenue de chaque numéro peut changer.
@@ -255,6 +282,7 @@ class EtatSources extends EtatNotifiant {
     required String nom,
     required String langues,
     required bool estActive,
+    TypeSource? typeSource,
     Map<String, String>? reglagesGeneriques,
   }) async {
     if (nom.trim().isEmpty) {
@@ -262,19 +290,24 @@ class EtatSources extends EtatNotifiant {
         DescriptionErreur(NatureErreur.nomVide),
       );
     }
+    final type = typeSource ?? source.typeSource;
     var aEnregistrer = source.copierAvec(
       nom: nom,
       langueParDefaut: langues,
       estActive: estActive,
+      typeSource: type,
     );
-    if (reglagesGeneriques != null &&
-        source.typeSource == TypeSource.generique) {
+    if (reglagesGeneriques != null && type == TypeSource.generique) {
       final json = ServiceAjoutSite.reglagesGeneriquesVersJson(
         reglagesGeneriques,
       );
-      final avant = ServiceAjoutSite.reglagesGeneriquesVersJson(
-        reglagesGeneriquesDepuisJson(source.configurationSelecteurs),
-      );
+      // Un site qui devient générique n'avait aucun réglage : tout réglage
+      // saisi est nouveau.
+      final avant = source.typeSource == TypeSource.generique
+          ? ServiceAjoutSite.reglagesGeneriquesVersJson(
+              reglagesGeneriquesDepuisJson(source.configurationSelecteurs),
+            )
+          : null;
       // Réglages inchangés : le champ enregistré est gardé tel quel (le
       // service ne revérifie pas un site enregistré avant la vérification).
       // Tout vidé : JSON vide, que le service traduit en effacement
@@ -330,6 +363,17 @@ class EtatSources extends EtatNotifiant {
       await _serviceAjoutSite.supprimerSource(idSource);
       await charger();
       return const ResultatAction<bool>.reussite(true);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      // Refus de la base (site encore lié à un titre comme site secondaire,
+      // chapitres gardés venant de lui) : son message est une consigne pour
+      // le client, pas une panne à signaler.
+      return ResultatAction<bool>.echec(
+        DescriptionErreur(
+          NatureErreur.refus,
+          detail: erreur.message,
+          cause: erreur,
+        ),
+      );
     } catch (erreur, pile) {
       return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
     }

@@ -5,6 +5,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:bibliotheque_perso/donnees/depot_categories.dart';
@@ -790,11 +791,27 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
     );
   }
 
+  /// Résultats renvoyés par [rechercherSurSource].
+  List<Titre> resultatsRecherche = <Titre>[];
+
+  /// Recherches reçues par [rechercherSurSource] (site et texte).
+  final List<({Source source, String requete})> recherches =
+      <({Source source, String requete})>[];
+
   @override
-  Future<List<Titre>> rechercherSurSource(
-    Source source,
-    String requete,
-  ) async => const <Titre>[];
+  Future<List<Titre>> rechercherSurSource(Source source, String requete) async {
+    recherches.add((source: source, requete: requete));
+    return List<Titre>.of(resultatsRecherche);
+  }
+
+  /// Erreur levée par la création, le renommage, la suppression et le
+  /// réordonnancement des listes, si définie.
+  Object? erreurListes;
+
+  void _refuserListes() {
+    final erreur = erreurListes;
+    if (erreur != null) throw erreur;
+  }
 
   @override
   Future<void> ajouterTitreALaListe(int idListe, int idTitre) async {
@@ -817,18 +834,31 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
 
   @override
   Future<ListeLecture> creerListe(String nom) async {
-    final liste = ListeLecture(id: listes.length + 1, nom: nom);
+    _refuserListes();
+    // Identifiant libre (les listes de test ne sont pas numérotées dans
+    // l'ordre).
+    final id = listes.map((liste) => liste.id ?? 0).fold<int>(0, math.max) + 1;
+    final liste = ListeLecture(
+      id: id,
+      nom: ServiceBibliotheque.nettoyerNomListe(nom),
+      ordre: listes.length,
+    );
     listes.add(liste);
     return liste;
   }
 
   @override
   Future<void> supprimerListe(int idListe) async {
+    _refuserListes();
     listes.removeWhere((liste) => liste.id == idListe);
+    for (final ids in listesParTitre.values) {
+      ids.remove(idListe);
+    }
   }
 
   @override
   Future<ListeLecture> renommerListe(int idListe, String nom) async {
+    _refuserListes();
     final index = listes.indexWhere((liste) => liste.id == idListe);
     if (index < 0) throw const ErreurService("Cette liste n'existe plus.");
     final renommee = listes[index].copierAvec(
@@ -840,6 +870,7 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
 
   @override
   Future<List<ListeLecture>> reordonnerListes(List<int> idsDansLOrdre) async {
+    _refuserListes();
     final ordonnees = <ListeLecture>[
       for (final id in idsDansLOrdre)
         ...listes.where((liste) => liste.id == id),
@@ -999,7 +1030,14 @@ class FauxServiceAjoutSite implements ServiceAjoutSite {
   Completer<void>? retenue;
 
   /// Derniers paramètres reçus par [ajouterSite].
-  ({String url, String? nom, String langue, TypeSource? type})? dernierAppel;
+  ({
+    String url,
+    String? nom,
+    String langue,
+    TypeSource? type,
+    String? selecteurs,
+  })?
+  dernierAppel;
 
   @override
   Future<Source> ajouterSite(
@@ -1014,6 +1052,7 @@ class FauxServiceAjoutSite implements ServiceAjoutSite {
       nom: nom,
       langue: langueParDefaut,
       type: typeForce,
+      selecteurs: configurationSelecteurs,
     );
     final attente = retenue;
     if (attente != null) {
@@ -1063,7 +1102,11 @@ class FauxServiceAjoutSite implements ServiceAjoutSite {
         .where((s) => s.id == source.id)
         .firstOrNull
         ?.configurationSelecteurs;
-    final reglages = brut != null && brut == avant
+    // Comme le vrai service : un type autre que générique n'a pas de
+    // réglages avancés (quitter le générique les efface).
+    final reglages = source.typeSource != TypeSource.generique
+        ? null
+        : brut != null && brut == avant
         ? brut
         : ServiceAjoutSite.normaliserReglagesGeneriques(brut);
     final modifiee = source.copierAvec(

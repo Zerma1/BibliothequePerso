@@ -2008,6 +2008,248 @@ abstract final class Textes {
       'Redémarrez l\'application pour utiliser le nouveau dossier des '
       'chapitres.';
 
+  // ------------------------------------------- Listes personnelles (X4)
+
+  /// Bouton et titre du dialogue de création d'une liste.
+  static const String nouvelleListe = 'Nouvelle liste';
+
+  /// Bouton et titre de l'écran de gestion des listes.
+  static const String gererListes = 'Gérer les listes';
+
+  /// Action : renommer une liste.
+  static const String renommerListe = 'Renommer';
+
+  /// Titre du dialogue de renommage d'une liste.
+  static const String titreRenommerListe = 'Renommer la liste';
+
+  /// Action : supprimer une liste.
+  static const String supprimerListe = 'Supprimer la liste';
+
+  /// Champ du nom d'une liste.
+  static const String champNomListe = 'Nom de la liste';
+
+  /// Bouton de création d'une liste.
+  static const String creer = 'Créer';
+
+  /// Bouton de validation d'un renommage.
+  static const String renommer = 'Renommer';
+
+  /// Mention d'une liste système (menu grisé, écran de gestion).
+  static const String listeSysteme =
+      "Liste de l'application : elle ne peut être ni renommée ni supprimée.";
+
+  /// Info-bulle de la poignée de déplacement d'une liste.
+  static const String deplacerListe = 'Faire glisser pour déplacer';
+
+  /// Info-bulle du bouton des actions d'une liste.
+  static const String actionsListe = 'Actions de la liste';
+
+  /// Explication de l'écran de gestion des listes.
+  static const String aideGestionListes =
+      "Faites glisser une liste par sa poignée pour changer l'ordre des "
+      'puces de la bibliothèque. Les listes de l\'application (Favoris, '
+      'Suivis…) se déplacent aussi, mais ne se renomment ni ne se '
+      'suppriment.';
+
+  /// Aucune liste à gérer.
+  static const String aucuneListe = 'Aucune liste.';
+
+  /// Question avant la suppression d'une liste personnelle.
+  static String confirmationSuppressionListe(String nom) =>
+      'Supprimer la liste « $nom » ?\n'
+      "Les titres qu'elle contient restent dans votre bibliothèque.";
+
+  /// Liste créée.
+  static String listeCreee(String nom) => 'Liste « $nom » créée.';
+
+  /// Liste renommée.
+  static String listeRenommee(String nom) => 'Liste renommée en « $nom ».';
+
+  /// Liste supprimée.
+  static String listeSupprimee(String nom) => 'Liste « $nom » supprimée.';
+
+  // ------------------------------------------------- Type d'un site (X5)
+
+  /// Aide du choix du type dans la modification d'un site.
+  static const String aideTypeSiteModification =
+      "Le type décide de la façon dont l'application lit le site. Les types "
+      'grisés ne conviennent pas à ce site.';
+
+  /// Avertissement : quitter le type générique efface les sélecteurs CSS.
+  static const String avertissementEffacementReglages =
+      'Changer de type effacera les réglages avancés (sélecteurs CSS) de ce '
+      'site : ils ne servent qu\'au type générique.';
+
+  /// Mention sous la liste des sources : toucher une ligne la modifie.
+  static const String aideModifierSource =
+      'Touchez un site pour le modifier (nom, type, langues) ou le supprimer.';
+
+  // --------------------------------------------- Modifier un titre (X6)
+
+  /// Bouton et titre du formulaire de modification d'une fiche.
+  static const String modifierFiche = 'Modifier la fiche';
+
+  /// Champ du nom d'un titre.
+  static const String champNomTitre = 'Nom';
+
+  /// Nom d'un titre laissé vide.
+  static const String erreurNomTitreVide = 'Donnez un nom au titre.';
+
+  /// Section des titres alternatifs du formulaire.
+  static const String sectionTitresAlternatifs = 'Titres alternatifs';
+
+  /// Champ d'un titre alternatif.
+  static const String champTitreAlternatif = 'Titre alternatif';
+
+  /// Champ de la langue d'un titre alternatif.
+  static const String champLangueAlternatif = 'Langue';
+
+  /// Bouton d'ajout d'un titre alternatif.
+  static const String ajouterTitreAlternatif = 'Ajouter un titre alternatif';
+
+  /// Info-bulle : retirer une ligne du formulaire.
+  static const String retirer = 'Retirer';
+
+  /// Champ d'ajout d'une catégorie.
+  static const String champAjoutCategorie = 'Ajouter une catégorie';
+
+  /// Libellé du niveau de contenu.
+  static const String niveauContenu = 'Niveau de contenu';
+
+  /// Niveau de contenu inconnu.
+  static const String niveauInconnu = 'Inconnu';
+
+  /// Repère d'un champ modifié à la main.
+  static const String modifieALaMain = 'Modifié à la main';
+
+  /// Bouton « Rendre au site ».
+  static const String rendreAuSite = 'Rendre au site';
+
+  /// Explication du formulaire de modification.
+  static const String explicationModificationFiche =
+      "Les champs modifiés ici sont protégés : l'actualisation depuis le "
+      "site ne les remplace plus, jusqu'à ce que vous les rendiez au site.";
+
+  /// Message après « Rendre au site ».
+  static const String champRenduAuSite =
+      'Ce champ suivra de nouveau le site à la prochaine actualisation.';
+
+  /// Message après l'enregistrement de la fiche.
+  static const String ficheModifiee = 'Fiche modifiée.';
+
+  /// Message quand rien n'a changé dans le formulaire.
+  static const String aucuneModification = 'Aucune modification.';
+
+  /// Nom affiché d'un champ de la fiche.
+  static String libelleChampTitre(ChampTitre champ) {
+    switch (champ) {
+      case ChampTitre.nom:
+        return 'nom';
+      case ChampTitre.titresAlternatifs:
+        return 'titres alternatifs';
+      case ChampTitre.resume:
+        return 'résumé';
+      case ChampTitre.auteur:
+        return 'auteur';
+      case ChampTitre.statut:
+        return 'statut';
+      case ChampTitre.categories:
+        return 'catégories';
+      case ChampTitre.niveauContenu:
+        return 'niveau de contenu';
+    }
+  }
+
+  /// Repère discret de la fiche : champs modifiés à la main.
+  static String champsModifiesALaMain(Iterable<ChampTitre> champs) =>
+      '$modifieALaMain : ${champs.map(libelleChampTitre).join(', ')}';
+
+  /// Choix « Adresse » du dialogue d'ajout d'un titre.
+  static const String modeAdresse = 'Adresse';
+
+  /// Choix « Rechercher » du dialogue d'ajout d'un titre.
+  static const String modeRechercher = 'Rechercher';
+
+  /// Champ de recherche sur MangaDex.
+  static const String champRechercheMangaDex = 'Rechercher sur MangaDex';
+
+  /// Bouton de recherche.
+  static const String rechercher = 'Rechercher';
+
+  /// Aucun résultat de recherche sur MangaDex.
+  static const String aucunResultatMangaDex =
+      'Aucun titre trouvé sur MangaDex.';
+
+  /// Aide de la recherche : choisir un résultat puis « Ajouter ».
+  static const String aideRechercheMangaDex =
+      'Choisissez un résultat, puis appuyez sur « Ajouter ».';
+
+  // -------------------------------------------- Archive complète (X7)
+
+  /// Interrupteur « Archive complète ».
+  static const String archiveComplete = 'Archive complète';
+
+  /// Explication de l'archive complète.
+  static const String explicationArchiveComplete =
+      'Télécharger tous les chapitres de tous les titres et ne jamais les '
+      'supprimer automatiquement (conseillé avec un NAS).';
+
+  /// Titre de la confirmation d'activation.
+  static const String activerArchiveComplete = "Activer l'archive complète ?";
+
+  /// Avertissement avant l'activation de l'archive complète.
+  static const String confirmationArchiveComplete =
+      'Tous les chapitres de tous les titres de la bibliothèque seront '
+      "téléchargés : cela peut représenter beaucoup de téléchargements et "
+      "d'espace disque. Plus aucun chapitre ne sera supprimé "
+      'automatiquement.';
+
+  /// Bouton d'activation.
+  static const String activer = 'Activer';
+
+  /// Message après le changement de l'archive complète.
+  static String archiveCompleteModifiee(bool active) => active
+      ? 'Archive complète activée : tous les chapitres vont être téléchargés.'
+      : 'Archive complète désactivée : les règles habituelles '
+            "s'appliquent de nouveau.";
+
+  // --------------------------------------- Chapitres lus en lot (X10)
+
+  /// Aide de la sélection de chapitres.
+  static const String aideSelectionChapitres =
+      'Appui long sur un chapitre (ou clic maintenu et glisser à la souris) '
+      'pour en sélectionner plusieurs.';
+
+  /// Titre de la barre de sélection.
+  static String chapitresSelectionnes(int nombre) =>
+      nombre <= 1 ? '$nombre sélectionné' : '$nombre sélectionnés';
+
+  /// Action : marquer la sélection lue.
+  static const String marquerSelectionLus = 'Marquer lus';
+
+  /// Action : marquer la sélection non lue.
+  static const String marquerSelectionNonLus = 'Marquer non lus';
+
+  /// Action : tout sélectionner.
+  static const String toutSelectionner = 'Tout sélectionner';
+
+  /// Action : quitter la sélection.
+  static const String annulerSelection = 'Annuler la sélection';
+
+  /// Action du menu d'un chapitre : marquer lus tous les précédents.
+  static const String marquerLusJusquIci = "Marquer lus jusqu'ici";
+
+  /// Message après un marquage en lot.
+  static String chapitresMarques(int nombre, {required bool lu}) {
+    if (nombre == 0) return 'Aucun chapitre à changer.';
+    if (nombre == 1) {
+      return lu ? '1 chapitre marqué lu.' : '1 chapitre marqué non lu.';
+    }
+    return lu
+        ? '$nombre chapitres marqués lus.'
+        : '$nombre chapitres marqués non lus.';
+  }
+
   // ------------------------------------------------------------- Formatage
 
   /// Date au format français `jj/mm/aaaa`, en heure locale.

@@ -6,15 +6,18 @@ import 'package:provider/provider.dart';
 
 import '../etat/etat_bibliotheque.dart';
 import '../etat/etat_mises_a_jour.dart';
+import '../modeles/liste_lecture.dart';
 import '../modeles/titre.dart';
 import '../widgets/bouton_recherche_mises_a_jour.dart';
 import '../widgets/carte_titre.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/dialogue_ajout_titre.dart';
+import '../widgets/dialogues_listes.dart';
 import '../widgets/messages.dart';
 import '../widgets/panneau_filtres.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
+import 'ecran_gestion_listes.dart';
 import 'ecran_titre.dart';
 
 /// Grille des couvertures de la bibliothèque, avec recherche et filtres par
@@ -254,20 +257,52 @@ class _BarreFiltres extends StatelessWidget {
               onSelected: (_) => etat.choisirListe(null),
             ),
             for (final liste in etat.listes)
-              FilterChip(
-                label: Text(liste.nom),
-                // La liste automatique s'explique d'elle-même au survol ou
-                // à l'appui long.
-                tooltip: etat.estListeAutomatique(liste)
-                    ? Textes.listeAutomatique
-                    : null,
-                avatar: etat.estListeAutomatique(liste)
-                    ? const Icon(Icons.hourglass_empty)
-                    : null,
-                selected: etat.idListeChoisie == liste.id,
-                onSelected: (choisie) =>
-                    etat.choisirListe(choisie ? liste.id : null),
-              ),
+              etat.estListeAutomatique(liste)
+                  // La liste automatique s'explique d'elle-même au survol
+                  // ou à l'appui long (info-bulle) : elle n'a pas de menu,
+                  // dont l'appui long entrerait en conflit avec l'info-bulle.
+                  ? FilterChip(
+                      label: Text(liste.nom),
+                      tooltip: Textes.listeAutomatique,
+                      avatar: const Icon(Icons.hourglass_empty),
+                      selected: etat.idListeChoisie == liste.id,
+                      onSelected: (choisie) =>
+                          etat.choisirListe(choisie ? liste.id : null),
+                    )
+                  // Appui long (téléphone) ou clic droit (ordinateur) :
+                  // menu de la liste (renommer, supprimer, gérer).
+                  : GestureDetector(
+                      onLongPressStart: (details) => _afficherMenuListe(
+                        context,
+                        etat,
+                        liste,
+                        details.globalPosition,
+                      ),
+                      onSecondaryTapUp: (details) => _afficherMenuListe(
+                        context,
+                        etat,
+                        liste,
+                        details.globalPosition,
+                      ),
+                      child: FilterChip(
+                        label: Text(liste.nom),
+                        selected: etat.idListeChoisie == liste.id,
+                        onSelected: (choisie) =>
+                            etat.choisirListe(choisie ? liste.id : null),
+                      ),
+                    ),
+            // Création et gestion au bout de la ligne des listes : le
+            // client les trouve là où il voit ses listes.
+            IconButton(
+              tooltip: Textes.nouvelleListe,
+              icon: const Icon(Icons.add),
+              onPressed: () => creerListeAvecDialogue(context, etat),
+            ),
+            IconButton(
+              tooltip: Textes.gererListes,
+              icon: const Icon(Icons.edit_note),
+              onPressed: () => EcranGestionListes.ouvrir(context),
+            ),
           ],
         ),
         _LignePuces(
@@ -305,6 +340,60 @@ class _BarreFiltres extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+/// Actions du menu d'une puce de liste.
+enum _ActionPuceListe { renommer, supprimer, gerer }
+
+/// Menu d'une liste, ouvert à [position] (appui long ou clic droit sur sa
+/// puce). Pour une liste système, « Renommer » et « Supprimer » sont grisés
+/// et une ligne explique pourquoi.
+Future<void> _afficherMenuListe(
+  BuildContext context,
+  EtatBibliotheque etat,
+  ListeLecture liste,
+  Offset position,
+) async {
+  final modifiable = etat.estListeModifiable(liste);
+  final cadre = Overlay.of(context).context.findRenderObject()! as RenderBox;
+  final action = await showMenu<_ActionPuceListe>(
+    context: context,
+    position: RelativeRect.fromRect(
+      position & Size.zero,
+      Offset.zero & cadre.size,
+    ),
+    items: <PopupMenuEntry<_ActionPuceListe>>[
+      PopupMenuItem<_ActionPuceListe>(
+        value: _ActionPuceListe.renommer,
+        enabled: modifiable,
+        child: const Text(Textes.renommerListe),
+      ),
+      PopupMenuItem<_ActionPuceListe>(
+        value: _ActionPuceListe.supprimer,
+        enabled: modifiable,
+        child: const Text(Textes.supprimerListe),
+      ),
+      if (!modifiable)
+        const PopupMenuItem<_ActionPuceListe>(
+          enabled: false,
+          child: Text(Textes.listeSysteme),
+        ),
+      const PopupMenuDivider(),
+      const PopupMenuItem<_ActionPuceListe>(
+        value: _ActionPuceListe.gerer,
+        child: Text(Textes.gererListes),
+      ),
+    ],
+  );
+  if (action == null || !context.mounted) return;
+  switch (action) {
+    case _ActionPuceListe.renommer:
+      await renommerListeAvecDialogue(context, etat, liste);
+    case _ActionPuceListe.supprimer:
+      await supprimerListeAvecConfirmation(context, etat, liste);
+    case _ActionPuceListe.gerer:
+      await EcranGestionListes.ouvrir(context);
   }
 }
 
