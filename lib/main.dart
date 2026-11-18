@@ -27,6 +27,7 @@ import 'donnees/depot_telechargements.dart';
 import 'donnees/depot_titres.dart';
 import 'donnees/depot_titres_sources.dart';
 import 'donnees/gestionnaire_transactions.dart';
+import 'donnees/journal_fichier.dart';
 import 'donnees/stockage_telechargements.dart';
 import 'ecrans/ecran_accueil.dart';
 import 'ecrans/ecran_erreur_demarrage.dart';
@@ -40,6 +41,7 @@ import 'etat/etat_parutions.dart';
 import 'etat/etat_rapports_erreur.dart';
 import 'etat/etat_sources.dart';
 import 'etat/etat_telechargements.dart';
+import 'modeles/journal.dart';
 import 'services/constantes_services.dart' show nomDossierRapports;
 import 'services/service_ajout_site.dart';
 import 'services/service_bibliotheque.dart';
@@ -356,6 +358,17 @@ Future<bool> executerTacheDeFond({
   ClientHttpPoli? client,
   String? dossierTelechargements,
 }) async {
+  // Chaque isolat a son propre `Journal.actuel` : la tâche de fond installe
+  // le sien (lignes marquées `[fond]`). En cas d'échec, `installer` renvoie
+  // null et la tâche continue sans journal de fichier.
+  await JournalFichier.installer(
+    dossierApplication: dossierTelechargements,
+    nomIsolat: nomIsolatFond,
+  );
+  Journal.actuel.info(
+    CategorieJournal.demarrage,
+    'Tâche de fond : début (version $versionApplication)',
+  );
   final ServicesApplication services;
   try {
     services = await construireServices(
@@ -368,9 +381,31 @@ Future<bool> executerTacheDeFond({
       dossierTelechargements: dossierTelechargements,
     );
   } catch (erreur, pile) {
-    debugPrint('Tâche de fond : base impossible à ouvrir : $erreur\n$pile');
+    Journal.actuel.erreur(
+      CategorieJournal.base,
+      'Tâche de fond : base impossible à ouvrir',
+      erreur: erreur,
+      pile: pile,
+    );
+    Journal.actuel.info(
+      CategorieJournal.demarrage,
+      'Tâche de fond : fin (échec, nouvel essai par WorkManager)',
+    );
+    await Journal.actuel.fermer();
     return false;
   }
+  try {
+    await _verifierEtTelechargerEnFond(services);
+  } finally {
+    Journal.actuel.info(CategorieJournal.demarrage, 'Tâche de fond : fin');
+    await Journal.actuel.fermer();
+  }
+  return true;
+}
+
+/// Vérification des mises à jour puis téléchargements de la tâche de fond,
+/// sur des [services] déjà construits ; libère le client HTTP à la fin.
+Future<void> _verifierEtTelechargerEnFond(ServicesApplication services) async {
   // LIMITE : si l'application est ouverte au même moment, les deux isolats
   // partagent la même connexion native (sqflite, singleInstance) : le verrou
   // des transactions n'étant pas commun aux isolats, une écriture peut
@@ -383,14 +418,20 @@ Future<bool> executerTacheDeFond({
     // échéance (00:00, 12:00 UTC… selon le réglage) est passée depuis la
     // dernière vérification.
     final rapport = await services.serviceMisesAJour.verifierSiEcheancePassee();
-    debugPrint(
+    Journal.actuel.info(
+      CategorieJournal.misesAJour,
       rapport == null
-          ? 'Tâche de fond : aucune vérification due.'
-          : 'Tâche de fond : ${rapport.nombreNouveauxChapitres} nouveau(x) '
-                'chapitre(s), ${rapport.echecs.length} échec(s).',
+          ? 'Tâche de fond : bilan : aucune vérification due'
+          : 'Tâche de fond : bilan : ${rapport.nombreNouveauxChapitres} '
+                'nouveau(x) chapitre(s), ${rapport.echecs.length} échec(s)',
     );
   } catch (erreur, pile) {
-    debugPrint('Tâche de fond : vérification interrompue : $erreur\n$pile');
+    Journal.actuel.erreur(
+      CategorieJournal.misesAJour,
+      'Tâche de fond : vérification interrompue',
+      erreur: erreur,
+      pile: pile,
+    );
   }
   // Téléchargements après la vérification, même si elle a échoué : les
   // règles mettent en file les nouveaux chapitres des favoris et suivis, puis
@@ -405,8 +446,17 @@ Future<bool> executerTacheDeFond({
   try {
     await services.serviceTelechargement.appliquerReglesATous();
     await services.serviceTelechargement.lancerTraitement();
+    Journal.actuel.info(
+      CategorieJournal.telechargement,
+      'Tâche de fond : file de téléchargement traitée',
+    );
   } catch (erreur, pile) {
-    debugPrint('Tâche de fond : téléchargements interrompus : $erreur\n$pile');
+    Journal.actuel.erreur(
+      CategorieJournal.telechargement,
+      'Tâche de fond : téléchargements interrompus',
+      erreur: erreur,
+      pile: pile,
+    );
   } finally {
     // On libère le client HTTP mais on ne ferme PAS la base : la connexion
     // native est partagée par tout le processus Android, et la fermer ici la
@@ -414,7 +464,6 @@ Future<bool> executerTacheDeFond({
     await services.serviceTelechargement.fermer();
     services.client.fermer();
   }
-  return true;
 }
 
 /// Lance l'application.
@@ -487,7 +536,12 @@ Future<void> planifierMisesAJourAndroid(
       existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
     );
   } catch (erreur, pile) {
-    debugPrint('Planification des mises à jour impossible : $erreur\n$pile');
+    Journal.actuel.erreur(
+      CategorieJournal.misesAJour,
+      'Planification Android des mises à jour impossible',
+      erreur: erreur,
+      pile: pile,
+    );
   }
 }
 
@@ -502,9 +556,71 @@ Future<void> planifierAndroidDepuisReglages(
   );
 }
 
+/// `true` une fois le journal de l'application installé ([demarrer] peut
+/// être rappelée par le bouton « Réessayer » de l'écran d'erreur).
+bool _journalApplicationInstalle = false;
+
+/// Écoute du cycle de vie : vide le journal quand l'application passe en
+/// arrière-plan ou s'arrête. Gardée ici pour ne pas être libérée.
+AppLifecycleListener? _ecouteCycleDeVie;
+
+/// Installe le journal de fichier de l'application, les captures d'erreurs
+/// non interceptées et le vidage du journal à la mise en pause.
+///
+/// Ne lève jamais d'exception : si le journal ne peut pas être ouvert,
+/// l'application démarre quand même (journal silencieux).
+Future<void> _installerJournalApplication() async {
+  if (_journalApplicationInstalle) return;
+  _journalApplicationInstalle = true;
+  try {
+    final journal = await JournalFichier.installer();
+    Journal.actuel.info(
+      CategorieJournal.demarrage,
+      'Démarrage : version $versionApplication, système '
+      '${Platform.operatingSystem} (${Platform.operatingSystemVersion}), '
+      'journaux dans ${journal?.dossier ?? '(aucun)'}',
+    );
+  } catch (_) {
+    // Le journal ne doit jamais empêcher le démarrage.
+  }
+  // Erreurs du framework (construction, dessin…) : affichage habituel en
+  // mode débogage, puis écriture dans le journal.
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    Journal.actuel.erreur(
+      CategorieJournal.interface,
+      'Erreur Flutter (${details.library ?? 'bibliothèque inconnue'})',
+      erreur: details.exception,
+      pile: details.stack,
+    );
+  };
+  // Erreurs asynchrones non interceptées ailleurs.
+  WidgetsBinding.instance.platformDispatcher.onError = (erreur, pile) {
+    Journal.actuel.erreur(
+      CategorieJournal.demarrage,
+      'Erreur non interceptée',
+      erreur: erreur,
+      pile: pile,
+    );
+    return true;
+  };
+  // Mise en pause (Android), fenêtre masquée (ordinateur) ou arrêt : les
+  // entrées en attente sont écrites tout de suite, pour ne pas être perdues
+  // si le système tue l'application.
+  _ecouteCycleDeVie ??= AppLifecycleListener(
+    onHide: () => unawaited(Journal.actuel.vider()),
+    onPause: () => unawaited(Journal.actuel.vider()),
+    onDetach: () {
+      Journal.actuel.info(CategorieJournal.demarrage, 'Arrêt');
+      unawaited(Journal.actuel.vider());
+    },
+  );
+}
+
 /// Ouvre la base et affiche l'application, ou un écran d'erreur lisible si
 /// la base ne peut pas être ouverte (au lieu d'un plantage).
 Future<void> demarrer() async {
+  await _installerJournalApplication();
   Widget application;
   try {
     final services = await construireServices();
@@ -516,7 +632,12 @@ Future<void> demarrer() async {
         Object erreur,
         StackTrace pile,
       ) {
-        debugPrint('Reprise des téléchargements impossible : $erreur\n$pile');
+        Journal.actuel.erreur(
+          CategorieJournal.telechargement,
+          'Reprise des téléchargements impossible',
+          erreur: erreur,
+          pile: pile,
+        );
       }),
     );
     if (Platform.isAndroid) {
@@ -524,7 +645,12 @@ Future<void> demarrer() async {
       unawaited(
         planifierAndroidDepuisReglages(services.serviceParametres)
             .catchError((Object erreur, StackTrace pile) {
-              debugPrint('Planification Android impossible : $erreur\n$pile');
+              Journal.actuel.erreur(
+                CategorieJournal.misesAJour,
+                'Planification Android impossible',
+                erreur: erreur,
+                pile: pile,
+              );
             }),
       );
     }
@@ -541,7 +667,12 @@ Future<void> demarrer() async {
       serviceDossierChapitres: services.serviceDossierChapitres,
     );
   } catch (erreur, pile) {
-    debugPrint('Démarrage impossible : $erreur\n$pile');
+    Journal.actuel.erreur(
+      CategorieJournal.demarrage,
+      'Démarrage impossible',
+      erreur: erreur,
+      pile: pile,
+    );
     application = BibliothequePersoApp(
       accueil: EcranErreurDemarrage(
         detail: erreur.toString(),
