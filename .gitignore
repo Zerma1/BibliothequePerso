@@ -55,3 +55,4 @@ desktop.ini
 
 # Fichiers à installer (exe, apk) préparés pour une version : jamais dans Git
 livraisons/
+/.idea/
