@@ -9,7 +9,9 @@ library;
 
 import 'dart:async';
 import 'dart:io' show File, Platform;
+import 'dart:ui' show AppExitResponse;
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as chemins;
 import 'package:provider/provider.dart';
@@ -379,10 +381,22 @@ Future<bool> executerTacheDeFond({
   // Chaque isolat a son propre `Journal.actuel` : la tâche de fond installe
   // le sien (lignes marquées `[fond]`). En cas d'échec, `installer` renvoie
   // null et la tâche continue sans journal de fichier.
-  await JournalFichier.installer(
+  // Le journal précédent est remis à la fin : dans un isolat dédié (Android)
+  // c'est sans effet, mais un appel depuis un isolat qui a déjà son journal
+  // (tests) ne doit ni le fermer ni lui laisser un journal fermé.
+  final journalPrecedent = Journal.actuel;
+  final journalFond = await JournalFichier.installer(
     dossierApplication: dossierTelechargements,
     nomIsolat: nomIsolatFond,
   );
+  Future<void> terminerJournal() async {
+    if (journalFond == null) return;
+    await journalFond.fermer();
+    if (identical(Journal.actuel, journalFond)) {
+      Journal.actuel = journalPrecedent;
+    }
+  }
+
   Journal.actuel.info(
     CategorieJournal.demarrage,
     'Tâche de fond : début (version $versionApplication)',
@@ -409,14 +423,14 @@ Future<bool> executerTacheDeFond({
       CategorieJournal.demarrage,
       'Tâche de fond : fin (échec, nouvel essai par WorkManager)',
     );
-    await Journal.actuel.fermer();
+    await terminerJournal();
     return false;
   }
   try {
     await _verifierEtTelechargerEnFond(services);
   } finally {
     Journal.actuel.info(CategorieJournal.demarrage, 'Tâche de fond : fin');
-    await Journal.actuel.fermer();
+    await terminerJournal();
   }
   return true;
 }
@@ -574,33 +588,48 @@ Future<void> planifierAndroidDepuisReglages(
   );
 }
 
-/// `true` une fois le journal de l'application installé ([demarrer] peut
-/// être rappelée par le bouton « Réessayer » de l'écran d'erreur).
-bool _journalApplicationInstalle = false;
+/// `true` une fois le fichier de journal de l'application installé. Tant
+/// qu'il ne l'est pas, chaque appel de [demarrer] (bouton « Réessayer » de
+/// l'écran d'erreur) retente de l'ouvrir.
+bool _fichierJournalInstalle = false;
+
+/// `true` une fois les captures d'erreurs et l'écoute du cycle de vie
+/// installées (une seule fois par exécution).
+bool _gestionnairesErreursInstalles = false;
 
 /// Écoute du cycle de vie : vide le journal quand l'application passe en
 /// arrière-plan ou s'arrête. Gardée ici pour ne pas être libérée.
 AppLifecycleListener? _ecouteCycleDeVie;
 
+/// Délai maximal d'attente de l'écriture du journal à la fermeture de la
+/// fenêtre (Windows, Linux) : au-delà, l'application se ferme quand même.
+const Duration delaiMaxVidageJournalFermeture = Duration(seconds: 2);
+
 /// Installe le journal de fichier de l'application, les captures d'erreurs
 /// non interceptées et le vidage du journal à la mise en pause.
 ///
 /// Ne lève jamais d'exception : si le journal ne peut pas être ouvert,
-/// l'application démarre quand même (journal silencieux).
+/// l'application démarre quand même (journal silencieux), et l'ouverture
+/// est retentée au prochain appel.
 Future<void> _installerJournalApplication() async {
-  if (_journalApplicationInstalle) return;
-  _journalApplicationInstalle = true;
-  try {
-    final journal = await JournalFichier.installer();
-    Journal.actuel.info(
-      CategorieJournal.demarrage,
-      'Démarrage : version $versionApplication, système '
-      '${Platform.operatingSystem} (${Platform.operatingSystemVersion}), '
-      'journaux dans ${journal?.dossier ?? '(aucun)'}',
-    );
-  } catch (_) {
-    // Le journal ne doit jamais empêcher le démarrage.
+  if (!_fichierJournalInstalle) {
+    try {
+      final journal = await JournalFichier.installer();
+      if (journal != null) {
+        _fichierJournalInstalle = true;
+        Journal.actuel.info(
+          CategorieJournal.demarrage,
+          'Démarrage : version $versionApplication, système '
+          '${Platform.operatingSystem} (${Platform.operatingSystemVersion}), '
+          'journaux dans ${journal.dossier}',
+        );
+      }
+    } catch (_) {
+      // Le journal ne doit jamais empêcher le démarrage.
+    }
   }
+  if (_gestionnairesErreursInstalles) return;
+  _gestionnairesErreursInstalles = true;
   // Erreurs du framework (construction, dessin…) : affichage habituel en
   // mode débogage, puis écriture dans le journal.
   FlutterError.onError = (details) {
@@ -612,8 +641,20 @@ Future<void> _installerJournalApplication() async {
       pile: details.stack,
     );
   };
-  // Erreurs asynchrones non interceptées ailleurs.
+  // Erreurs asynchrones non interceptées ailleurs. Renvoyer `true` les marque
+  // comme traitées : en mode débogage, elles sont donc aussi affichées dans
+  // la console, pour ne pas être masquées pendant le développement.
   WidgetsBinding.instance.platformDispatcher.onError = (erreur, pile) {
+    if (kDebugMode) {
+      FlutterError.presentError(
+        FlutterErrorDetails(
+          exception: erreur,
+          stack: pile,
+          library: 'bibliotheque_perso',
+          context: ErrorDescription('erreur asynchrone non interceptée'),
+        ),
+      );
+    }
     Journal.actuel.erreur(
       CategorieJournal.demarrage,
       'Erreur non interceptée',
@@ -631,6 +672,19 @@ Future<void> _installerJournalApplication() async {
     onDetach: () {
       Journal.actuel.info(CategorieJournal.demarrage, 'Arrêt');
       unawaited(Journal.actuel.vider());
+    },
+    // Fermeture de la fenêtre (Windows, Linux) : `onDetach` n'y est pas
+    // garanti ; on attend l'écriture du journal (au plus
+    // [delaiMaxVidageJournalFermeture]) avant d'accepter la fermeture.
+    // Sans effet sur Android, qui ne fait pas de demande de fermeture.
+    onExitRequested: () async {
+      Journal.actuel.info(CategorieJournal.demarrage, 'Fermeture demandée');
+      try {
+        await Journal.actuel.vider().timeout(delaiMaxVidageJournalFermeture);
+      } catch (_) {
+        // Délai dépassé ou écriture impossible : on ferme quand même.
+      }
+      return AppExitResponse.exit;
     },
   );
 }
