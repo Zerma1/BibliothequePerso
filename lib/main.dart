@@ -48,6 +48,7 @@ import 'services/service_bibliotheque.dart';
 import 'services/service_categories.dart';
 import 'services/service_export.dart';
 import 'services/service_import.dart';
+import 'services/service_journal.dart';
 import 'services/planification_mises_a_jour.dart';
 import 'services/service_mises_a_jour.dart';
 import 'services/service_parametres.dart';
@@ -103,7 +104,11 @@ class ServicesApplication {
     required this.serviceImport,
     required this.serviceCategories,
     required this.serviceDossierChapitres,
+    required this.serviceJournal,
   });
+
+  /// Journal de l'application (export, journal détaillé).
+  final ServiceJournal serviceJournal;
 
   /// Dossier des chapitres (choix, déplacement, accès au NAS).
   final ServiceDossierChapitres serviceDossierChapitres;
@@ -237,6 +242,8 @@ ServicesApplication assemblerServices(
     serviceRapportsErreur: ServiceRapportsErreur(
       chemins.join(racineApplication, nomDossierRapports),
       versionApplication: versionApplication,
+      // Les dernières lignes du journal sont jointes aux rapports.
+      dossierJournaux: cheminDossierJournaux(racineApplication),
     ),
     // Exports à côté des rapports : `<dossier de l'application>/exports/`.
     serviceExport: ServiceExport(
@@ -269,6 +276,13 @@ ServicesApplication assemblerServices(
     // Dossier des chapitres (Paramètres) et bandeau « dossier inaccessible ».
     serviceDossierChapitres: ServiceDossierChapitres(
       serviceTelechargement: serviceTelechargement,
+      depotParametres: DepotParametres(base),
+    ),
+    // Journal (Paramètres → exporter, journal détaillé) : dossier de
+    // l'application, jamais le NAS.
+    serviceJournal: ServiceJournal(
+      dossierJournaux: cheminDossierJournaux(racineApplication),
+      dossierRapports: chemins.join(racineApplication, nomDossierRapports),
       depotParametres: DepotParametres(base),
     ),
   );
@@ -320,12 +334,15 @@ Future<ServicesApplication> construireServices({
     depotSources: DepotSources(base),
     serviceParametres: ServiceParametres(DepotParametres(base)),
   ).assurerSourcesParDefaut();
-  return assemblerServices(
+  final services = assemblerServices(
     base,
     client: client,
     stockage: stockage,
     dossierApplication: dossierApplication,
   );
+  // Réglage « journal détaillé » du client (ne lève jamais).
+  await services.serviceJournal.appliquerReglageJournal();
+  return services;
 }
 
 /// Point d'entrée de la tâche de fond Android, appelé par `workmanager`.
