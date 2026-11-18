@@ -179,6 +179,8 @@ ServicesApplication assemblerServices(
   final serviceAjoutSite = ServiceAjoutSite(
     depotSources,
     DetecteurTypeSite(clientUtilise),
+    // Vérifie qu'une page générique collée est lisible avant d'ajouter le site.
+    client: clientUtilise,
   );
   final serviceParametres = ServiceParametres(DepotParametres(base));
   final serviceBibliotheque = ServiceBibliotheque(
