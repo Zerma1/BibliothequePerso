@@ -9,6 +9,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import 'constantes_sources.dart';
+import 'detection_image.dart';
 import 'erreur_source.dart';
 import 'protection_anti_robot.dart';
 import 'rapport_erreur_source.dart';
@@ -207,13 +208,17 @@ class ClientHttpPoli {
   /// [ErreurSource.octetsRecus] et [ErreurSource.duree] de la dernière
   /// tentative.
   ///
-  /// [exigerImage] : `true` pour lever une [ErreurSource] si le
-  /// `Content-Type` de la réponse finale (après les redirections suivies par
-  /// `package:http`) est absent ou n'est pas `image/*`. Une page anti-robot
-  /// HTML servie en 200 n'est alors plus prise pour une image (journal des
-  /// erreurs, E10). L'erreur porte le code de statut, la taille, la durée et
-  /// un extrait nettoyé de la réponse ; aucune nouvelle tentative (la même
-  /// requête recevrait la même page).
+  /// [exigerImage] : `true` pour lever une [ErreurSource] si la réponse
+  /// finale (après les redirections suivies par `package:http`) n'est pas une
+  /// image. Les **octets** décident d'abord : une signature JPEG, PNG, GIF,
+  /// WEBP, AVIF, HEIF ou BMP ([detecterFormatImage]) est acceptée quel que
+  /// soit le `Content-Type` (absent, `application/octet-stream` ou faux).
+  /// Sans signature reconnue, seul un `Content-Type` `image/*` est accepté,
+  /// et jamais pour une page HTML : une page anti-robot servie en 200 n'est
+  /// pas prise pour une image (journal des erreurs, E10). L'erreur porte le
+  /// code de statut, la taille, la durée, le type détecté et, si la réponse
+  /// est du texte, un court extrait nettoyé (jamais d'octets binaires) ;
+  /// aucune nouvelle tentative (la même requête recevrait la même page).
   Future<ReponseOctets> recupererOctetsAvecDetails(
     Uri uri, {
     String? referer,
@@ -232,27 +237,7 @@ class ClientHttpPoli {
       nouvellesTentatives: _plafonnerTentatives(nouvellesTentatives),
     );
     if (exigerImage) {
-      String? typeContenu;
-      for (final entree in reponse.headers.entries) {
-        if (entree.key.toLowerCase() == 'content-type') {
-          typeContenu = entree.value;
-        }
-      }
-      // Type MIME sans paramètres (« image/jpeg; charset=… » → image/jpeg),
-      // insensible à la casse (RFC 9110 : les types ne le sont pas).
-      final type = typeContenu?.split(';').first.trim().toLowerCase() ?? '';
-      if (!type.startsWith('image/')) {
-        final extrait = _extrait(reponse);
-        throw ErreurSource(
-          uri.toString(),
-          "Réponse qui n'est pas une image "
-          '(Content-Type : ${type.isEmpty ? 'absent' : type}) : $extrait',
-          codeStatut: reponse.statusCode,
-          octetsRecus: reponse.bodyBytes.length,
-          duree: duree,
-          extraitReponse: extrait,
-        );
-      }
+      _verifierImage(uri, reponse, duree);
     }
     return ReponseOctets(
       octets: reponse.bodyBytes,
@@ -470,7 +455,7 @@ class ClientHttpPoli {
         }
         derniereErreur = ErreurSource(
           url,
-          'Réponse HTTP $code : $extrait',
+          'Réponse HTTP $code${extrait == null ? '' : ' : $extrait'}',
           codeStatut: code,
           octetsRecus: reponse.bodyBytes.length,
           duree: chrono.elapsed,
@@ -634,8 +619,48 @@ class ClientHttpPoli {
     return encodage.decode(reponse.bodyBytes);
   }
 
-  /// Début du corps de [reponse], nettoyé par `extraireDebutReponse`.
-  String _extrait(http.Response reponse) {
+  /// Lève une [ErreurSource] si [reponse] n'est pas une image (voir
+  /// `exigerImage` dans [recupererOctetsAvecDetails]).
+  void _verifierImage(Uri uri, http.Response reponse, Duration duree) {
+    final octets = reponse.bodyBytes;
+    if (detecterFormatImage(octets) != null) {
+      return;
+    }
+    String? typeContenu;
+    for (final entree in reponse.headers.entries) {
+      if (entree.key.toLowerCase() == 'content-type') {
+        typeContenu = entree.value;
+      }
+    }
+    // Type MIME sans paramètres (« image/jpeg; charset=… » → image/jpeg),
+    // insensible à la casse (RFC 9110 : les types ne le sont pas).
+    final type = typeContenu?.split(';').first.trim().toLowerCase() ?? '';
+    // Format sans signature connue (SVG, TIFF, JPEG XL…) annoncé comme
+    // image : accepté, sauf si c'est en fait une page HTML (E10).
+    if (type.startsWith('image/') && !estContenuHtml(octets)) {
+      return;
+    }
+    final extraitCourt = extraitTexteImprimable(octets);
+    throw ErreurSource(
+      uri.toString(),
+      "Réponse qui n'est pas une image "
+      '(Content-Type : ${type.isEmpty ? 'absent' : type} ; '
+      'contenu : ${decrireContenuNonImage(octets)})'
+      '${extraitCourt == null ? '' : ' : $extraitCourt'}',
+      codeStatut: reponse.statusCode,
+      octetsRecus: octets.length,
+      duree: duree,
+      extraitReponse: _extrait(reponse),
+    );
+  }
+
+  /// Début du corps de [reponse], nettoyé par `extraireDebutReponse`, ou
+  /// `null` si le corps est binaire : des octets binaires décodés en texte
+  /// rendraient le message illisible (retour du client sur la 0.2.1-test).
+  String? _extrait(http.Response reponse) {
+    if (!estContenuTexte(reponse.bodyBytes)) {
+      return null;
+    }
     return extraireDebutReponse(
       utf8.decode(reponse.bodyBytes, allowMalformed: true),
     );

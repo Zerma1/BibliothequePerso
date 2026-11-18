@@ -164,6 +164,12 @@ const Duration dureeCachePageGenerique = Duration(minutes: 1);
 /// d'un logo, d'une bannière ou d'un bouton de dons.
 const int nombreMinImagesChapitreGenerique = 3;
 
+/// Nombre minimal de pages distinctes, de même forme d'adresse, pour qu'un
+/// groupe de liens reconnus par leur seul texte (« Chapitre 3 » sans numéro
+/// dans l'adresse) soit pris par `SourceGenerique` pour une liste de
+/// chapitres : un lien isolé d'un article (wiki, blog) n'en est pas une.
+const int nombreMinLiensTexteGenerique = 2;
+
 /// Nombre maximal de pages essayées par `SourceGenerique` pour remonter
 /// d'une adresse de chapitre à la page qui liste les chapitres (une requête
 /// chacune, 1 s entre deux).

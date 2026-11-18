@@ -586,9 +586,9 @@ void main() {
         expect(octets, debutJpeg);
       });
 
-      test('Content-Type absent : ErreurSource', () async {
+      test('Content-Type absent et contenu texte : ErreurSource', () async {
         final client = clientAvecReponses(<http.Response>[
-          http.Response.bytes(debutJpeg, 200),
+          http.Response.bytes(utf8.encode('Fichier introuvable'), 200),
         ]);
         await expectLater(
           client.recupererOctetsAvecDetails(
@@ -599,7 +599,168 @@ void main() {
             isA<ErreurSource>().having(
               (e) => e.message,
               'message',
-              contains('absent'),
+              allOf(
+                contains('absent'),
+                contains('contenu : texte'),
+                contains('Fichier introuvable'),
+              ),
+            ),
+          ),
+        );
+      });
+
+      test(
+        'WEBP servi sans Content-Type (Ruri Dragon ch. 47) : accepté',
+        () async {
+          // En-tête d'un vrai WEBP sans perte : « RIFF », taille, « WEBPVP8L ».
+          final webp = <int>[
+            ...ascii.encode('RIFF'),
+            0x24,
+            0x10,
+            0x00,
+            0x00,
+            ...ascii.encode('WEBPVP8L'),
+            0x18,
+            0x10,
+            0x00,
+            0x00,
+            0x2F,
+            0xFF,
+            0xC3,
+            0x8B,
+          ];
+          final client = clientAvecReponses(<http.Response>[
+            http.Response.bytes(webp, 200),
+          ]);
+          final reponse = await client.recupererOctetsAvecDetails(
+            Uri.parse('https://exemple.org/ch-47/01.jpg'),
+            exigerImage: true,
+          );
+          expect(reponse.octets, webp);
+        },
+      );
+
+      test('Content-Type générique ou faux : les octets décident', () async {
+        const png = <int>[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0];
+        final client = clientAvecReponses(<http.Response>[
+          http.Response.bytes(
+            png,
+            200,
+            headers: <String, String>{
+              'content-type': 'application/octet-stream',
+            },
+          ),
+          http.Response.bytes(
+            debutJpeg,
+            200,
+            headers: <String, String>{'content-type': 'text/html'},
+          ),
+        ]);
+        expect(
+          await client.recupererOctets(
+            Uri.parse('https://exemple.org/a.png'),
+            exigerImage: true,
+          ),
+          png,
+        );
+        expect(
+          await client.recupererOctets(
+            Uri.parse('https://exemple.org/b.jpg'),
+            exigerImage: true,
+          ),
+          debutJpeg,
+        );
+      });
+
+      test('page HTML annoncée image/jpeg : refusée (E10)', () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response(
+            '  <!DOCTYPE html><html><body>Accès refusé</body></html>',
+            200,
+            headers: <String, String>{'content-type': 'image/jpeg'},
+          ),
+        ]);
+        await expectLater(
+          client.recupererOctets(
+            Uri.parse('https://exemple.org/i.jpg'),
+            exigerImage: true,
+          ),
+          throwsA(
+            isA<ErreurSource>().having(
+              (e) => e.message,
+              'message',
+              allOf(contains('image/jpeg'), contains('page HTML')),
+            ),
+          ),
+        );
+      });
+
+      test('format sans signature connue annoncé image/* : accepté', () async {
+        final svg = utf8.encode('<svg xmlns="http://www.w3.org/2000/svg"/>');
+        final client = clientAvecReponses(<http.Response>[
+          http.Response.bytes(
+            svg,
+            200,
+            headers: <String, String>{'content-type': 'image/svg+xml'},
+          ),
+        ]);
+        expect(
+          await client.recupererOctets(
+            Uri.parse('https://exemple.org/i.svg'),
+            exigerImage: true,
+          ),
+          svg,
+        );
+      });
+
+      test('binaire non reconnu : message sans aucun octet binaire', () async {
+        final binaire = <int>[
+          for (var i = 0; i < 300; i++) (i * 37 + 11) % 256,
+        ];
+        final client = clientAvecReponses(<http.Response>[
+          http.Response.bytes(binaire, 200),
+        ]);
+        await expectLater(
+          client.recupererOctets(
+            Uri.parse('https://exemple.org/i.bin'),
+            exigerImage: true,
+          ),
+          throwsA(
+            isA<ErreurSource>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  "Réponse qui n'est pas une image (Content-Type : absent ; "
+                      'contenu : données binaires non reconnues)',
+                )
+                .having((e) => e.extraitReponse, 'extrait', isNull)
+                .having((e) => e.octetsRecus, 'octets', 300),
+          ),
+        );
+      });
+
+      test('extrait du message limité à 80 caractères imprimables', () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response.bytes(
+            utf8.encode('Erreur\u0007 ${'x' * 200}'),
+            200,
+            headers: <String, String>{'content-type': 'text/plain'},
+          ),
+        ]);
+        await expectLater(
+          client.recupererOctets(
+            Uri.parse('https://exemple.org/i.jpg'),
+            exigerImage: true,
+          ),
+          throwsA(
+            isA<ErreurSource>().having(
+              (e) {
+                final extrait = e.message.split(') : ').last;
+                return extrait.length <= 81 &&
+                    extrait.runes.every((c) => c >= 0x20 && c != 0x7F);
+              },
+              'extrait court et imprimable',
+              isTrue,
             ),
           ),
         );
@@ -618,6 +779,20 @@ void main() {
         );
         expect(utf8.decode(octets), '<!doctype html>');
       });
+    });
+
+    test('erreur HTTP au corps binaire : message sans octet binaire', () async {
+      final client = clientAvecReponses(<http.Response>[
+        http.Response.bytes(<int>[0, 1, 2, 0xFF, 0xFE, 0x80], 404),
+      ]);
+      await expectLater(
+        client.recupererOctets(Uri.parse('https://exemple.org/i.png')),
+        throwsA(
+          isA<ErreurSource>()
+              .having((e) => e.message, 'message', 'Réponse HTTP 404')
+              .having((e) => e.extraitReponse, 'extrait', isNull),
+        ),
+      );
     });
 
     test('une erreur réseau donne 0 octet reçu', () async {

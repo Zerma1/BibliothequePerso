@@ -907,6 +907,7 @@ class SourceGenerique implements SourceSite {
     // (`/comic/ruri-dragon-chapter-{n}/`), alors qu'un lien isolé (menu,
     // autre œuvre en barre latérale) forme un petit groupe à part.
     final groupes = <String, Map<String, _LienChapitre>>{};
+    final clePage = _cleAdresse(urlPage);
     var rang = 0;
     for (final element in elements) {
       final href = element.attributes['href']?.trim() ?? '';
@@ -928,6 +929,20 @@ class SourceGenerique implements SourceSite {
       // Sans réglage, seuls les liens du même site comptent : un lien vers
       // un autre site n'est pas un chapitre lisible ici.
       if (selecteur == null && !_memeSite(adresse, urlPage)) {
+        continue;
+      }
+      // Sans réglage, un lien vers la page elle-même (ancre « #Chapitre_3 »
+      // d'un sommaire, adresse complète de la page) n'est pas un chapitre :
+      // il ne mène à aucune autre page. Les paramètres comptent dans la clé
+      // (`?id=102` reste une autre page).
+      if (selecteur == null && _cleAdresse(adresse) == clePage) {
+        continue;
+      }
+      // Sans réglage, les pages techniques d'un wiki (« Spécial:… »,
+      // « Fichier:… », « Aide:… », « Catégorie:… ») ont un « : » dans leur
+      // dernier segment, ce qu'aucun site de lecture n'utilise pour ses
+      // chapitres (retour du client sur la 0.2.1-test, page Wikipédia).
+      if (selecteur == null && _estPageEspaceDeNomsWiki(adresse)) {
         continue;
       }
       final segments = _segmentsTexte(element);
@@ -962,12 +977,37 @@ class SourceGenerique implements SourceSite {
       lien.segments.addAll(segments);
     }
     var meilleur = const <_LienChapitre>[];
-    for (final groupe in groupes.values) {
-      if (groupe.length > meilleur.length) {
-        meilleur = groupe.values.toList();
+    for (final entree in groupes.entries) {
+      // Un groupe reconnu par le seul TEXTE (« Chapitre 3 » sur un lien
+      // sans numéro de chapitre dans l'adresse) doit compter au moins
+      // [nombreMinLiensTexteGenerique] pages distinctes de même forme : un
+      // lien isolé « chapitre 1 » d'un article (wiki, blog) vers une autre
+      // page n'est pas une liste de chapitres. Un groupe reconnu par
+      // l'ADRESSE (`/chapter-1/`) reste accepté seul (œuvre à un chapitre).
+      if (selecteur == null &&
+          entree.key.startsWith(_prefixeGroupeTexte) &&
+          entree.value.length < nombreMinLiensTexteGenerique) {
+        continue;
+      }
+      if (entree.value.length > meilleur.length) {
+        meilleur = entree.value.values.toList();
       }
     }
     return meilleur;
+  }
+
+  /// Préfixe de la clé d'un groupe de liens reconnus par leur texte.
+  static const String _prefixeGroupeTexte = 'texte:';
+
+  /// `true` si le dernier segment du chemin de [adresse] contient « : »
+  /// (page d'un espace de noms de wiki : `/wiki/Spécial:Recherche`,
+  /// `/wiki/Fichier:Couverture.jpg`).
+  static bool _estPageEspaceDeNomsWiki(Uri adresse) {
+    final chemin = _cheminDecode(adresse);
+    final dernier = chemin
+        .split('/')
+        .lastWhere((segment) => segment.isNotEmpty, orElse: () => '');
+    return dernier.contains(':');
   }
 
   /// Analyse un lien : numéro, forme de l'adresse et nom ; `null` si ce
@@ -1034,7 +1074,8 @@ class SourceGenerique implements SourceSite {
     }
     if (numero == null && numeroTexte != null) {
       numero = numeroTexte;
-      cleGroupe = 'texte:${chemin.replaceAll(RegExp(r'\d+'), '{n}')}';
+      cleGroupe =
+          '$_prefixeGroupeTexte${chemin.replaceAll(RegExp(r'\d+'), '{n}')}';
     }
     if (numero == null) {
       if (!accepterSansNumero) {
