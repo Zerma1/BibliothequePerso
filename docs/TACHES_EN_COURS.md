@@ -173,3 +173,14 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
 - [x] V3. Interface : modifier les sélecteurs CSS dans « Modifier le site » (et pouvoir les vider) ; clés lues depuis les services
 - [x] V4. `docs/CRITERES_LECTURE_SITES.md` (critères de lecture expliqués au client)
 - Reste possible : `DepotTitres.compterTitres` (import : savoir si la bibliothèque est vide sans tout charger) ; validation CSS plus stricte que le parseur (décision client).
+
+## Retours 0.2.1-test (2026-11-18) → 0.2.2-test
+
+- [ ] X1. Téléchargement : image WEBP sans Content-Type refusée, message avec octets illisibles (sources)
+- [ ] X2. Wikipédia acceptée comme site générique lisible (heuristique trop large)
+- [ ] X3. Case Favoris décochée par défaut à l'ajout d'un titre
+- [ ] X4. Listes personnelles : créer, renommer, supprimer, réordonner (+ « En attente (perso) » gérable)
+- [ ] X5. CRUD sources : modifier/supprimer depuis l'onglet Sources, type modifiable
+- [ ] X6. CRUD titres : modifier nom, alternatifs, résumé, auteur, catégories, niveau de contenu (protégés de l'actualisation) ; ajout par recherche
+- [ ] X7. Archive complète (NAS) : tout télécharger, ne jamais supprimer automatiquement
+- [ ] X8. Plan de tests 0.2.2-test : reprendre D4 (import d'un titre retiré)
