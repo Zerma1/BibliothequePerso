@@ -35,6 +35,7 @@ import '../modeles/titre_alternatif.dart';
 import 'client_http_poli.dart';
 import 'constantes_sources.dart';
 import 'erreur_source.dart';
+import 'journal_sources.dart';
 import 'outils_sources.dart';
 import 'outils_wordpress.dart';
 import 'source_site.dart';
@@ -97,50 +98,68 @@ class SourceMangaThemesia implements SourceSite {
   /// LIMITE : seule la première page de résultats est lue.
   @override
   Future<List<Titre>> rechercher(String requete) {
-    return OutilsWordPress.avecType(TypeSource.mangaThemesia, () async {
-      final texte = requete.trim();
-      if (texte.isEmpty) {
-        return const <Titre>[];
-      }
-      final uri = Uri.parse(urlBase)
-          .resolve('/')
-          .replace(queryParameters: <String, String>{'s': texte});
-      final html = await _client.recupererTexte(uri);
-      return OutilsWordPress.avecExtrait(
-        html,
-        () => analyserRecherche(html, uri),
-      );
-    });
+    return JournalSources.operation(
+      'MangaThemesia',
+      'recherche',
+      requete,
+      () => OutilsWordPress.avecType(TypeSource.mangaThemesia, () async {
+        final texte = requete.trim();
+        if (texte.isEmpty) {
+          return const <Titre>[];
+        }
+        final uri = Uri.parse(urlBase)
+            .resolve('/')
+            .replace(queryParameters: <String, String>{'s': texte});
+        final html = await _client.recupererTexte(uri);
+        return OutilsWordPress.avecExtrait(
+          html,
+          () => analyserRecherche(html, uri),
+        );
+      }),
+    );
   }
 
   /// Récupère la fiche d'un titre depuis sa page (une requête, ou aucune si
   /// la même page vient d'être lue).
   @override
   Future<FicheTitre> recupererFiche(String urlTitre) {
-    return OutilsWordPress.avecType(TypeSource.mangaThemesia, () async {
-      final uri = validerUrlTitre(urlTitre);
-      final html = await _recupererPage(uri);
-      return OutilsWordPress.avecExtrait(html, () => analyserFiche(html, uri));
-    });
+    return JournalSources.operation(
+      'MangaThemesia',
+      'fiche',
+      urlTitre,
+      () => OutilsWordPress.avecType(TypeSource.mangaThemesia, () async {
+        final uri = validerUrlTitre(urlTitre);
+        final html = await _recupererPage(uri);
+        return OutilsWordPress.avecExtrait(
+          html,
+          () => analyserFiche(html, uri),
+        );
+      }),
+    );
   }
 
   /// Récupère tous les chapitres listés dans la fiche (même page que
   /// [recupererFiche]), du plus ancien au plus récent.
   @override
   Future<List<Chapitre>> recupererChapitres(String urlTitre) {
-    return OutilsWordPress.avecType(TypeSource.mangaThemesia, () async {
-      final uri = validerUrlTitre(urlTitre);
-      final html = await _recupererPage(uri);
-      return OutilsWordPress.avecExtrait(
-        html,
-        () => analyserChapitres(
+    return JournalSources.operation(
+      'MangaThemesia',
+      'chapitres',
+      urlTitre,
+      () => OutilsWordPress.avecType(TypeSource.mangaThemesia, () async {
+        final uri = validerUrlTitre(urlTitre);
+        final html = await _recupererPage(uri);
+        return OutilsWordPress.avecExtrait(
           html,
-          uri,
-          languesPreferees: languesPreferees,
-          maintenant: _maintenant(),
-        ).reversed.toList(),
-      );
-    });
+          () => analyserChapitres(
+            html,
+            uri,
+            languesPreferees: languesPreferees,
+            maintenant: _maintenant(),
+          ).reversed.toList(),
+        );
+      }),
+    );
   }
 
   /// Récupère les adresses des images du chapitre [urlChapitre].
@@ -150,18 +169,23 @@ class SourceMangaThemesia implements SourceSite {
   /// lecteur.
   @override
   Future<ContenuChapitre> recupererContenu(String urlChapitre) {
-    return OutilsWordPress.avecType(TypeSource.mangaThemesia, () async {
-      final uri = OutilsWordPress.validerUrlPage(
-        urlChapitre,
-        TypeSource.mangaThemesia,
-        'https://<site>/<nom>-chapter-<n>/ attendu',
-      );
-      final html = await _client.recupererTexte(uri);
-      return OutilsWordPress.avecExtrait(
-        html,
-        () => analyserContenu(html, uri),
-      );
-    });
+    return JournalSources.operation(
+      'MangaThemesia',
+      'chapitre',
+      urlChapitre,
+      () => OutilsWordPress.avecType(TypeSource.mangaThemesia, () async {
+        final uri = OutilsWordPress.validerUrlPage(
+          urlChapitre,
+          TypeSource.mangaThemesia,
+          'https://<site>/<nom>-chapter-<n>/ attendu',
+        );
+        final html = await _client.recupererTexte(uri);
+        return OutilsWordPress.avecExtrait(
+          html,
+          () => analyserContenu(html, uri),
+        );
+      }),
+    );
   }
 
   // ---------------------------------------------------------------------

@@ -26,6 +26,7 @@ import '../modeles/titre_alternatif.dart';
 import 'client_http_poli.dart';
 import 'constantes_sources.dart';
 import 'erreur_source.dart';
+import 'journal_sources.dart';
 import 'outils_sources.dart';
 import 'rapport_erreur_source.dart';
 import 'source_site.dart';
@@ -161,22 +162,32 @@ class SourceScanManga implements SourceSite {
   /// aucune si la même page vient d'être lue).
   @override
   Future<FicheTitre> recupererFiche(String urlTitre) {
-    return _avecTypeSite(() async {
-      final uri = validerUrlTitre(urlTitre);
-      final html = await _recupererPage(uri);
-      return _avecExtrait(html, () => analyserFiche(html, uri));
-    });
+    return JournalSources.operation(
+      'Scan-Manga',
+      'fiche',
+      urlTitre,
+      () => _avecTypeSite(() async {
+        final uri = validerUrlTitre(urlTitre);
+        final html = await _recupererPage(uri);
+        return _avecExtrait(html, () => analyserFiche(html, uri));
+      }),
+    );
   }
 
   /// Récupère tous les chapitres listés sur la page du titre. Aucune page de
   /// chapitre n'est téléchargée.
   @override
   Future<List<Chapitre>> recupererChapitres(String urlTitre) {
-    return _avecTypeSite(() async {
-      final uri = validerUrlTitre(urlTitre);
-      final html = await _recupererPage(uri);
-      return _avecExtrait(html, () => analyserChapitres(html, uri));
-    });
+    return JournalSources.operation(
+      'Scan-Manga',
+      'chapitres',
+      urlTitre,
+      () => _avecTypeSite(() async {
+        final uri = validerUrlTitre(urlTitre);
+        final html = await _recupererPage(uri);
+        return _avecExtrait(html, () => analyserChapitres(html, uri));
+      }),
+    );
   }
 
   /// Lève toujours une [ErreurSource], sans requête : les images d'un
@@ -185,6 +196,11 @@ class SourceScanManga implements SourceSite {
   /// lit sur le site (`Chapitre.urlExterne`).
   @override
   Future<ContenuChapitre> recupererContenu(String urlChapitre) async {
+    JournalSources.avertir(
+      'Scan-Manga',
+      'chapitre protégé, lisible seulement sur le site '
+          '($urlChapitre)',
+    );
     throw ErreurSource(
       urlChapitre,
       'Chapitre lisible uniquement sur Scan-Manga : ouvrez-le sur le site '
