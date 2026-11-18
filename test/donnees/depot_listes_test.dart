@@ -24,23 +24,29 @@ void main() {
   test('une base neuve contient seulement les listes système, dans '
       'l\'ordre', () async {
     final listes = await depot.chargerListes();
+    expect(listes.map((liste) => liste.nom), nomsListesSysteme);
     expect(listes.map((liste) => liste.nom), <String>[
       nomListeFavoris,
       nomListeSuivis,
       nomListePlanifie,
       nomListeEnAttente,
+      nomListeTermines,
     ]);
     expect(listes.every((liste) => liste.estSysteme), isTrue);
+    expect(
+      (await depot.chargerListeParNom(nomListeTermines))!.ordre,
+      ordreListeTermines,
+    );
   });
 
   test('créer une liste la place après les listes existantes', () async {
     final premiere = await depot.creerListe('  À lire  ');
-    final seconde = await depot.creerListe('Terminés');
+    final seconde = await depot.creerListe('Finis');
 
     expect(premiere.nom, 'À lire');
     expect(premiere.estSysteme, isFalse);
     expect(seconde.ordre, greaterThan(premiere.ordre));
-    expect(premiere.ordre, greaterThan(ordreListeSuivis));
+    expect(premiere.ordre, greaterThan(ordreListeTermines));
     expect((await depot.chargerListes()).last, seconde);
   });
 
@@ -81,17 +87,12 @@ void main() {
         throwsA(isA<ErreurBaseDeDonnees>()),
       );
     }
-    expect(await depot.chargerListes(), hasLength(4));
+    expect(await depot.chargerListes(), hasLength(nomsListesSysteme.length));
   });
 
-  test('les quatre listes système refusent renommage et suppression avec un '
+  test('les cinq listes système refusent renommage et suppression avec un '
       'message clair', () async {
-    for (final nom in <String>[
-      nomListeFavoris,
-      nomListeSuivis,
-      nomListePlanifie,
-      nomListeEnAttente,
-    ]) {
+    for (final nom in nomsListesSysteme) {
       final liste = (await depot.chargerListeParNom(nom))!;
       expect(liste.estSysteme, isTrue, reason: nom);
       await expectLater(
@@ -128,12 +129,39 @@ void main() {
     expect(await depot.chargerListeParNom(nomListeEnAttente), isNotNull);
   });
 
+  test('« Terminés (perso) » est une liste ordinaire, « Terminés » est '
+      'protégée même sous une autre casse', () async {
+    final perso = await depot.creerListe('Terminés (perso)');
+    expect(perso.estSysteme, isFalse);
+    expect((await depot.renommerListe(perso.id!, 'Finis')).nom, 'Finis');
+    await depot.supprimerListe(perso.id!);
+    expect(await depot.chargerListe(perso.id!), isNull);
+
+    final termines = (await depot.chargerListeParNom('TERMINéS'))!;
+    expect(termines.nom, nomListeTermines);
+    expect(termines.estSysteme, isTrue);
+    // Une liste du client ne peut pas prendre le nom de la liste système.
+    await expectLater(
+      depot.creerListe('terminés'),
+      throwsA(isA<ErreurBaseDeDonnees>()),
+    );
+    await expectLater(
+      depot.renommerListe(termines.id!, 'Lus'),
+      throwsA(isA<ErreurBaseDeDonnees>()),
+    );
+    await expectLater(
+      depot.supprimerListe(termines.id!),
+      throwsA(isA<ErreurBaseDeDonnees>()),
+    );
+    expect(await depot.chargerListeParNom(nomListeTermines), termines);
+  });
+
   test(
     'renommer vers un nom déjà pris (même casse différente) est refusé',
     () async {
       final liste = await depot.creerListe('À lire');
-      await depot.creerListe('Terminés');
-      for (final nom in <String>['Terminés', 'suivis', ' Favoris ']) {
+      await depot.creerListe('Finis');
+      for (final nom in <String>['Finis', 'suivis', ' Favoris ', 'terminés']) {
         await expectLater(
           depot.renommerListe(liste.id!, nom),
           throwsA(isA<ErreurBaseDeDonnees>()),
@@ -155,7 +183,7 @@ void main() {
     final resultat = await depot.enregistrerOrdre(idsInverses);
 
     expect(resultat.map((l) => l.id), idsInverses);
-    expect(resultat.map((l) => l.ordre), <int>[0, 1, 2, 3, 4, 5]);
+    expect(resultat.map((l) => l.ordre), <int>[0, 1, 2, 3, 4, 5, 6]);
     final relues = await depot.chargerListes();
     expect(relues, resultat);
     expect(relues.first.id, b.id);
@@ -178,6 +206,7 @@ void main() {
       nomListeFavoris,
       nomListePlanifie,
       nomListeEnAttente,
+      nomListeTermines,
     ]);
   });
 

@@ -1,5 +1,5 @@
-/// Dépôt des listes de lecture (Favoris, Suivis, Planifié, En attente et
-/// listes du client).
+/// Dépôt des listes de lecture (Favoris, Suivis, Planifié, En attente,
+/// Terminés et listes du client).
 library;
 
 import 'package:sqflite/sqflite.dart';
@@ -39,7 +39,7 @@ class DepotListes {
 
   /// Charge une liste par son nom (sans tenir compte de la casse ASCII), ou
   /// `null`. Pratique pour retrouver une liste système (« Favoris »,
-  /// « Suivis », « Planifié », « En attente »).
+  /// « Suivis », « Planifié », « En attente », « Terminés »).
   ///
   /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
   Future<ListeLecture?> chargerListeParNom(
@@ -91,10 +91,10 @@ class DepotListes {
           // deux créations rapprochées n'obtiennent pas la même position.
           final lignes = await txn.rawQuery(
             'SELECT COALESCE(MAX(ordre), ?) + 1 FROM listes',
-            <Object?>[ordreListeEnAttente],
+            <Object?>[ordreDerniereListeSysteme],
           );
           final ordre =
-              Sqflite.firstIntValue(lignes) ?? ordreListeEnAttente + 1;
+              Sqflite.firstIntValue(lignes) ?? ordreDerniereListeSysteme + 1;
           final liste = ListeLecture(nom: nomPropre, ordre: ordre);
           final id = await txn.insert('listes', liste.versMap());
           return liste.copierAvec(id: id);
@@ -111,11 +111,13 @@ class DepotListes {
     }
   }
 
-  /// Renomme une liste du client (dont « En attente (perso) », liste
-  /// ordinaire créée par la migration 5).
+  /// Renomme une liste du client (dont « En attente (perso) » et
+  /// « Terminés (perso) », listes ordinaires créées par les migrations 5 et
+  /// 11).
   ///
   /// Lève une [ErreurBaseDeDonnees] si la liste n'existe pas, si c'est une
-  /// liste système (Favoris, Suivis, Planifié, En attente), si le nom est
+  /// liste système (Favoris, Suivis, Planifié, En attente, Terminés), si le
+  /// nom est
   /// vide ou déjà utilisé (sans tenir compte de la casse ASCII). Changer
   /// seulement la casse du nom d'une liste est accepté.
   ///

@@ -8,6 +8,7 @@ import '../modeles/constantes.dart';
 import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/outils_modeles.dart';
 import '../modeles/telechargement.dart';
+import 'gestionnaire_transactions.dart';
 
 /// Enregistre le chemin relatif de l'archive d'un chapitre dans [executeur]
 /// (une transaction) ; partagé par `DepotChapitres.enregistrerArchive` et
@@ -383,6 +384,112 @@ class DepotChapitres {
       where: 'id_titre = ?',
       whereArgs: <Object?>[idTitre],
     );
+  }
+
+  /// Marque les chapitres [idsChapitres] comme lus (ou non lus si [lu] vaut
+  /// `false`), en une transaction, et renvoie le nombre de chapitres dont
+  /// l'état a **changé**.
+  ///
+  /// Comme [marquerLu], seule la colonne `est_lu` est écrite (le schéma ne
+  /// garde pas de date de lecture). Les chapitres déjà dans l'état demandé
+  /// ne sont pas réécrits (`est_lu != ?`) et ne sont pas comptés ; les
+  /// identifiants inconnus et les doublons sont ignorés. Les identifiants
+  /// sont découpés en lots de [tailleMaxLotParametresSql] paramètres (limite
+  /// de 999 paramètres des anciens SQLite d'Android) ; la recherche passe
+  /// par la clé primaire.
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`) ;
+  /// `null` : transaction propre à cet appel. Lève une
+  /// [ErreurBaseDeDonnees] si l'écriture échoue (rien n'est alors écrit
+  /// sans transaction extérieure).
+  Future<int> marquerLus(
+    Iterable<int> idsChapitres, {
+    bool lu = true,
+    DatabaseExecutor? executeur,
+  }) async {
+    final ids = idsChapitres.toSet().toList();
+    if (ids.isEmpty) {
+      return 0;
+    }
+    final valeur = booleenVersEntier(lu);
+    try {
+      return await GestionnaireTransactions.executerAtomiquement(
+        _baseDeDonnees,
+        executeur,
+        (txn) async {
+          var nombre = 0;
+          for (
+            var debut = 0;
+            debut < ids.length;
+            debut += tailleMaxLotParametresSql
+          ) {
+            final fin = debut + tailleMaxLotParametresSql < ids.length
+                ? debut + tailleMaxLotParametresSql
+                : ids.length;
+            final lot = ids.sublist(debut, fin);
+            // Seuls des `?` sont générés ; les identifiants sont des
+            // paramètres.
+            final marqueurs = List<String>.filled(lot.length, '?').join(', ');
+            nombre += await txn.rawUpdate(
+              'UPDATE chapitres SET est_lu = ? '
+              'WHERE id IN ($marqueurs) AND est_lu != ?',
+              <Object?>[valeur, ...lot, valeur],
+            );
+          }
+          return nombre;
+        },
+      );
+    } on DatabaseException catch (erreur) {
+      throw ErreurBaseDeDonnees(
+        "Impossible d'enregistrer l'état de lecture de ${ids.length} "
+        'chapitre(s).',
+        cause: erreur,
+      );
+    }
+  }
+
+  /// Marque comme lus (ou non lus si [lu] vaut `false`) tous les chapitres
+  /// du titre [idTitre] dont le numéro est inférieur ou égal à [numero], et
+  /// renvoie le nombre de chapitres dont l'état a **changé**.
+  ///
+  /// Toutes les langues et tous les sites du titre sont concernés, chapitres
+  /// externes ([Chapitre.urlExterne]) compris. Comme [marquerLus], seule la
+  /// colonne `est_lu` est écrite, et les chapitres déjà dans l'état demandé
+  /// ne sont ni réécrits ni comptés. Une seule requête `UPDATE … WHERE`,
+  /// servie par `index_chapitres_titre_lu` (id_titre, est_lu) ; la
+  /// comparaison du numéro est faite sur les lignes du titre seulement.
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`) ;
+  /// `null` : transaction propre à cet appel. Lève une
+  /// [ErreurBaseDeDonnees] si l'écriture échoue, une [ArgumentError] si
+  /// [numero] n'est pas un nombre fini.
+  Future<int> marquerLusJusqua(
+    int idTitre,
+    double numero, {
+    bool lu = true,
+    DatabaseExecutor? executeur,
+  }) async {
+    if (!numero.isFinite) {
+      throw ArgumentError.value(numero, 'numero', 'doit être un nombre fini');
+    }
+    final valeur = booleenVersEntier(lu);
+    try {
+      return await GestionnaireTransactions.executerAtomiquement(
+        _baseDeDonnees,
+        executeur,
+        (txn) => txn.rawUpdate(
+          'UPDATE chapitres SET est_lu = ? '
+          'WHERE id_titre = ? AND est_lu != ? AND numero <= ?',
+          <Object?>[valeur, idTitre, valeur, numero],
+        ),
+      );
+    } on DatabaseException catch (erreur) {
+      throw ErreurBaseDeDonnees(
+        "Impossible d'enregistrer l'état de lecture des chapitres du titre "
+        'n°$idTitre.',
+        cause: erreur,
+      );
+    }
   }
 
   /// Enregistre si l'archive hors-ligne d'un chapitre est complète.

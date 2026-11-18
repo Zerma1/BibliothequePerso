@@ -187,6 +187,8 @@ void main() {
           nomListeSuivis,
           nomListePlanifie,
           nomListeEnAttente,
+          // Ajoutée ensuite par la migration 11.
+          nomListeTermines,
         ]);
         expect(toutes.every((l) => l.estSysteme), isTrue);
         expect(
@@ -208,12 +210,12 @@ void main() {
           throwsA(isA<ErreurBaseDeDonnees>()),
         );
       }
-      expect(await listes.chargerListes(), hasLength(4));
+      expect(await listes.chargerListes(), hasLength(nomsListesSysteme.length));
     });
 
     test('une liste du client est placée après les listes système', () async {
       final creee = await listes.creerListe('À lire');
-      expect(creee.ordre, ordreListeEnAttente + 1);
+      expect(creee.ordre, ordreListeTermines + 1);
       expect((await listes.chargerListes()).last, creee);
     });
 

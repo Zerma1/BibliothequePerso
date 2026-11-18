@@ -29,6 +29,7 @@ const List<Migration> migrations = <Migration>[
   _migration8,
   _migration9,
   _migration10,
+  _migration11,
 ];
 
 /// Version actuelle du schéma (nombre de migrations).
@@ -413,7 +414,7 @@ Future<void> _migration5(DatabaseExecutor executeur) async {
 /// sinon le premier nom libre parmi « base sans la parenthèse finale + 2) »,
 /// « ... 3) », etc. Ex. : « En attente (perso) » → « En attente (perso 2) ».
 ///
-/// Utilisée par la migration 5 : NE PLUS MODIFIER après livraison.
+/// Utilisée par les migrations 5 et 11 : NE PLUS MODIFIER après livraison.
 Future<String> _nomLibre(DatabaseExecutor executeur, String base) async {
   Future<bool> estPris(String nom) async => (await executeur.query(
     'listes',
@@ -747,4 +748,59 @@ Future<void> _migration10(DatabaseExecutor executeur) async {
   await executeur.execute(
     "ALTER TABLE titres ADD COLUMN champs_manuels TEXT NOT NULL DEFAULT '[]'",
   );
+}
+
+/// Migration 11 : liste système « Terminés » (titres que le client a fini
+/// de lire), placée juste après « En attente ».
+///
+/// Aucune table ni colonne : une ligne de `listes` (`est_systeme = 1`), donc
+/// protégée par `DepotListes` comme les autres listes système.
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration11(DatabaseExecutor executeur) async {
+  // Valeurs écrites en dur, pour la même raison que dans les migrations 1
+  // et 5 : une migration livrée doit toujours produire le même résultat. Les
+  // constantes nomListeTermines et ordreListeTermines doivent rester égales
+  // (vérifié par migrations_test).
+  const nom = 'Terminés';
+  const ordre = 4;
+
+  // Les listes en position 4 et au-delà sont décalées d'un cran pour laisser
+  // la position 4 à « Terminés ». Contrairement à la migration 5, les listes
+  // système sont décalées aussi : depuis la migration 10, le client peut les
+  // déplacer (DepotListes.enregistrerOrdre), et décaler toutes les lignes
+  // garde exactement l'ordre relatif qu'il a choisi.
+  await executeur.rawUpdate(
+    'UPDATE listes SET ordre = ordre + ? WHERE ordre >= ?',
+    <Object?>[1, ordre],
+  );
+
+  // Le client a pu créer lui-même une liste « Terminés » (nom UNIQUE COLLATE
+  // NOCASE) : une insertion échouerait et bloquerait l'ouverture de la base.
+  // Comme pour « En attente » (migration 5), sa liste n'est pas fusionnée
+  // avec la liste système (dont le sens est fixé par l'application, et que
+  // la couche services peut remplir elle-même) : elle est renommée « Terminés (perso) » (ou
+  // « (perso 2) »… si ce nom est pris) et garde son identifiant, ses titres
+  // et sa position ; la liste système est créée à côté, vide.
+  final existantes = await executeur.query(
+    'listes',
+    columns: <String>['id'],
+    where: 'nom = ? COLLATE NOCASE',
+    whereArgs: <Object?>[nom],
+    limit: 1,
+  );
+  if (existantes.isNotEmpty) {
+    final nouveauNom = await _nomLibre(executeur, '$nom (perso)');
+    await executeur.update(
+      'listes',
+      <String, Object?>{'nom': nouveauNom},
+      where: 'id = ?',
+      whereArgs: <Object?>[existantes.first['id']],
+    );
+  }
+  await executeur.insert('listes', <String, Object?>{
+    'nom': nom,
+    'est_systeme': 1,
+    'ordre': ordre,
+  });
 }
