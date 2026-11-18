@@ -150,11 +150,30 @@ class EcranTitre extends StatelessWidget {
     }
   }
 
+  /// « Lus jusqu'ici » depuis la barre de sélection : marque lus tous les
+  /// numéros jusqu'à la ligne choisie, puis quitte la sélection.
+  Future<void> _lusJusquIci(
+    BuildContext context,
+    EtatTitre etat,
+    GroupeChapitres groupe,
+  ) async {
+    final resultat = await etat.marquerLusJusqua(groupe.numero);
+    if (resultat.estReussi) etat.annulerSelection();
+    if (context.mounted) {
+      afficherResultat(
+        context,
+        resultat,
+        succes: Textes.chapitresMarques(resultat.donnee ?? 0, lu: true),
+      );
+    }
+  }
+
   /// Barre du mode sélection (X10) : nombre de lignes choisies et actions
   /// sur la sélection, à la place de la barre habituelle.
   PreferredSizeWidget _barreSelection(BuildContext context, EtatTitre etat) {
     final occupe = etat.estEnMarquageLot;
     final aucune = etat.nombreSelectionnes == 0;
+    final unique = etat.groupeSelectionneUnique;
     // Libellés visibles sur grand écran, icônes seules (avec info-bulle)
     // sur téléphone, où la barre est trop étroite pour quatre textes.
     final avecLibelles =
@@ -178,6 +197,14 @@ class EcranTitre extends StatelessWidget {
       ),
       title: Text(Textes.chapitresSelectionnes(etat.nombreSelectionnes)),
       actions: <Widget>[
+        // Une seule ligne choisie : « Lus jusqu'ici » (accès sur téléphone,
+        // où le menu d'un chapitre téléchargé n'a pas de clic droit).
+        if (unique != null)
+          action(
+            Textes.lusJusquIci,
+            Icons.vertical_align_bottom,
+            occupe ? null : () => _lusJusquIci(context, etat, unique),
+          ),
         action(
           Textes.toutSelectionner,
           Icons.select_all,
@@ -1452,6 +1479,17 @@ class _LigneChapitre extends StatelessWidget {
                     ],
                   ),
                 ),
+                // « ⋮ » d'un chapitre téléchargé : son appui ouvre le
+                // lecteur et l'appui long sélectionne, ce bouton garde donc
+                // l'accès au menu sur téléphone (sans clic droit).
+                if (!etat.estEnSelection &&
+                    horsLigne.statut == StatutHorsLigne.telecharge)
+                  IconButton(
+                    tooltip: Textes.ouvrirMenuChapitre,
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.more_vert),
+                    onPressed: () => _afficherMenu(context, horsLigne),
+                  ),
               ],
             ),
             langue: Text(

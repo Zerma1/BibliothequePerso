@@ -1009,6 +1009,13 @@ class EtatTitre extends EtatNotifiant {
   bool get toutEstSelectionne =>
       _groupes.isNotEmpty && nombreSelectionnes == _groupes.length;
 
+  /// Seule ligne sélectionnée (parmi celles affichées), ou `null` s'il y en
+  /// a zéro ou plusieurs.
+  GroupeChapitres? get groupeSelectionneUnique {
+    final choisis = _groupesSelectionnes;
+    return choisis.length == 1 ? choisis.single : null;
+  }
+
   /// `true` si la ligne [groupe] est sélectionnée.
   bool estSelectionne(GroupeChapitres groupe) =>
       _idsSelection.contains(groupe.retenu.id);

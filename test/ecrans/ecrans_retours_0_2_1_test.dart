@@ -550,6 +550,61 @@ void main() {
       expect(find.text(Textes.chapitresSelectionnes(4)), findsOneWidget);
     });
 
+    testWidgets('une seule ligne sélectionnée : « Lus jusqu\'ici » dans la '
+        'barre', (tester) async {
+      await afficherFiche(tester);
+
+      await tester.longPress(find.text('Chapitre 3'));
+      await tester.pump();
+      expect(find.byTooltip(Textes.lusJusquIci), findsOneWidget);
+      // Deux lignes : l'action disparaît.
+      await tester.tap(find.text('Chapitre 5'));
+      await tester.pump();
+      expect(find.byTooltip(Textes.lusJusquIci), findsNothing);
+      await tester.tap(find.text('Chapitre 5'));
+      await tester.pump();
+
+      await tester.tap(find.byTooltip(Textes.lusJusquIci));
+      await tester.pumpAndSettle();
+      expect(lus(), <int>{1, 2, 3});
+      expect(find.byType(Checkbox), findsNothing);
+      expect(find.text(Textes.chapitresMarques(3, lu: true)), findsOneWidget);
+    });
+
+    testWidgets('chapitre téléchargé : « ⋮ » ouvre son menu (accès mobile)', (
+      tester,
+    ) async {
+      fenetreLarge(tester, hauteur: 2400);
+      service.ajouterTitreDeTest(
+        'Shinigami',
+        idSource: 1,
+        chapitres: _chapitres(3),
+      );
+      final telechargement = FauxServiceTelechargement(service)
+        ..ajouterChapitreTelecharge(2);
+      await tester.pumpWidget(
+        envelopper(
+          ChangeNotifierProvider<EtatTitre>(
+            create: (_) =>
+                EtatTitre(service, 1, serviceTelechargement: telechargement)
+                  ..charger(),
+            child: const EcranTitre(),
+          ),
+          bibliotheque: service,
+          telechargement: telechargement,
+        ),
+      );
+      await tester.pump();
+
+      // Seul le chapitre téléchargé a le bouton.
+      expect(find.byTooltip(Textes.ouvrirMenuChapitre), findsOneWidget);
+      await tester.tap(find.byTooltip(Textes.ouvrirMenuChapitre));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(Textes.marquerLusJusquIci));
+      await tester.pumpAndSettle();
+      expect(lus(), <int>{1, 2});
+    });
+
     testWidgets('menu d\'un chapitre : « Marquer lus jusqu\'ici »', (
       tester,
     ) async {

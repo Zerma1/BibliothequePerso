@@ -2239,6 +2239,12 @@ abstract final class Textes {
   /// Action du menu d'un chapitre : marquer lus tous les précédents.
   static const String marquerLusJusquIci = "Marquer lus jusqu'ici";
 
+  /// Action de la barre de sélection (une seule ligne choisie).
+  static const String lusJusquIci = "Lus jusqu'ici";
+
+  /// Info-bulle du bouton « ⋮ » d'un chapitre téléchargé.
+  static const String ouvrirMenuChapitre = 'Ouvrir le menu';
+
   /// Message après un marquage en lot.
   static String chapitresMarques(int nombre, {required bool lu}) {
     if (nombre == 0) return 'Aucun chapitre à changer.';
