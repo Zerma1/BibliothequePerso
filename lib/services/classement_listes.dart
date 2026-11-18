@@ -1,4 +1,5 @@
-/// Règles des listes système de l'étape 6 (« Planifié » et « En attente »).
+/// Règles des listes système de l'étape 6 (« Planifié » et « En attente »)
+/// et de « Terminés » (migration 11).
 ///
 /// Calcul pur (aucune base, aucun réseau) : `ServiceBibliotheque` et
 /// `ServiceMisesAJour` l'appliquent ensuite.
@@ -26,8 +27,34 @@ abstract final class ClassementListes {
     nomListeSuivis,
   };
 
+  /// Listes dont les titres sont vérifiés par la vérification complète
+  /// (hors « Archive complète », qui vérifie toute la bibliothèque) :
+  /// listes surveillées, « En attente » et « Terminés ».
+  ///
+  /// « Favoris » est indispensable : un titre peut n'être que favori (sans
+  /// être aussi suivi) et doit quand même recevoir ses nouveaux chapitres.
+  ///
+  /// « Terminés » (décision de l'orchestrateur du 2026-11-18) est vérifiée
+  /// comme « Planifié », en silence : ni annoncée ([listesAnnoncees]), ni
+  /// téléchargée automatiquement (seuls favoris et suivis le sont, hors
+  /// archive complète), ni dans « En attente » (absente de
+  /// [listesSurveillees] : un titre terminé n'a rien à attendre). Le client
+  /// garde ainsi la fiche à jour d'un titre fini.
+  static const List<String> listesVerifiees = <String>[
+    nomListeFavoris,
+    nomListeSuivis,
+    nomListePlanifie,
+    nomListeEnAttente,
+    nomListeTermines,
+  ];
+
   /// Listes que le client ne peut pas modifier à la main : « En attente »
   /// est entièrement tenue par l'application.
+  ///
+  /// « Terminés » n'en fait pas partie : le client y range ses titres
+  /// lui-même, et y ajouter un titre ne le retire d'aucune autre liste (un
+  /// titre à la fois « Suivis » et « Terminés » reste annoncé et téléchargé
+  /// comme un suivi : c'est au client de le retirer de « Suivis »).
   static const Set<String> listesAutomatiques = <String>{nomListeEnAttente};
 
   /// `true` si au moins un des [chapitres] est lisible dans les [langues] du

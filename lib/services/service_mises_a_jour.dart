@@ -14,6 +14,7 @@ import '../donnees/depot_sources.dart';
 import '../donnees/depot_titres.dart';
 import '../modeles/constantes.dart';
 import '../modeles/titre.dart';
+import 'classement_listes.dart';
 import 'planification_mises_a_jour.dart';
 import 'service_bibliotheque.dart';
 import 'service_parametres.dart';
@@ -55,8 +56,9 @@ class ResultatVerificationTitre {
   /// tous les sites ont répondu).
   final Map<int, Object> erreursParSite;
 
-  /// `false` pour un titre vérifié en silence : seulement planifié (liste
-  /// « Planifié », éventuellement « En attente »), ni favori ni suivi. Ses
+  /// `false` pour un titre vérifié en silence : ni favori ni suivi (liste
+  /// « Planifié », « En attente » ou « Terminés », ou titre vérifié
+  /// seulement parce que « Archive complète » est activée). Ses
   /// nouveautés n'apparaissent jamais dans les bilans ni les notifications
   /// (décision de l'étape 6).
   final bool estAnnonce;
@@ -113,8 +115,9 @@ class RapportMisesAJour {
       resultatsAnnonces.where((resultat) => resultat.aEchoue).toList();
 }
 
-/// Vérifie les titres des listes « Suivis », « Planifié » et « En attente »
-/// et enregistre leurs nouveaux chapitres.
+/// Vérifie les titres des listes « Favoris », « Suivis », « Planifié »,
+/// « En attente » et « Terminés » (toute la bibliothèque si « Archive
+/// complète » est activée) et enregistre leurs nouveaux chapitres.
 ///
 /// Règles du PLAYBOOK : au plus [maximumSourcesEnParallele] sources vérifiées
 /// en même temps, et un seul titre à la fois par source (les délais par
@@ -153,17 +156,12 @@ class ServiceMisesAJour {
   /// Nombre maximal de sources vérifiées en même temps (PLAYBOOK.md section 7).
   static const int maximumSourcesEnParallele = 3;
 
-  /// Listes dont les titres sont vérifiés par la vérification complète.
-  /// « Planifié » est vérifié (en silence) ; « En attente » regroupe des
-  /// favoris, suivis et planifiés sans chapitre dans les langues du client.
-  // « Favoris » est indispensable : un titre peut n'être que favori (sans
-  // être aussi suivi) et doit quand même recevoir ses nouveaux chapitres.
-  static const List<String> listesVerifiees = <String>[
-    nomListeFavoris,
-    nomListeSuivis,
-    nomListePlanifie,
-    nomListeEnAttente,
-  ];
+  /// Listes dont les titres sont vérifiés par la vérification complète
+  /// (voir `ClassementListes.listesVerifiees`). « Planifié » et « Terminés »
+  /// sont vérifiées en silence ; « En attente » regroupe des favoris, suivis
+  /// et planifiés sans chapitre dans les langues du client. Avec « Archive
+  /// complète », toute la bibliothèque est vérifiée.
+  static const List<String> listesVerifiees = ClassementListes.listesVerifiees;
 
   /// Vérification en cours, partagée si on la redemande avant la fin.
   Future<RapportMisesAJour>? _enCours;
@@ -358,8 +356,9 @@ class ServiceMisesAJour {
     return (await _depotTitres.chargerTitres(idListe: liste!.id)).isNotEmpty;
   }
 
-  /// Titres à vérifier (listes [listesVerifiees], ou « En attente »
-  /// seulement), identifiants des titres annoncés (favoris ou suivis) et
+  /// Titres à vérifier (listes [listesVerifiees], toute la bibliothèque en
+  /// archive complète, ou « En attente » seulement), identifiants des
+  /// titres annoncés (favoris ou suivis) et
   /// identifiants des sources actives (seuls leurs sites sont interrogés).
   Future<(List<Titre>, Set<int>, Set<int>)> _chargerTitresAVerifier({
     required bool complete,
@@ -371,14 +370,38 @@ class ServiceMisesAJour {
     }
 
     final parId = <int, Titre>{};
-    for (final nom
-        in complete ? listesVerifiees : <String>[nomListeEnAttente]) {
-      for (final titre in await titresDe(nom)) {
-        if (titre.id != null) parId[titre.id!] = titre;
+    // Archive complète (décision de l'orchestrateur du 2026-11-18, dans le
+    // sens du client : tout archiver) : les titres sans liste ou des seules
+    // listes du client sont vérifiés aussi, sinon leurs nouveaux chapitres
+    // ne seraient jamais connus, donc jamais téléchargés. Le rythme ne
+    // change pas : mêmes horaires, un titre à la fois par source et délai
+    // par domaine de `ClientHttpPoli` (PLAYBOOK.md section 10). Un réglage
+    // illisible ne doit pas empêcher la vérification ordinaire.
+    var toutVerifier = false;
+    if (complete) {
+      try {
+        toutVerifier =
+            await _serviceParametres?.chargerArchiveComplete() ?? false;
+      } catch (erreur) {
+        debugPrint('Réglage « Archive complète » illisible : $erreur');
       }
     }
+    if (toutVerifier) {
+      for (final titre in await _depotTitres.chargerTitres()) {
+        if (titre.id != null) parId[titre.id!] = titre;
+      }
+    } else {
+      for (final nom
+          in complete ? listesVerifiees : <String>[nomListeEnAttente]) {
+        for (final titre in await titresDe(nom)) {
+          if (titre.id != null) parId[titre.id!] = titre;
+        }
+      }
+    }
+    // Seuls les titres d'une liste annoncée le sont, archive complète ou
+    // non : les autres sont vérifiés en silence.
     final idsAnnonces = <int>{
-      for (final nom in <String>[nomListeFavoris, nomListeSuivis])
+      for (final nom in ClassementListes.listesAnnoncees)
         ...(await titresDe(nom)).map((titre) => titre.id).whereType<int>(),
     };
     final sources = await _depotSources.chargerSources();

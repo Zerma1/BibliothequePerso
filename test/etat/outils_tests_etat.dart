@@ -69,6 +69,9 @@ const int idListePlanifie = 4;
 /// Identifiant de la liste système « En attente » dans les faux services.
 const int idListeEnAttente = 5;
 
+/// Identifiant de la liste système « Terminés » dans les faux services.
+const int idListeTermines = 6;
+
 /// Faux `ServiceBibliotheque` entièrement en mémoire, pour les tests de
 /// widgets (aucune base, aucun réseau, réponses immédiates ou retenues).
 class FauxServiceBibliotheque implements ServiceBibliotheque {
@@ -102,7 +105,17 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
       estSysteme: true,
       ordre: ordreListeEnAttente,
     ),
-    const ListeLecture(id: 3, nom: 'À lire plus tard', ordre: 4),
+    const ListeLecture(
+      id: idListeTermines,
+      nom: nomListeTermines,
+      estSysteme: true,
+      ordre: ordreListeTermines,
+    ),
+    const ListeLecture(
+      id: 3,
+      nom: 'À lire plus tard',
+      ordre: ordreDerniereListeSysteme + 1,
+    ),
   ];
 
   /// Toutes les catégories.
@@ -913,6 +926,46 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
         for (final chapitre in chapitres) chapitre.copierAvec(estLu: estLu),
       ]);
     }
+  }
+
+  /// Appels à [marquerChapitresLus] et [marquerLusJusqua].
+  int nombreMarquagesEnLot = 0;
+
+  @override
+  Future<int> marquerChapitresLus(
+    int idTitre,
+    Iterable<int> idsChapitres, {
+    bool lu = true,
+  }) async {
+    nombreMarquagesEnLot++;
+    final ids = idsChapitres.toSet();
+    return _marquerSi(idTitre, (chapitre) => ids.contains(chapitre.id), lu);
+  }
+
+  @override
+  Future<int> marquerLusJusqua(
+    int idTitre,
+    double numero, {
+    bool lu = true,
+  }) async {
+    nombreMarquagesEnLot++;
+    return _marquerSi(idTitre, (chapitre) => chapitre.numero <= numero, lu);
+  }
+
+  /// Comme le vrai service : seuls les chapitres de [idTitre] dont l'état
+  /// change sont modifiés et comptés.
+  int _marquerSi(int idTitre, bool Function(Chapitre) choisi, bool lu) {
+    final chapitres = chapitresParTitre[idTitre];
+    if (chapitres == null) return 0;
+    var nombre = 0;
+    for (var i = 0; i < chapitres.length; i++) {
+      final chapitre = chapitres[i];
+      if (choisi(chapitre) && chapitre.estLu != lu) {
+        chapitres[i] = chapitre.copierAvec(estLu: lu);
+        nombre++;
+      }
+    }
+    return nombre;
   }
 
   @override

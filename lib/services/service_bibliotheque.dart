@@ -1991,6 +1991,59 @@ class ServiceBibliotheque {
   Future<void> marquerTousLus(int idTitre, {bool estLu = true}) =>
       _depotChapitres.marquerTousLus(idTitre, estLu: estLu);
 
+  /// Marque lus (ou non lus si [lu] vaut `false`) les chapitres
+  /// [idsChapitres] du titre [idTitre], en une transaction, et renvoie le
+  /// nombre de chapitres dont l'état a changé (ceux déjà dans l'état
+  /// demandé ne comptent pas).
+  ///
+  /// Les identifiants qui n'appartiennent pas à [idTitre] (sélection
+  /// périmée, autre titre) sont ignorés : une sélection ne doit jamais
+  /// toucher un autre titre. Base seulement (aucun réseau).
+  ///
+  /// L'état de lecture ne change pas le classement « En attente » (qui ne
+  /// dépend que des chapitres parus dans les langues du client) : il n'est
+  /// pas recalculé. Il change en revanche le plan de téléchargement :
+  /// l'interface appelle ensuite `ServiceTelechargement.appliquerRegles`
+  /// (comme après [marquerLu]). Lève une `ErreurBaseDeDonnees` si
+  /// l'écriture échoue (rien n'est alors écrit).
+  Future<int> marquerChapitresLus(
+    int idTitre,
+    Iterable<int> idsChapitres, {
+    bool lu = true,
+  }) async {
+    final demandes = idsChapitres.toSet();
+    if (demandes.isEmpty) return 0;
+    final duTitre = <int>{
+      for (final chapitre in await _depotChapitres.chargerChapitres(idTitre))
+        ?chapitre.id,
+    };
+    return _depotChapitres.marquerLus(demandes.intersection(duTitre), lu: lu);
+  }
+
+  /// Marque lus (ou non lus si [lu] vaut `false`) tous les chapitres du
+  /// titre [idTitre] de numéro inférieur ou égal à [numero], toutes langues
+  /// et tous sites confondus, et renvoie le nombre de chapitres dont l'état
+  /// a changé.
+  ///
+  /// Sert à « lu jusqu'ici » : le client qui reprend un titre au chapitre
+  /// 40 n'a pas à cocher les 39 premiers. Mêmes suites que
+  /// [marquerChapitresLus] (« En attente » inchangé, l'interface appelle
+  /// ensuite `ServiceTelechargement.appliquerRegles`). Lève une
+  /// [ErreurService] si [numero] n'est pas un nombre fini, une
+  /// `ErreurBaseDeDonnees` si l'écriture échoue.
+  Future<int> marquerLusJusqua(
+    int idTitre,
+    double numero, {
+    bool lu = true,
+  }) async {
+    // Vérifié ici pour donner au client un message plutôt que
+    // l'`ArgumentError` du dépôt (erreur de programmation).
+    if (!numero.isFinite) {
+      throw const ErreurService('Numéro de chapitre invalide.');
+    }
+    return _depotChapitres.marquerLusJusqua(idTitre, numero, lu: lu);
+  }
+
   // -------------------------------------------------- Liste « En attente »
 
   /// Place le titre dans « En attente » ou l'en retire, selon la règle de

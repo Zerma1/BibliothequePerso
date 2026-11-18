@@ -240,6 +240,7 @@ void main() {
         nomListeSuivis,
         nomListePlanifie,
         nomListeEnAttente,
+        nomListeTermines,
         'À relire [été]',
       ]);
       expect(listes.first['systeme'], isTrue);
@@ -415,7 +416,7 @@ void main() {
       final json = lireJson(resultat.cheminJson);
       expect(json['titres'], isEmpty);
       expect(json['sources'], isEmpty);
-      expect(json['listes'], hasLength(4));
+      expect(json['listes'], hasLength(nomsListesSysteme.length));
       expect(
         (json['reglages']! as Map<String, Object?>)['langues'],
         ServiceParametres.languesParDefaut,
@@ -445,6 +446,7 @@ void main() {
           'Suivis',
           'Planifié',
           'En attente',
+          'Terminés',
           r'À relire \[été\]',
           'Sans liste',
           'Sites',
