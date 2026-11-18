@@ -637,7 +637,10 @@ class ClientHttpPoli {
     final type = typeContenu?.split(';').first.trim().toLowerCase() ?? '';
     // Format sans signature connue (SVG, TIFF, JPEG XL…) annoncé comme
     // image : accepté, sauf si c'est en fait une page HTML (E10).
-    if (type.startsWith('image/') && !estContenuHtml(octets)) {
+    // Un corps vide n'est jamais une image, même annoncé comme tel.
+    if (octets.isNotEmpty &&
+        type.startsWith('image/') &&
+        !estContenuHtml(octets)) {
       return;
     }
     final extraitCourt = extraitTexteImprimable(octets);

@@ -713,6 +713,23 @@ void main() {
         );
       });
 
+      test('corps vide annoncé image/jpeg : refusé', () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response.bytes(
+            <int>[],
+            200,
+            headers: <String, String>{'content-type': 'image/jpeg'},
+          ),
+        ]);
+        await expectLater(
+          client.recupererOctets(
+            Uri.parse('https://exemple.org/vide.jpg'),
+            exigerImage: true,
+          ),
+          throwsA(isA<ErreurSource>()),
+        );
+      });
+
       test('binaire non reconnu : message sans aucun octet binaire', () async {
         final binaire = <int>[
           for (var i = 0; i < 300; i++) (i * 37 + 11) % 256,
