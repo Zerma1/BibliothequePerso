@@ -184,3 +184,5 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
 - [ ] X6. CRUD titres : modifier nom, alternatifs, résumé, auteur, catégories, niveau de contenu (protégés de l'actualisation) ; ajout par recherche
 - [ ] X7. Archive complète (NAS) : tout télécharger, ne jamais supprimer automatiquement
 - [ ] X8. Plan de tests 0.2.2-test : reprendre D4 (import d'un titre retiré)
+- [ ] X9. Liste système « Terminés » (titres terminés) : pas de notification ni de téléchargement automatique (sauf archive complète)
+- [ ] X10. Marquer lus en lot : sélection de chapitres (appui long + glisser, ou cases) et « Marquer lus jusqu'ici » depuis un chapitre
