@@ -111,23 +111,41 @@ class DepotListes {
     }
   }
 
-  /// Renomme une liste du client.
+  /// Renomme une liste du client (dont « En attente (perso) », liste
+  /// ordinaire créée par la migration 5).
   ///
   /// Lève une [ErreurBaseDeDonnees] si la liste n'existe pas, si c'est une
-  /// liste système, si le nom est vide ou déjà utilisé.
-  Future<ListeLecture> renommerListe(int id, String nouveauNom) async {
+  /// liste système (Favoris, Suivis, Planifié, En attente), si le nom est
+  /// vide ou déjà utilisé (sans tenir compte de la casse ASCII). Changer
+  /// seulement la casse du nom d'une liste est accepté.
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`) ;
+  /// `null` : transaction propre à cet appel.
+  Future<ListeLecture> renommerListe(
+    int id,
+    String nouveauNom, {
+    DatabaseExecutor? executeur,
+  }) async {
     final nomPropre = _verifierNom(nouveauNom);
     try {
-      return await _baseDeDonnees.transaction((txn) async {
-        final liste = await _chargerListeModifiable(txn, id, 'renommer');
-        await txn.update(
-          'listes',
-          <String, Object?>{'nom': nomPropre},
-          where: 'id = ?',
-          whereArgs: <Object?>[id],
-        );
-        return liste.copierAvec(nom: nomPropre);
-      });
+      return await GestionnaireTransactions.executerAtomiquement(
+        _baseDeDonnees,
+        executeur,
+        (txn) async {
+          final liste = await _chargerListeModifiable(
+            txn,
+            id,
+            _Action.renommer,
+          );
+          await txn.update(
+            'listes',
+            <String, Object?>{'nom': nomPropre},
+            where: 'id = ?',
+            whereArgs: <Object?>[id],
+          );
+          return liste.copierAvec(nom: nomPropre);
+        },
+      );
     } on DatabaseException catch (erreur) {
       if (erreur.isUniqueConstraintError()) {
         throw ErreurBaseDeDonnees(
@@ -145,11 +163,79 @@ class DepotListes {
   ///
   /// Lève une [ErreurBaseDeDonnees] si la liste n'existe pas ou si c'est une
   /// liste système.
-  Future<void> supprimerListe(int id) async {
-    await _baseDeDonnees.transaction((txn) async {
-      await _chargerListeModifiable(txn, id, 'supprimer');
-      await txn.delete('listes', where: 'id = ?', whereArgs: <Object?>[id]);
-    });
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`) ;
+  /// `null` : transaction propre à cet appel.
+  Future<void> supprimerListe(int id, {DatabaseExecutor? executeur}) async {
+    await GestionnaireTransactions.executerAtomiquement(
+      _baseDeDonnees,
+      executeur,
+      (txn) async {
+        await _chargerListeModifiable(txn, id, _Action.supprimer);
+        await txn.delete('listes', where: 'id = ?', whereArgs: <Object?>[id]);
+      },
+    );
+  }
+
+  /// Enregistre l'ordre d'affichage des listes : [idsDansLOrdre] reçoivent
+  /// les positions 0, 1, 2… dans cet ordre. Les listes système peuvent être
+  /// déplacées comme les autres (l'ordre n'est qu'un choix d'affichage).
+  ///
+  /// Une liste absente de [idsDansLOrdre] est placée après celles données,
+  /// en gardant son ordre actuel : un appel avec une liste partielle (ou
+  /// faite avant la création d'une liste) ne perd rien.
+  ///
+  /// Renvoie toutes les listes dans le nouvel ordre. Lève une
+  /// [ErreurBaseDeDonnees], sans rien écrire, si un identifiant est répété
+  /// ou ne correspond à aucune liste.
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`) ;
+  /// `null` : transaction propre à cet appel.
+  Future<List<ListeLecture>> enregistrerOrdre(
+    List<int> idsDansLOrdre, {
+    DatabaseExecutor? executeur,
+  }) async {
+    if (idsDansLOrdre.toSet().length != idsDansLOrdre.length) {
+      throw const ErreurBaseDeDonnees(
+        'Ordre des listes invalide : une liste y apparaît plusieurs fois.',
+      );
+    }
+    return GestionnaireTransactions.executerAtomiquement(
+      _baseDeDonnees,
+      executeur,
+      (txn) async {
+        final actuelles = await chargerListes(executeur: txn);
+        final parId = <int, ListeLecture>{
+          for (final liste in actuelles)
+            if (liste.id case final int id) id: liste,
+        };
+        for (final id in idsDansLOrdre) {
+          if (!parId.containsKey(id)) {
+            throw ErreurBaseDeDonnees('La liste n°$id n\'existe pas.');
+          }
+        }
+        final demandes = idsDansLOrdre.toSet();
+        final ordonnees = <ListeLecture>[
+          for (final id in idsDansLOrdre) parId[id]!,
+          for (final liste in actuelles)
+            if (!demandes.contains(liste.id)) liste,
+        ];
+        final resultat = <ListeLecture>[];
+        for (var position = 0; position < ordonnees.length; position++) {
+          final liste = ordonnees[position];
+          if (liste.ordre != position) {
+            await txn.update(
+              'listes',
+              <String, Object?>{'ordre': position},
+              where: 'id = ?',
+              whereArgs: <Object?>[liste.id],
+            );
+          }
+          resultat.add(liste.copierAvec(ordre: position));
+        }
+        return resultat;
+      },
+    );
   }
 
   /// Ajoute un titre à une liste. Sans effet s'il y est déjà.
@@ -223,15 +309,20 @@ class DepotListes {
   Future<ListeLecture> _chargerListeModifiable(
     DatabaseExecutor executeur,
     int id,
-    String action,
+    _Action action,
   ) async {
     final liste = await _chargerListeAvec(executeur, id);
     if (liste == null) {
       throw ErreurBaseDeDonnees('La liste n°$id n\'existe pas.');
     }
     if (liste.estSysteme) {
+      final participe = switch (action) {
+        _Action.renommer => 'renommée',
+        _Action.supprimer => 'supprimée',
+      };
       throw ErreurBaseDeDonnees(
-        'Impossible de $action la liste système « ${liste.nom} ».',
+        '« ${liste.nom} » est une liste système : elle ne peut pas être '
+        '$participe.',
       );
     }
     return liste;
@@ -250,3 +341,6 @@ class DepotListes {
     return lignes.isEmpty ? null : ListeLecture.depuisMap(lignes.first);
   }
 }
+
+/// Action refusée sur une liste système (pour le message d'erreur).
+enum _Action { renommer, supprimer }

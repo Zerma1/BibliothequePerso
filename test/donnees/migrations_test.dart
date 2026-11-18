@@ -20,8 +20,8 @@ void main() {
     await base.close();
   });
 
-  test('la version du schéma est 9 et correspond à la base ouverte', () async {
-    expect(versionSchema, 9);
+  test('la version du schéma est 10 et correspond à la base ouverte', () async {
+    expect(versionSchema, 10);
     expect(await base.getVersion(), versionSchema);
   });
 
@@ -834,12 +834,12 @@ void main() {
         // nouvelle colonne chapitres.id_source près.
         for (final table in tables) {
           final apres = await version7.query(table, orderBy: 'rowid');
-          final comparables = table == 'chapitres'
-              ? <Map<String, Object?>>[
-                  for (final ligne in apres)
-                    Map<String, Object?>.of(ligne)..remove('id_source'),
-                ]
-              : apres;
+          // + titres.champs_manuels, ajoutée plus tard par la migration 10.
+          final comparables = sansColonnes(apres, switch (table) {
+            'chapitres' => const <String>{'id_source'},
+            'titres' => const <String>{'champs_manuels'},
+            _ => const <String>{},
+          });
           expect(comparables, avant[table], reason: 'table $table');
         }
 
@@ -1145,12 +1145,12 @@ void main() {
         // pour tous les liens existants.
         for (final table in tables) {
           final apres = await version8.query(table, orderBy: 'rowid');
-          final comparables = table == 'titres_sources'
-              ? <Map<String, Object?>>[
-                  for (final ligne in apres)
-                    Map<String, Object?>.of(ligne)..remove('lien_seul'),
-                ]
-              : apres;
+          // + titres.champs_manuels, ajoutée plus tard par la migration 10.
+          final comparables = sansColonnes(apres, switch (table) {
+            'titres_sources' => const <String>{'lien_seul'},
+            'titres' => const <String>{'champs_manuels'},
+            _ => const <String>{},
+          });
           expect(comparables, avant[table], reason: 'table $table');
         }
         final liens = await version8.query('titres_sources', orderBy: 'id');
@@ -1346,8 +1346,12 @@ void main() {
       try {
         expect(await version9.getVersion(), versionSchema);
         for (final table in tables) {
+          // titres.champs_manuels : ajoutée plus tard par la migration 10.
           expect(
-            await version9.query(table, orderBy: 'rowid'),
+            sansColonnes(
+              await version9.query(table, orderBy: 'rowid'),
+              const <String>{'champs_manuels'},
+            ),
             avant[table],
             reason: 'table $table',
           );
@@ -1527,4 +1531,117 @@ void main() {
       throwsA(isA<DatabaseException>()),
     );
   });
+
+  test(
+    'la migration 9 → 10 ne perd rien et ajoute champs_manuels vide',
+    () async {
+      final dossier = await Directory.systemTemp.createTemp(
+        'migration10_test_',
+      );
+      final chemin = p.join(dossier.path, 'version9.db');
+      try {
+        final version9 = await databaseFactoryFfi.openDatabase(
+          chemin,
+          options: OpenDatabaseOptions(
+            version: 9,
+            onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+            onCreate: (db, version) => appliquerMigrations(db, 0, 9),
+          ),
+        );
+        final idSource = await version9.insert('sources', <String, Object?>{
+          'nom': 'MangaDex',
+          'url_base': 'https://mangadex.org',
+          'type_source': 'mangaDex',
+        });
+        final idTitre = await version9.insert('titres', <String, Object?>{
+          'id_source': idSource,
+          'url_titre': 'https://mangadex.org/title/ruri',
+          'nom': 'Ruri Dragon',
+          'type_titre': 'manga',
+          'resume': 'Une lycéenne à cornes.',
+        });
+        await version9.insert('titres_alternatifs', <String, Object?>{
+          'id_titre': idTitre,
+          'nom': 'ルリドラゴン',
+          'langue': 'ja',
+        });
+        final idCategorie = await version9.insert(
+          'categories',
+          <String, Object?>{'nom': 'comedy'},
+        );
+        await version9.insert('titres_categories', <String, Object?>{
+          'id_titre': idTitre,
+          'id_categorie': idCategorie,
+        });
+        await version9.insert('chapitres', <String, Object?>{
+          'id_titre': idTitre,
+          'url_chapitre': 'https://mangadex.org/chapter/1',
+          'nom': 'Chapitre 1',
+          'numero': 1.0,
+        });
+
+        const tables = <String>[
+          'sources',
+          'titres',
+          'titres_sources',
+          'titres_alternatifs',
+          'chapitres',
+          'listes',
+          'categories',
+          'titres_categories',
+        ];
+        final avant = <String, List<Map<String, Object?>>>{
+          for (final table in tables)
+            table: await version9.query(table, orderBy: 'rowid'),
+        };
+        expect(await version9.getVersion(), 9);
+        await version9.close();
+
+        final version10 = await ouvrirBaseDeDonnees(
+          chemin: chemin,
+          fabrique: databaseFactoryFfi,
+        );
+        try {
+          expect(await version10.getVersion(), versionSchema);
+          for (final table in tables) {
+            final apres = await version10.query(table, orderBy: 'rowid');
+            expect(
+              table == 'titres'
+                  ? sansColonnes(apres, const <String>{'champs_manuels'})
+                  : apres,
+              avant[table],
+              reason: 'table $table',
+            );
+          }
+          // Les titres existants n'ont aucun champ manuel.
+          final titres = await version10.query('titres');
+          expect(titres.single['champs_manuels'], '[]');
+          // Colonne NOT NULL : un NULL explicite est refusé.
+          await expectLater(
+            version10.update('titres', <String, Object?>{
+              'champs_manuels': null,
+            }),
+            throwsA(isA<DatabaseException>()),
+          );
+        } finally {
+          await version10.close();
+        }
+      } finally {
+        await dossier.delete(recursive: true);
+      }
+    },
+  );
+}
+
+/// Copie de [lignes] sans les [colonnes] données : sert à comparer une
+/// table avant et après une migration qui lui a ajouté des colonnes.
+List<Map<String, Object?>> sansColonnes(
+  List<Map<String, Object?>> lignes,
+  Set<String> colonnes,
+) {
+  return <Map<String, Object?>>[
+    for (final ligne in lignes)
+      Map<String, Object?>.of(ligne)
+        ..removeWhere((cle, _) => colonnes.contains(cle)),
+  ];
 }

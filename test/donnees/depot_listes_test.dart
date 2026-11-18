@@ -84,6 +84,118 @@ void main() {
     expect(await depot.chargerListes(), hasLength(4));
   });
 
+  test('les quatre listes système refusent renommage et suppression avec un '
+      'message clair', () async {
+    for (final nom in <String>[
+      nomListeFavoris,
+      nomListeSuivis,
+      nomListePlanifie,
+      nomListeEnAttente,
+    ]) {
+      final liste = (await depot.chargerListeParNom(nom))!;
+      expect(liste.estSysteme, isTrue, reason: nom);
+      await expectLater(
+        depot.renommerListe(liste.id!, 'Autre nom'),
+        throwsA(
+          isA<ErreurBaseDeDonnees>().having(
+            (e) => e.message,
+            'message',
+            '« $nom » est une liste système : elle ne peut pas être renommée.',
+          ),
+        ),
+      );
+      await expectLater(
+        depot.supprimerListe(liste.id!),
+        throwsA(
+          isA<ErreurBaseDeDonnees>().having(
+            (e) => e.message,
+            'message',
+            '« $nom » est une liste système : elle ne peut pas être supprimée.',
+          ),
+        ),
+      );
+      expect(await depot.chargerListe(liste.id!), liste, reason: nom);
+    }
+  });
+
+  test('« En attente (perso) » est une liste ordinaire', () async {
+    final perso = await depot.creerListe('En attente (perso)');
+    expect(perso.estSysteme, isFalse);
+    final renommee = await depot.renommerListe(perso.id!, 'Pause');
+    expect(renommee.nom, 'Pause');
+    await depot.supprimerListe(perso.id!);
+    expect(await depot.chargerListe(perso.id!), isNull);
+    expect(await depot.chargerListeParNom(nomListeEnAttente), isNotNull);
+  });
+
+  test(
+    'renommer vers un nom déjà pris (même casse différente) est refusé',
+    () async {
+      final liste = await depot.creerListe('À lire');
+      await depot.creerListe('Terminés');
+      for (final nom in <String>['Terminés', 'suivis', ' Favoris ']) {
+        await expectLater(
+          depot.renommerListe(liste.id!, nom),
+          throwsA(isA<ErreurBaseDeDonnees>()),
+          reason: nom,
+        );
+      }
+      expect((await depot.chargerListe(liste.id!))!.nom, 'À lire');
+      // Changer seulement la casse de son propre nom est accepté.
+      expect((await depot.renommerListe(liste.id!, 'à lire')).nom, 'à lire');
+    },
+  );
+
+  test('enregistrerOrdre réordonne toutes les listes', () async {
+    final a = await depot.creerListe('A');
+    final b = await depot.creerListe('B');
+    final avant = await depot.chargerListes();
+    final idsInverses = <int>[for (final l in avant.reversed) l.id!];
+
+    final resultat = await depot.enregistrerOrdre(idsInverses);
+
+    expect(resultat.map((l) => l.id), idsInverses);
+    expect(resultat.map((l) => l.ordre), <int>[0, 1, 2, 3, 4, 5]);
+    final relues = await depot.chargerListes();
+    expect(relues, resultat);
+    expect(relues.first.id, b.id);
+    expect(relues[1].id, a.id);
+    // Une liste créée ensuite va à la fin.
+    final c = await depot.creerListe('C');
+    expect((await depot.chargerListes()).last.id, c.id);
+  });
+
+  test('enregistrerOrdre partiel : les listes absentes suivent, dans leur '
+      'ordre', () async {
+    final a = await depot.creerListe('A');
+    final suivis = (await depot.chargerListeParNom(nomListeSuivis))!;
+
+    await depot.enregistrerOrdre(<int>[a.id!, suivis.id!]);
+
+    expect((await depot.chargerListes()).map((l) => l.nom), <String>[
+      'A',
+      nomListeSuivis,
+      nomListeFavoris,
+      nomListePlanifie,
+      nomListeEnAttente,
+    ]);
+  });
+
+  test('enregistrerOrdre refuse un doublon ou une liste inconnue sans rien '
+      'écrire', () async {
+    final avant = await depot.chargerListes();
+    final premier = avant.last.id!;
+    await expectLater(
+      depot.enregistrerOrdre(<int>[premier, premier]),
+      throwsA(isA<ErreurBaseDeDonnees>()),
+    );
+    await expectLater(
+      depot.enregistrerOrdre(<int>[premier, 999]),
+      throwsA(isA<ErreurBaseDeDonnees>()),
+    );
+    expect(await depot.chargerListes(), avant);
+  });
+
   test('renommer ou supprimer une liste inexistante lève une erreur', () async {
     await expectLater(
       depot.renommerListe(999, 'Nom'),

@@ -28,6 +28,7 @@ const List<Migration> migrations = <Migration>[
   _migration7,
   _migration8,
   _migration9,
+  _migration10,
 ];
 
 /// Version actuelle du schéma (nombre de migrations).
@@ -720,4 +721,30 @@ Future<void> _migration9(DatabaseExecutor executeur) async {
   for (final instruction in instructions) {
     await executeur.execute(instruction);
   }
+}
+
+/// Migration 10 : champs d'un titre modifiés à la main par le client,
+/// protégés contre l'actualisation depuis le site.
+///
+/// Colonne `titres.champs_manuels` : tableau JSON des noms des champs
+/// verrouillés (`["nom","resume"]`, valeurs de `ChampTitre`).
+///
+/// Une colonne JSON plutôt qu'une colonne booléenne par champ : un champ
+/// verrouillable ajouté plus tard ne demande pas de migration, et la ligne
+/// reste lisible d'un coup avec le titre (aucune requête de plus au
+/// chargement). Plutôt qu'une table à part : le verrou n'est jamais cherché
+/// seul (jamais de « tous les titres dont le résumé est manuel »), il est
+/// toujours lu avec son titre ; il disparaît avec lui sans cascade.
+///
+/// NOT NULL DEFAULT '[]' : les titres existants n'ont aucun champ manuel, et
+/// ADD COLUMN accepte NOT NULL grâce à la valeur par défaut. Pas de CHECK
+/// sur le contenu (SQLite sans JSON1 garanti sur tous les Android) : le
+/// modèle ignore un nom inconnu et le dépôt est le seul à écrire. Pas
+/// d'index : la colonne n'est jamais un critère de recherche.
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration10(DatabaseExecutor executeur) async {
+  await executeur.execute(
+    "ALTER TABLE titres ADD COLUMN champs_manuels TEXT NOT NULL DEFAULT '[]'",
+  );
 }

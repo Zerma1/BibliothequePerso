@@ -1,6 +1,9 @@
 /// Modèle `Titre` : une œuvre (manga, manhwa, roman…) suivie sur une source.
 library;
 
+import 'dart:convert';
+
+import 'erreur_base_de_donnees.dart';
 import 'outils_modeles.dart';
 import 'titre_alternatif.dart';
 
@@ -29,6 +32,38 @@ enum TypeTitre {
   autre,
 }
 
+/// Champ d'un titre que le client peut modifier à la main (migration 10).
+///
+/// Un champ modifié à la main est « verrouillé » : l'actualisation depuis le
+/// site (`DepotTitres.enregistrerTitre`) ne l'écrase plus, jusqu'à ce que le
+/// client le rende au site (`DepotTitres.rendreChampsAuSite`).
+///
+/// Stocké en base sous son nom (`Enum.name`, colonne `titres.champs_manuels`) :
+/// ne jamais renommer une valeur existante sans migration. Un nom inconnu lu
+/// en base est ignoré.
+enum ChampTitre {
+  /// Nom principal ([Titre.nom]).
+  nom,
+
+  /// Autres noms ([Titre.titresAlternatifs], table `titres_alternatifs`).
+  titresAlternatifs,
+
+  /// Résumé ([Titre.resume]).
+  resume,
+
+  /// Auteur ([Titre.auteur]).
+  auteur,
+
+  /// Statut affiché par le site ([Titre.statut]).
+  statut,
+
+  /// Catégories du titre (table `titres_categories`).
+  categories,
+
+  /// Niveau de contenu ([Titre.niveauContenu]).
+  niveauContenu,
+}
+
 /// Une œuvre enregistrée dans la bibliothèque.
 ///
 /// [titresAlternatifs] et [nombreChapitresNonLus] ne sont pas des colonnes de la
@@ -54,9 +89,11 @@ class Titre {
     this.languesPreferees,
     this.niveauContenu,
     this.couvertureChoisie,
+    Set<ChampTitre> champsManuels = const <ChampTitre>{},
   }) : titresAlternatifs = List<TitreAlternatif>.unmodifiable(
          titresAlternatifs,
-       );
+       ),
+       champsManuels = Set<ChampTitre>.unmodifiable(champsManuels);
 
   static const String _entite = 'Titre';
 
@@ -124,6 +161,18 @@ class Titre {
   /// depuis le site (voir `DepotTitres.enregistrerCouvertureChoisie`).
   final String? couvertureChoisie;
 
+  /// Champs modifiés à la main par le client (ensemble non modifiable) :
+  /// l'actualisation depuis le site ne les écrase pas (migration 10).
+  ///
+  /// Écrits seulement par `DepotTitres.enregistrerModificationManuelle` et
+  /// `DepotTitres.rendreChampsAuSite` (et à l'insertion d'un titre) : une
+  /// mise à jour par `enregistrerTitre` ne les modifie jamais.
+  final Set<ChampTitre> champsManuels;
+
+  /// Indique si [champ] a été modifié à la main (verrouillé contre
+  /// l'actualisation depuis le site).
+  bool estManuel(ChampTitre champ) => champsManuels.contains(champ);
+
   /// Couverture à afficher : [couvertureChoisie] si le client en a choisi
   /// une, sinon [urlCouverture].
   String? get couvertureAffichee => couvertureChoisie ?? urlCouverture;
@@ -162,7 +211,60 @@ class Titre {
       'langues_preferees': languesPreferees,
       'niveau_contenu': niveauContenu,
       'couverture_choisie': couvertureChoisie,
+      'champs_manuels': encoderChampsManuels(champsManuels),
     };
+  }
+
+  /// Convertit des champs manuels en texte JSON pour la colonne
+  /// `titres.champs_manuels` : tableau des noms, dans l'ordre de
+  /// [ChampTitre.values] (texte identique pour un même ensemble).
+  static String encoderChampsManuels(Set<ChampTitre> champs) {
+    return jsonEncode(<String>[
+      for (final champ in ChampTitre.values)
+        if (champs.contains(champ)) champ.name,
+    ]);
+  }
+
+  /// Lit le texte JSON de la colonne `titres.champs_manuels`.
+  ///
+  /// `null` ou un texte vide donne un ensemble vide ; un nom inconnu est
+  /// ignoré. Lève une `ErreurBaseDeDonnees` si le texte n'est pas un tableau
+  /// JSON de textes.
+  static Set<ChampTitre> decoderChampsManuels(String? texte) {
+    if (texte == null || texte.trim().isEmpty) {
+      return const <ChampTitre>{};
+    }
+    final Object? decode;
+    try {
+      decode = jsonDecode(texte);
+    } on FormatException catch (erreur) {
+      throw ErreurBaseDeDonnees(
+        'Donnée invalide pour $_entite : la colonne « champs_manuels » '
+        'n\'est pas du JSON valide ($texte).',
+        cause: erreur,
+      );
+    }
+    if (decode is! List<Object?>) {
+      throw ErreurBaseDeDonnees(
+        'Donnée invalide pour $_entite : la colonne « champs_manuels » doit '
+        'être un tableau JSON, reçu « $texte ».',
+      );
+    }
+    final champs = <ChampTitre>{};
+    for (final element in decode) {
+      if (element is! String) {
+        throw ErreurBaseDeDonnees(
+          'Donnée invalide pour $_entite : la colonne « champs_manuels » ne '
+          'doit contenir que des textes, reçu « $texte ».',
+        );
+      }
+      for (final champ in ChampTitre.values) {
+        if (champ.name == element) {
+          champs.add(champ);
+        }
+      }
+    }
+    return champs;
   }
 
   /// Construit un titre depuis une ligne SQLite.
@@ -194,6 +296,9 @@ class Titre {
       languesPreferees: map.lireTexteOptionnel('langues_preferees', _entite),
       niveauContenu: map.lireTexteOptionnel('niveau_contenu', _entite),
       couvertureChoisie: map.lireTexteOptionnel('couverture_choisie', _entite),
+      champsManuels: decoderChampsManuels(
+        map.lireTexteOptionnel('champs_manuels', _entite),
+      ),
     );
   }
 
@@ -228,6 +333,7 @@ class Titre {
     bool effacerNiveauContenu = false,
     String? couvertureChoisie,
     bool effacerCouvertureChoisie = false,
+    Set<ChampTitre>? champsManuels,
   }) {
     return Titre(
       id: id ?? this.id,
@@ -253,6 +359,7 @@ class Titre {
       couvertureChoisie: effacerCouvertureChoisie
           ? null
           : couvertureChoisie ?? this.couvertureChoisie,
+      champsManuels: champsManuels ?? this.champsManuels,
     );
   }
 
@@ -274,7 +381,9 @@ class Titre {
             other.nombreChapitresNonLus == nombreChapitresNonLus &&
             other.languesPreferees == languesPreferees &&
             other.niveauContenu == niveauContenu &&
-            other.couvertureChoisie == couvertureChoisie;
+            other.couvertureChoisie == couvertureChoisie &&
+            other.champsManuels.length == champsManuels.length &&
+            other.champsManuels.containsAll(champsManuels);
   }
 
   @override
@@ -294,6 +403,7 @@ class Titre {
     languesPreferees,
     niveauContenu,
     couvertureChoisie,
+    Object.hashAllUnordered(champsManuels),
   );
 
   @override

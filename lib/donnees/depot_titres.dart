@@ -13,6 +13,10 @@ import 'gestionnaire_transactions.dart';
 
 /// Accès aux tables `titres`, `titres_alternatifs` et `titres_categories`.
 ///
+/// Migration 10 : les champs modifiés à la main par le client
+/// ([enregistrerModificationManuelle]) sont protégés contre l'actualisation
+/// depuis le site ([enregistrerTitre]) jusqu'à [rendreChampsAuSite].
+///
 /// Étape 8 : `titres.id_source` et `titres.url_titre` désignent le site
 /// **principal** du titre ; ils sont redondants avec la ligne principale de
 /// `titres_sources`, tenue à jour par les déclencheurs de la migration 7.
@@ -57,6 +61,14 @@ class DepotTitres {
   /// [enregistrerLanguesPreferees] et [enregistrerCouvertureChoisie]. Un
   /// [Titre.niveauContenu] `null` laisse aussi le niveau enregistré
   /// inchangé.
+  ///
+  /// Champs modifiés à la main (migration 10, [Titre.champsManuels] en
+  /// base) : lors d'une mise à jour, les champs verrouillés (nom, noms
+  /// alternatifs, résumé, auteur, statut, catégories, niveau de contenu)
+  /// gardent leur valeur, quoi que contienne [titre] ; les champs manuels
+  /// eux-mêmes ne changent pas (voir [enregistrerModificationManuelle] et
+  /// [rendreChampsAuSite]). À l'insertion, [Titre.champsManuels] est écrit
+  /// tel quel.
   ///
   /// Tout se fait dans une seule transaction : en cas d'erreur, rien n'est
   /// écrit. Lève une [ErreurBaseDeDonnees] si [Titre.idSource] est absent ou
@@ -133,20 +145,38 @@ class DepotTitres {
     Titre titre,
     List<String>? categories,
   ) async {
-    final id = await _enregistrerLigneTitre(txn, titre);
+    final (id, verrous) = await _enregistrerLigneTitre(txn, titre);
 
+    // Noms et catégories modifiés à la main : gardés tels quels (migration
+    // 10), quoi que renvoie le site.
+    if (!verrous.contains(ChampTitre.titresAlternatifs)) {
+      await _remplacerTitresAlternatifs(txn, id, titre.titresAlternatifs);
+    }
+    if (categories != null && !verrous.contains(ChampTitre.categories)) {
+      await _remplacerCategories(txn, id, categories);
+    }
+    return id;
+  }
+
+  /// Remplace les titres alternatifs du titre [idTitre] par [alternatifs]
+  /// (noms vides ignorés, doublons fusionnés).
+  static Future<void> _remplacerTitresAlternatifs(
+    DatabaseExecutor txn,
+    int idTitre,
+    List<TitreAlternatif> alternatifs,
+  ) async {
     await txn.delete(
       'titres_alternatifs',
       where: 'id_titre = ?',
-      whereArgs: <Object?>[id],
+      whereArgs: <Object?>[idTitre],
     );
-    for (final alternatif in titre.titresAlternatifs) {
+    for (final alternatif in alternatifs) {
       if (alternatif.nom.trim().isEmpty) {
         continue;
       }
       final ligne = alternatif.versMap()
         ..remove('id')
-        ..['id_titre'] = id;
+        ..['id_titre'] = idTitre;
       // IGNORE : un nom en double (contrainte UNIQUE(id_titre, nom)) est
       // simplement fusionné avec le premier.
       await txn.insert(
@@ -155,86 +185,291 @@ class DepotTitres {
         conflictAlgorithm: ConflictAlgorithm.ignore,
       );
     }
-
-    if (categories != null) {
-      await txn.delete(
-        'titres_categories',
-        where: 'id_titre = ?',
-        whereArgs: <Object?>[id],
-      );
-      for (final nomBrut in categories) {
-        if (nomBrut.trim().isEmpty) {
-          continue;
-        }
-        final categorie = await DepotCategories.enregistrerCategorieAvec(
-          txn,
-          nomBrut,
-        );
-        await txn.insert('titres_categories', <String, Object?>{
-          'id_titre': id,
-          'id_categorie': categorie.id,
-        }, conflictAlgorithm: ConflictAlgorithm.ignore);
-      }
-    }
-    return id;
   }
 
-  /// Insère ou met à jour la ligne `titres` et renvoie son identifiant.
+  /// Remplace les catégories du titre [idTitre] par [categories] (noms
+  /// bruts, normalisés ; noms vides ignorés).
+  static Future<void> _remplacerCategories(
+    DatabaseExecutor txn,
+    int idTitre,
+    List<String> categories,
+  ) async {
+    await txn.delete(
+      'titres_categories',
+      where: 'id_titre = ?',
+      whereArgs: <Object?>[idTitre],
+    );
+    for (final nomBrut in categories) {
+      if (nomBrut.trim().isEmpty) {
+        continue;
+      }
+      final categorie = await DepotCategories.enregistrerCategorieAvec(
+        txn,
+        nomBrut,
+      );
+      await txn.insert('titres_categories', <String, Object?>{
+        'id_titre': idTitre,
+        'id_categorie': categorie.id,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+  }
+
+  /// Colonne de la table `titres` de chaque champ verrouillable qui en a
+  /// une (les noms alternatifs et les catégories vivent dans d'autres
+  /// tables).
+  static const Map<ChampTitre, String> _colonnesChampsManuels =
+      <ChampTitre, String>{
+        ChampTitre.nom: 'nom',
+        ChampTitre.resume: 'resume',
+        ChampTitre.auteur: 'auteur',
+        ChampTitre.statut: 'statut',
+        ChampTitre.niveauContenu: 'niveau_contenu',
+      };
+
+  /// Insère ou met à jour la ligne `titres` et renvoie son identifiant et
+  /// ses champs manuels (verrouillés) tels qu'ils sont en base.
   ///
   /// On n'utilise pas `INSERT OR REPLACE` : il supprime puis recrée la ligne,
   /// ce qui déclencherait les `ON DELETE CASCADE` et effacerait les chapitres,
   /// l'état de lecture et l'appartenance aux listes.
-  Future<int> _enregistrerLigneTitre(DatabaseExecutor txn, Titre titre) async {
+  Future<(int, Set<ChampTitre>)> _enregistrerLigneTitre(
+    DatabaseExecutor txn,
+    Titre titre,
+  ) async {
     var id = titre.id;
-    if (id == null) {
-      final existants = await txn.query(
-        'titres',
-        columns: <String>['id'],
-        where: 'url_titre = ?',
-        whereArgs: <Object?>[titre.urlTitre],
-        limit: 1,
-      );
-      if (existants.isNotEmpty) {
-        id = existants.first['id'] as int?;
-      }
+    final existants = await txn.query(
+      'titres',
+      columns: <String>['id', 'champs_manuels'],
+      where: id == null ? 'url_titre = ?' : 'id = ?',
+      whereArgs: <Object?>[id ?? titre.urlTitre],
+      limit: 1,
+    );
+    if (id != null && existants.isEmpty) {
+      throw ErreurBaseDeDonnees('Le titre n°$id n\'existe pas.');
+    }
+    if (existants.isNotEmpty) {
+      id = existants.first['id'] as int?;
     }
 
     final ligne = titre.versMap()..remove('id');
     if (id == null) {
-      // Insertion : les langues et la couverture choisie éventuellement
-      // fournies sont gardées, normalisées comme dans leurs méthodes.
+      // Insertion : les langues, la couverture choisie et les champs
+      // manuels éventuellement fournis (import d'un export) sont gardés,
+      // normalisés comme dans leurs méthodes.
       ligne['langues_preferees'] = normaliserLanguesPreferees(
         titre.languesPreferees,
       );
       ligne['couverture_choisie'] = _normaliserCouverture(
         titre.couvertureChoisie,
       );
-      return txn.insert('titres', ligne);
+      return (await txn.insert('titres', ligne), titre.champsManuels);
     }
-    // Mise à jour : la date de vérification, les langues préférées et la
-    // couverture choisie ont leur propre méthode. Un Titre reconstruit par
-    // une source (valeurs à null) ne doit pas les effacer : ce sont des
-    // choix du client.
+    final verrous = Titre.decoderChampsManuels(
+      existants.first['champs_manuels'] as String?,
+    );
+    // Mise à jour : la date de vérification, les langues préférées, la
+    // couverture choisie et les champs manuels ont leur propre méthode. Un
+    // Titre reconstruit par une source (valeurs à null) ne doit pas les
+    // effacer : ce sont des choix du client.
     ligne
       ..remove('date_derniere_verification')
       ..remove('langues_preferees')
-      ..remove('couverture_choisie');
+      ..remove('couverture_choisie')
+      ..remove('champs_manuels');
     // Un site qui ne donne pas (ou plus, en cas d'erreur de lecture) le
     // niveau de contenu ne doit pas effacer celui déjà connu : un titre
     // `pornographic` réapparaîtrait sinon dans la bibliothèque filtrée.
     if (titre.niveauContenu == null) {
       ligne.remove('niveau_contenu');
     }
-    final modifiees = await txn.update(
+    // Champs modifiés à la main (migration 10) : jamais écrasés par le site.
+    for (final champ in verrous) {
+      final colonne = _colonnesChampsManuels[champ];
+      if (colonne != null) {
+        ligne.remove(colonne);
+      }
+    }
+    await txn.update(
       'titres',
       ligne,
       where: 'id = ?',
       whereArgs: <Object?>[id],
     );
-    if (modifiees == 0) {
-      throw ErreurBaseDeDonnees('Le titre n°$id n\'existe pas.');
+    return (id, verrous);
+  }
+
+  /// Enregistre une modification faite à la main par le client : seuls les
+  /// champs donnés (non `null`) sont écrits, et ils sont **verrouillés**
+  /// (ajoutés à [Titre.champsManuels]) : l'actualisation depuis le site par
+  /// [enregistrerTitre] ne les écrase plus, jusqu'à [rendreChampsAuSite].
+  ///
+  /// - [nom] : nettoyé des espaces ; vide refusé.
+  /// - [resume], [auteur], [statut] : nettoyés ; un texte vide efface la
+  ///   valeur (`NULL`), qui reste verrouillée (le site ne la remettra pas).
+  /// - [niveauContenu] : une valeur de `niveauxContenu` (`constantes.dart`),
+  ///   ou un texte vide pour « inconnu » ; toute autre valeur est refusée.
+  /// - [titresAlternatifs] : remplacent tous les noms alternatifs (noms vides
+  ///   ignorés, doublons fusionnés).
+  /// - [categories] : noms bruts qui remplacent toutes les catégories
+  ///   (normalisés, catégories existantes réutilisées ; liste vide = aucune).
+  ///
+  /// Aucun champ donné : rien n'est écrit, le titre est renvoyé tel quel.
+  /// Renvoie le titre relu en base. Lève une [ErreurBaseDeDonnees] si le
+  /// titre n'existe pas, si [nom] est vide ou si [niveauContenu] est
+  /// inconnu ; rien n'est alors écrit (vérifications faites avant la
+  /// première écriture).
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`) ;
+  /// `null` : transaction propre à cet appel.
+  Future<Titre> enregistrerModificationManuelle(
+    int idTitre, {
+    String? nom,
+    List<TitreAlternatif>? titresAlternatifs,
+    String? resume,
+    String? auteur,
+    String? statut,
+    List<String>? categories,
+    String? niveauContenu,
+    DatabaseExecutor? executeur,
+  }) async {
+    final colonnes = <String, Object?>{};
+    final champs = <ChampTitre>{};
+    if (nom != null) {
+      final nomPropre = nom.trim();
+      if (nomPropre.isEmpty) {
+        throw const ErreurBaseDeDonnees(
+          'Le nom d\'un titre ne peut pas être vide.',
+        );
+      }
+      colonnes['nom'] = nomPropre;
+      champs.add(ChampTitre.nom);
     }
-    return id;
+    void texteOptionnel(String? valeur, ChampTitre champ) {
+      if (valeur == null) {
+        return;
+      }
+      final propre = valeur.trim();
+      colonnes[_colonnesChampsManuels[champ]!] = propre.isEmpty ? null : propre;
+      champs.add(champ);
+    }
+
+    texteOptionnel(resume, ChampTitre.resume);
+    texteOptionnel(auteur, ChampTitre.auteur);
+    texteOptionnel(statut, ChampTitre.statut);
+    if (niveauContenu != null) {
+      final niveau = niveauContenu.trim();
+      if (niveau.isNotEmpty && !niveauxContenu.contains(niveau)) {
+        throw ErreurBaseDeDonnees(
+          'Niveau de contenu inconnu : « $niveau » (valeurs possibles : '
+          '${niveauxContenu.join(', ')}).',
+        );
+      }
+      colonnes['niveau_contenu'] = niveau.isEmpty ? null : niveau;
+      champs.add(ChampTitre.niveauContenu);
+    }
+    if (titresAlternatifs != null) {
+      champs.add(ChampTitre.titresAlternatifs);
+    }
+    if (categories != null) {
+      champs.add(ChampTitre.categories);
+    }
+
+    try {
+      await GestionnaireTransactions.executerAtomiquement(
+        _baseDeDonnees,
+        executeur,
+        (txn) async {
+          final lignes = await txn.query(
+            'titres',
+            columns: <String>['champs_manuels'],
+            where: 'id = ?',
+            whereArgs: <Object?>[idTitre],
+            limit: 1,
+          );
+          if (lignes.isEmpty) {
+            throw ErreurBaseDeDonnees('Le titre n°$idTitre n\'existe pas.');
+          }
+          if (champs.isEmpty) {
+            return;
+          }
+          final verrous = <ChampTitre>{
+            ...Titre.decoderChampsManuels(
+              lignes.first['champs_manuels'] as String?,
+            ),
+            ...champs,
+          };
+          colonnes['champs_manuels'] = Titre.encoderChampsManuels(verrous);
+          await txn.update(
+            'titres',
+            colonnes,
+            where: 'id = ?',
+            whereArgs: <Object?>[idTitre],
+          );
+          if (titresAlternatifs != null) {
+            await _remplacerTitresAlternatifs(txn, idTitre, titresAlternatifs);
+          }
+          if (categories != null) {
+            await _remplacerCategories(txn, idTitre, categories);
+          }
+        },
+      );
+    } on DatabaseException catch (erreur) {
+      throw ErreurBaseDeDonnees(
+        'Impossible d\'enregistrer la modification du titre n°$idTitre.',
+        cause: erreur,
+      );
+    }
+
+    final relu = await chargerTitre(idTitre, executeur: executeur);
+    if (relu == null) {
+      throw ErreurBaseDeDonnees('Le titre n°$idTitre n\'existe pas.');
+    }
+    return relu;
+  }
+
+  /// « Rend au site » les [champs] d'un titre : leur verrou est retiré,
+  /// sans toucher à leur valeur. La valeur du site reviendra à la prochaine
+  /// actualisation par [enregistrerTitre] (pour les catégories : à la
+  /// prochaine actualisation qui fournit des catégories).
+  ///
+  /// Un champ qui n'était pas verrouillé est ignoré. Renvoie `false` si le
+  /// titre n'existe pas.
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`) ;
+  /// `null` : transaction propre à cet appel.
+  Future<bool> rendreChampsAuSite(
+    int idTitre,
+    Set<ChampTitre> champs, {
+    DatabaseExecutor? executeur,
+  }) {
+    return GestionnaireTransactions.executerAtomiquement(
+      _baseDeDonnees,
+      executeur,
+      (txn) async {
+        final lignes = await txn.query(
+          'titres',
+          columns: <String>['champs_manuels'],
+          where: 'id = ?',
+          whereArgs: <Object?>[idTitre],
+          limit: 1,
+        );
+        if (lignes.isEmpty) {
+          return false;
+        }
+        final verrous = Titre.decoderChampsManuels(
+          lignes.first['champs_manuels'] as String?,
+        ).difference(champs);
+        await txn.update(
+          'titres',
+          <String, Object?>{
+            'champs_manuels': Titre.encoderChampsManuels(verrous),
+          },
+          where: 'id = ?',
+          whereArgs: <Object?>[idTitre],
+        );
+        return true;
+      },
+    );
   }
 
   /// Charge un titre complet (avec titres alternatifs et nombre de non-lus),
