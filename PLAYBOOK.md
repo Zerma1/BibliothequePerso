@@ -310,7 +310,12 @@ Chaque adaptateur est testé avec des **pages HTML enregistrées** dans
 - `flutter analyze` doit renvoyer **0 erreur et 0 avertissement** avant toute livraison.
 - Toute classe publique a un commentaire de documentation `///`. Tout bloc non évident a un
   commentaire `//` qui explique **pourquoi**, pas seulement **quoi**.
-- Pas de `print` : on utilise `debugPrint` ou le journal applicatif `Journal`.
+- Pas de `print` ni de `debugPrint` : on utilise le journal applicatif `Journal.actuel`
+  (`lib/modeles/journal.dart`, demande du client du 2026-11-18). Il écrit dans
+  `<dossier de l'application>/journaux/journal-AAAA-MM-JJ.log` (14 jours gardés, jamais sur le
+  NAS), une ligne par requête réseau et par événement métier, avec une catégorie. Jamais de
+  corps de réponse ni de donnée sensible (`masquerDonneesSensibles`). Le client joint ce fichier
+  à ses retours de test (Paramètres → Journal → Exporter).
 - Pas de `dynamic` implicite. On utilise `as` avec vérification sur les données venant du HTML
   ou de SQLite.
 - Pas de valeur magique : les constantes partagées vont dans `lib/modeles/constantes.dart` ;
