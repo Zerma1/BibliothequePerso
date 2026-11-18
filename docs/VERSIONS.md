@@ -6,7 +6,25 @@
 > restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
 > chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
 
-## 0.2.2-test — en préparation sur `dev` (publiée après le retour sur la 0.2.1-test)
+## 0.2.2-test — version de test (2026-11-18)
+
+Suite aux retours sur la 0.2.1-test :
+- **Listes personnelles** : « + » et « Gérer les listes » au bout des puces de listes ; appui long
+  ou clic droit sur une liste pour la renommer ou la supprimer ; glisser-déposer pour réordonner.
+  Nouvelle liste système **« Terminés »** (vérifiée sans notification, pas de téléchargement
+  automatique sauf archive complète).
+- **Sites** : dans l'onglet Sources, toucher un site pour le modifier (nom, langues, **type**,
+  réglages) ou le supprimer.
+- **Titres** : « Modifier la fiche » (nom, titres alternatifs, résumé, auteur, statut, catégories,
+  niveau de contenu). Les champs modifiés à la main ne sont plus écrasés par le site ; « Rendre au
+  site » annule. Ajout d'un titre par **recherche sur MangaDex**.
+- **Chapitres lus en lot** : appui long sur un chapitre puis glisser pour sélectionner ; « Marquer
+  lus / non lus » ; « Marquer lus jusqu'ici » (menu ⋮ d'un chapitre ou barre de sélection).
+- **Archive complète** (Paramètres → Téléchargements) : tous les chapitres de tous les titres,
+  jamais supprimés automatiquement (conseillé avec un NAS).
+- Case **Favoris décochée** par défaut à l'ajout d'un titre.
+- Corrigé : images **WEBP** sans type (échec de Ruri Dragon ch. 47) ; plus jamais d'octets
+  illisibles dans un message ; une page **Wikipédia** n'est plus acceptée comme site lisible.
 
 Nouveau :
 - **Catégories regroupées** (Paramètres → « Catégories regroupées ») : « Survival » et
