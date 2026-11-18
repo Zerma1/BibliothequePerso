@@ -56,9 +56,11 @@ class DepotTitres {
   /// liste vide les retire toutes.
   ///
   /// Lors d'une mise à jour, `date_derniere_verification`,
-  /// `langues_preferees` et `couverture_choisie` ne sont pas modifiées :
-  /// elles ne sont écrites que par [enregistrerDateVerification],
-  /// [enregistrerLanguesPreferees] et [enregistrerCouvertureChoisie]. Un
+  /// `langues_preferees`, `couverture_choisie` et `description_perso` ne
+  /// sont pas modifiées : elles ne sont écrites que par
+  /// [enregistrerDateVerification], [enregistrerLanguesPreferees],
+  /// [enregistrerCouvertureChoisie] et [enregistrerDescriptionPerso] (et à
+  /// l'insertion, où la valeur de [titre] est écrite). Un
   /// [Titre.niveauContenu] `null` laisse aussi le niveau enregistré
   /// inchangé.
   ///
@@ -264,6 +266,9 @@ class DepotTitres {
       ligne['couverture_choisie'] = _normaliserCouverture(
         titre.couvertureChoisie,
       );
+      ligne['description_perso'] = normaliserDescriptionPerso(
+        titre.descriptionPerso,
+      );
       // Les verrous ne protègent que des valeurs déjà en base : à
       // l'insertion, aucun n'est appliqué (ensemble vide), pour que les noms
       // alternatifs et les catégories fournis soient bien écrits. Les champs
@@ -274,14 +279,16 @@ class DepotTitres {
       existants.first['champs_manuels'] as String?,
     );
     // Mise à jour : la date de vérification, les langues préférées, la
-    // couverture choisie et les champs manuels ont leur propre méthode. Un
-    // Titre reconstruit par une source (valeurs à null) ne doit pas les
-    // effacer : ce sont des choix du client.
+    // couverture choisie, les champs manuels et la description personnelle
+    // (migration 12) ont leur propre méthode. Un Titre reconstruit par une
+    // source (valeurs à null) ne doit pas les effacer : ce sont des choix du
+    // client.
     ligne
       ..remove('date_derniere_verification')
       ..remove('langues_preferees')
       ..remove('couverture_choisie')
-      ..remove('champs_manuels');
+      ..remove('champs_manuels')
+      ..remove('description_perso');
     // Un site qui ne donne pas (ou plus, en cas d'erreur de lecture) le
     // niveau de contenu ne doit pas effacer celui déjà connu : un titre
     // `pornographic` réapparaîtrait sinon dans la bibliothèque filtrée.
@@ -721,6 +728,56 @@ class DepotTitres {
   /// Couverture choisie sans espaces autour, `null` si vide.
   static String? _normaliserCouverture(String? couverture) {
     final valeur = couverture?.trim() ?? '';
+    return valeur.isEmpty ? null : valeur;
+  }
+
+  /// Enregistre la description personnelle du client pour un titre
+  /// (migration 12), sans toucher aux autres colonnes.
+  ///
+  /// [texte] est nettoyé des espaces et retours à la ligne au début et à la
+  /// fin (ceux de l'intérieur sont gardés : paragraphes) ; `null` ou un texte
+  /// vide efface la description (`NULL`). Une ré-actualisation du titre par
+  /// [enregistrerTitre] ne la modifie jamais.
+  ///
+  /// Renvoie le titre relu en base. Lève une [ErreurBaseDeDonnees] si le
+  /// titre n'existe pas (rien n'est alors écrit).
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`) ;
+  /// `null` : écriture directe dans la base.
+  Future<Titre> enregistrerDescriptionPerso(
+    int idTitre,
+    String? texte, {
+    DatabaseExecutor? executeur,
+  }) async {
+    final int modifiees;
+    try {
+      modifiees = await (executeur ?? _baseDeDonnees).update(
+        'titres',
+        <String, Object?>{
+          'description_perso': normaliserDescriptionPerso(texte),
+        },
+        where: 'id = ?',
+        whereArgs: <Object?>[idTitre],
+      );
+    } on DatabaseException catch (erreur) {
+      throw ErreurBaseDeDonnees(
+        'Impossible d\'enregistrer la description du titre n°$idTitre.',
+        cause: erreur,
+      );
+    }
+    final relu = modifiees > 0
+        ? await chargerTitre(idTitre, executeur: executeur)
+        : null;
+    if (relu == null) {
+      throw ErreurBaseDeDonnees('Le titre n°$idTitre n\'existe pas.');
+    }
+    return relu;
+  }
+
+  /// Description personnelle sans espaces ni retours à la ligne autour,
+  /// `null` si vide.
+  static String? normaliserDescriptionPerso(String? texte) {
+    final valeur = texte?.trim() ?? '';
     return valeur.isEmpty ? null : valeur;
   }
 

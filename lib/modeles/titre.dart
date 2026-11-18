@@ -90,6 +90,7 @@ class Titre {
     this.niveauContenu,
     this.couvertureChoisie,
     Set<ChampTitre> champsManuels = const <ChampTitre>{},
+    this.descriptionPerso,
   }) : titresAlternatifs = List<TitreAlternatif>.unmodifiable(
          titresAlternatifs,
        ),
@@ -169,6 +170,13 @@ class Titre {
   /// mise à jour par `enregistrerTitre` ne les modifie jamais.
   final Set<ChampTitre> champsManuels;
 
+  /// Description personnelle écrite par le client (migration 12), distincte
+  /// du résumé du site ([resume]), ou `null` s'il n'en a pas écrit.
+  ///
+  /// Choix du client : jamais écrasée par une ré-actualisation du titre
+  /// depuis le site (voir `DepotTitres.enregistrerDescriptionPerso`).
+  final String? descriptionPerso;
+
   /// Indique si [champ] a été modifié à la main (verrouillé contre
   /// l'actualisation depuis le site).
   bool estManuel(ChampTitre champ) => champsManuels.contains(champ);
@@ -212,6 +220,7 @@ class Titre {
       'niveau_contenu': niveauContenu,
       'couverture_choisie': couvertureChoisie,
       'champs_manuels': encoderChampsManuels(champsManuels),
+      'description_perso': descriptionPerso,
     };
   }
 
@@ -299,6 +308,7 @@ class Titre {
       champsManuels: decoderChampsManuels(
         map.lireTexteOptionnel('champs_manuels', _entite),
       ),
+      descriptionPerso: map.lireTexteOptionnel('description_perso', _entite),
     );
   }
 
@@ -310,7 +320,9 @@ class Titre {
   ///   `null` (retour au réglage général) ;
   /// - [couvertureChoisie] : `effacerCouvertureChoisie: true` le remet à
   ///   `null` (retour à la couverture du site) ;
-  /// - [niveauContenu] : `effacerNiveauContenu: true` le remet à `null`.
+  /// - [niveauContenu] : `effacerNiveauContenu: true` le remet à `null` ;
+  /// - [descriptionPerso] : `effacerDescriptionPerso: true` le remet à
+  ///   `null`.
   ///
   /// Un indicateur `effacer…` l'emporte sur la valeur donnée pour le même
   /// champ.
@@ -334,6 +346,8 @@ class Titre {
     String? couvertureChoisie,
     bool effacerCouvertureChoisie = false,
     Set<ChampTitre>? champsManuels,
+    String? descriptionPerso,
+    bool effacerDescriptionPerso = false,
   }) {
     return Titre(
       id: id ?? this.id,
@@ -360,6 +374,9 @@ class Titre {
           ? null
           : couvertureChoisie ?? this.couvertureChoisie,
       champsManuels: champsManuels ?? this.champsManuels,
+      descriptionPerso: effacerDescriptionPerso
+          ? null
+          : descriptionPerso ?? this.descriptionPerso,
     );
   }
 
@@ -383,7 +400,8 @@ class Titre {
             other.niveauContenu == niveauContenu &&
             other.couvertureChoisie == couvertureChoisie &&
             other.champsManuels.length == champsManuels.length &&
-            other.champsManuels.containsAll(champsManuels);
+            other.champsManuels.containsAll(champsManuels) &&
+            other.descriptionPerso == descriptionPerso;
   }
 
   @override
@@ -404,6 +422,7 @@ class Titre {
     niveauContenu,
     couvertureChoisie,
     Object.hashAllUnordered(champsManuels),
+    descriptionPerso,
   );
 
   @override

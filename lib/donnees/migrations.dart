@@ -30,6 +30,7 @@ const List<Migration> migrations = <Migration>[
   _migration9,
   _migration10,
   _migration11,
+  _migration12,
 ];
 
 /// Version actuelle du schéma (nombre de migrations).
@@ -803,4 +804,22 @@ Future<void> _migration11(DatabaseExecutor executeur) async {
     'est_systeme': 1,
     'ordre': ordre,
   });
+}
+
+/// Migration 12 : description personnelle d'un titre, écrite par le client,
+/// distincte du résumé du site (`titres.resume`).
+///
+/// Colonne `titres.description_perso` : texte libre, NULL par défaut (les
+/// titres existants n'en ont pas ; ADD COLUMN sans valeur par défaut remplit
+/// NULL). NULL plutôt qu'un texte vide pour « aucune description » : le dépôt
+/// remplace un texte vide par NULL, une seule représentation de l'absence.
+/// Une colonne de `titres` plutôt qu'une table à part : au plus une
+/// description par titre, toujours lue avec lui, supprimée avec lui. Pas
+/// d'index : la colonne n'est jamais un critère de recherche.
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration12(DatabaseExecutor executeur) async {
+  await executeur.execute(
+    'ALTER TABLE titres ADD COLUMN description_perso TEXT',
+  );
 }
