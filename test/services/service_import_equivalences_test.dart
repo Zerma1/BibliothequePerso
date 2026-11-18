@@ -120,28 +120,24 @@ void main() {
   });
 
   group('export', () {
-    test(
-      'le JSON (format 3) et le Markdown contiennent les regroupements',
-      () async {
-        await remplirOrigine();
-        final contenu = await origine.export.chargerContenu();
-        final json = jsonDecode(
-          ServiceExport.produireJson(contenu),
-        ) as Map<String, Object?>;
-        expect(json['version'], 3);
-        expect(json['equivalences'], <Map<String, Object?>>[
-          <String, Object?>{'categorie': 'comedy', 'reference': 'comédie'},
-          <String, Object?>{
-            'categorie': 'supervivencia',
-            'reference': 'survie',
-          },
-          <String, Object?>{'categorie': 'survival', 'reference': 'survie'},
-        ]);
-        final markdown = ServiceExport.produireMarkdown(contenu);
-        expect(markdown, contains('## Catégories regroupées'));
-        expect(markdown, contains('- survie ← supervivencia, survival'));
-      },
-    );
+    test('le JSON (format 3 et suivants) et le Markdown contiennent les '
+        'regroupements', () async {
+      await remplirOrigine();
+      final contenu = await origine.export.chargerContenu();
+      final json = jsonDecode(
+        ServiceExport.produireJson(contenu),
+      ) as Map<String, Object?>;
+      // Format 4 depuis les champs protégés et l'archive complète.
+      expect(json['version'], 4);
+      expect(json['equivalences'], <Map<String, Object?>>[
+        <String, Object?>{'categorie': 'comedy', 'reference': 'comédie'},
+        <String, Object?>{'categorie': 'supervivencia', 'reference': 'survie'},
+        <String, Object?>{'categorie': 'survival', 'reference': 'survie'},
+      ]);
+      final markdown = ServiceExport.produireMarkdown(contenu);
+      expect(markdown, contains('## Catégories regroupées'));
+      expect(markdown, contains('- survie ← supervivencia, survival'));
+    });
 
     test(
       'sans regroupement, la liste est vide et le Markdown sans section',
@@ -166,7 +162,7 @@ void main() {
       await remplirOrigine();
       final resultat = await cible.import().importerTexte(await origine.json());
 
-      expect(resultat.versionFormat, 3);
+      expect(resultat.versionFormat, 4);
       expect(resultat.regroupementsAjoutes, 3);
       expect(resultat.erreurs, isEmpty);
       expect(resultat.resume, contains('3 catégories regroupées'));

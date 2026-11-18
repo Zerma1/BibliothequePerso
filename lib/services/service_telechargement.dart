@@ -37,6 +37,7 @@ import '../sources/source_site.dart';
 import 'constantes_services.dart';
 import 'dossier_chapitres.dart';
 import 'erreur_service.dart';
+import 'extension_image.dart';
 import 'politique_telechargement.dart';
 import 'service_bibliotheque.dart';
 import 'service_parametres.dart';
@@ -705,18 +706,33 @@ class ServiceTelechargement {
 
   // ------------------------------------------------- Règles de conservation
 
-  /// Applique les règles à tous les titres favoris et suivis, puis lance le
-  /// traitement de la file (sans l'attendre).
+  /// Applique les règles à tous les titres favoris et suivis (à **tous** les
+  /// titres de la bibliothèque si « Archive complète » est activée,
+  /// `ServiceParametres.chargerArchiveComplete`), puis lance le traitement
+  /// de la file (sans l'attendre).
   ///
   /// Un titre en erreur est journalisé et n'empêche pas les autres ; la file
   /// est lancée même si la lecture des listes échoue (l'erreur remonte alors
   /// à l'appelant).
+  ///
+  /// À appeler après un changement du réglage « Archive complète » : à
+  /// l'activation, tous les chapitres manquants sont mis en file et les
+  /// suppressions prévues annulées ; à la désactivation, les archives que
+  /// les règles ordinaires ne veulent plus passent en suppression différée.
   Future<void> appliquerReglesATous() async {
     // Avant les règles : un chapitre gardé avec l'ancienne version ne doit
     // pas recevoir de suppression prévue.
     await _reprendreAnciensGardes();
     try {
       final ids = <int>{};
+      if (await _serviceParametres.chargerArchiveComplete()) {
+        // Archive complète : toute la bibliothèque, y compris les titres
+        // sans liste et ceux des listes du client. La file reste traitée
+        // un chapitre à la fois, avec le délai par domaine de
+        // `ClientHttpPoli` : le volume ne change rien au rythme des requêtes.
+        final titres = await _depotTitres.chargerTitres();
+        ids.addAll(titres.map((titre) => titre.id).whereType<int>());
+      }
       for (final nomListe in <String>[nomListeFavoris, nomListeSuivis]) {
         final liste = await _depotListes.chargerListeParNom(nomListe);
         if (liste?.id == null) continue;
@@ -819,6 +835,10 @@ class ServiceTelechargement {
       // plus suivis (leurs archives passent en suppression différée).
       idSourcePrincipale: idSource,
       idsSourcesLiees: idsSourcesLiees,
+      // Relu à chaque calcul (une lecture en base) : la tâche de fond
+      // Android voit ainsi le choix fait dans l'application, sans cache à
+      // invalider entre les isolats.
+      archiveComplete: await _serviceParametres.chargerArchiveComplete(),
     );
     final chapitres = await _depotChapitres.chargerChapitres(idTitre);
     final plan = politique.calculer(
@@ -1609,9 +1629,7 @@ class ServiceTelechargement {
           contenu = contenuAJour;
           await ecriture.ajouterPage(
             octets,
-            extension:
-                StockageTelechargements.extensionDepuisUrl(url) ??
-                extensionImageParDefaut,
+            extension: extensionImage(octets, url),
           );
           // La ligne a disparu (le client a annulé ou supprimé le titre) :
           // on s'arrête sans solliciter le site pour les pages restantes.
@@ -1818,11 +1836,9 @@ class ServiceTelechargement {
       // l'application à tous les sites (tâche T1), ce qu'exigent aussi tous
       // les serveurs MangaDex (`uploads.mangadex.org`, E10).
       // Une page anti-robot HTML servie en 200 (E10) ne doit jamais être
-      // écrite dans l'archive comme une page du chapitre.
-      // LIMITE : un site qui servirait ses images sans `Content-Type`
-      // `image/*` (par exemple `application/octet-stream`) verrait ses
-      // téléchargements échouer (message « n'est pas une image » dans la
-      // file) ; il faudrait alors un contrôle des octets propre à ce site.
+      // écrite dans l'archive comme une page du chapitre. Une image servie
+      // sans `Content-Type` `image/*` est reconnue par ses octets
+      // (`detecterFormatImage`, retour X1 de la 0.2.1-test).
       exigerImage: true,
     );
   }

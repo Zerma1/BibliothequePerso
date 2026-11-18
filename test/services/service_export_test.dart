@@ -225,9 +225,10 @@ void main() {
       await remplir();
       final json = lireJson((await service.exporter()).cheminJson);
       expect(json['format'], 'bibliotheque_perso-export');
-      // Format 3 : regroupements de catégories (après le format 2 :
-      // sélecteurs CSS des sites et résumé des titres).
-      expect(json['version'], 3);
+      // Format 4 : champs protégés et archive complète (après le format 3,
+      // regroupements de catégories, et le format 2, sélecteurs CSS des
+      // sites et résumé des titres).
+      expect(json['version'], 4);
       expect(json['dateExport'], dateExport.toUtc().toIso8601String());
       expect(json['versionApplication'], '0.1.0');
       final reglages = json['reglages']! as Map<String, Object?>;

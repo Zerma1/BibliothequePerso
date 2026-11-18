@@ -29,6 +29,7 @@ import '../modeles/lien_titre_source.dart';
 import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
 import '../modeles/titre.dart';
+import '../modeles/titre_alternatif.dart';
 import '../sources/client_http_poli.dart';
 import '../sources/couverture_site.dart';
 import '../sources/detecteur_type_site.dart';
@@ -42,6 +43,7 @@ import '../sources/source_webtoons.dart';
 import 'classement_listes.dart';
 import 'constantes_services.dart';
 import 'erreur_service.dart';
+import 'extension_image.dart';
 import 'politique_telechargement.dart';
 import 'service_ajout_site.dart';
 import 'service_parametres.dart';
@@ -342,7 +344,8 @@ class ServiceBibliotheque {
   Future<Titre?> chargerTitre(int idTitre) =>
       _depotTitres.chargerTitre(idTitre);
 
-  /// Toutes les listes, système d'abord (ordre de la base).
+  /// Toutes les listes, dans l'ordre d'affichage choisi par le client
+  /// ([reordonnerListes] ; système d'abord tant qu'il ne l'a pas changé).
   Future<List<ListeLecture>> chargerListes() => _depotListes.chargerListes();
 
   /// Listes qui contiennent le titre.
@@ -1276,11 +1279,15 @@ class ServiceBibliotheque {
 
   /// Programme dans [delaiSuppressionDifferee] la suppression des archives
   /// du site [idSource] du titre (site retiré ou devenu lien seul), sauf
-  /// chapitre gardé par le client ou suppression déjà prévue.
+  /// chapitre gardé par le client, suppression déjà prévue ou « Archive
+  /// complète » activée.
   Future<void> _planifierSuppressionArchivesDuSite(
     int idTitre,
     int idSource,
   ) async {
+    // « Archive complète » (X7) : aucune suppression automatique, même pour
+    // les archives d'un site retiré ; seul le client les supprime.
+    if (await _serviceParametres?.chargerArchiveComplete() ?? false) return;
     // LIMITE : hors de la transaction du dépôt ; si ces écritures échouent,
     // la prochaine application des règles de téléchargement les programme
     // (les chapitres d'un site retiré ou d'un lien seul y sont à supprimer).
@@ -1678,12 +1685,285 @@ class ServiceBibliotheque {
     }
   }
 
-  /// Crée une liste personnelle.
-  Future<ListeLecture> creerListe(String nom) => _depotListes.creerListe(nom);
+  /// Nom de liste nettoyé : espaces autour retirés, suites d'espaces
+  /// (tabulations, retours à la ligne collés) ramenées à une espace.
+  /// Fonction pure.
+  static String nettoyerNomListe(String nom) =>
+      nom.trim().replaceAll(RegExp(r'\s+'), ' ');
 
-  /// Supprime une liste personnelle (refusé pour les listes système).
-  Future<void> supprimerListe(int idListe) =>
-      _depotListes.supprimerListe(idListe);
+  /// Nettoie [nom] ([nettoyerNomListe]) et lève une [ErreurService] s'il
+  /// est vide ou plus long que [longueurMaxNomListe].
+  static String _validerNomListe(String nom) {
+    final propre = nettoyerNomListe(nom);
+    if (propre.isEmpty) {
+      throw const ErreurService('Donnez un nom à la liste.');
+    }
+    if (propre.length > longueurMaxNomListe) {
+      throw const ErreurService(
+        'Le nom de la liste est trop long ($longueurMaxNomListe caractères '
+        'au plus).',
+      );
+    }
+    return propre;
+  }
+
+  /// Lève une [ErreurService] si une autre liste que [idListe] porte déjà
+  /// [nom], sans tenir compte de la casse, accents compris (« À relire » et
+  /// « à relire ») : la base ne compare sans casse que les lettres ASCII.
+  Future<void> _refuserNomListePris(String nom, {int? idListe}) async {
+    final cherche = nom.toLowerCase();
+    for (final liste in await _depotListes.chargerListes()) {
+      if (liste.id != idListe && liste.nom.toLowerCase() == cherche) {
+        throw ErreurService('Une liste nommée « ${liste.nom} » existe déjà.');
+      }
+    }
+  }
+
+  /// Crée une liste personnelle (placée après les autres) et la renvoie.
+  ///
+  /// Le nom est nettoyé ([nettoyerNomListe]). Lève une [ErreurService] si
+  /// le nom est vide, trop long ou déjà pris (sans tenir compte de la
+  /// casse : « favoris » est refusé).
+  Future<ListeLecture> creerListe(String nom) async {
+    final propre = _validerNomListe(nom);
+    await _refuserNomListePris(propre);
+    try {
+      return await _depotListes.creerListe(propre);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      // Messages du dépôt déjà clairs (« Une liste nommée … existe déjà »).
+      throw ErreurService(erreur.message, cause: erreur);
+    }
+  }
+
+  /// Renomme une liste personnelle (dont « En attente (perso) ») et la
+  /// renvoie à jour.
+  ///
+  /// Le nom est nettoyé ([nettoyerNomListe]). Lève une [ErreurService] pour
+  /// une liste système (Favoris, Suivis, Planifié, En attente), une liste
+  /// disparue, un nom vide, trop long ou déjà pris. Changer seulement la
+  /// casse du nom est accepté.
+  Future<ListeLecture> renommerListe(int idListe, String nom) async {
+    final propre = _validerNomListe(nom);
+    await _refuserNomListePris(propre, idListe: idListe);
+    try {
+      return await _depotListes.renommerListe(idListe, propre);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      throw ErreurService(erreur.message, cause: erreur);
+    }
+  }
+
+  /// Supprime une liste personnelle. Ses titres restent dans la
+  /// bibliothèque (seule leur appartenance à la liste disparaît) ; les
+  /// règles de téléchargement ne dépendent que de Favoris et Suivis, elles
+  /// ne changent donc pas.
+  ///
+  /// Lève une [ErreurService] pour une liste système ou une liste disparue.
+  Future<void> supprimerListe(int idListe) async {
+    try {
+      await _depotListes.supprimerListe(idListe);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      throw ErreurService(erreur.message, cause: erreur);
+    }
+  }
+
+  /// Enregistre l'ordre d'affichage des listes ([idsDansLOrdre] : de la
+  /// première à la dernière) et renvoie toutes les listes dans ce nouvel
+  /// ordre. Les listes système peuvent être déplacées comme les autres ;
+  /// une liste absente de [idsDansLOrdre] (créée entre-temps) est placée
+  /// après, sans rien perdre.
+  ///
+  /// Lève une [ErreurService], sans rien écrire, si une liste apparaît deux
+  /// fois ou n'existe plus.
+  Future<List<ListeLecture>> reordonnerListes(List<int> idsDansLOrdre) async {
+    try {
+      return await _depotListes.enregistrerOrdre(idsDansLOrdre);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      throw ErreurService(
+        "L'ordre des listes n'a pas pu être enregistré : ${erreur.message}",
+        cause: erreur,
+      );
+    }
+  }
+
+  // ------------------------------------------- Modification d'un titre (X6)
+
+  /// Modifie à la main la fiche du titre [idTitre] et renvoie le titre relu.
+  ///
+  /// Seuls les champs donnés (non `null`) changent, et ils sont
+  /// **protégés** : l'actualisation depuis le site ne les écrase plus
+  /// (`Titre.champsManuels`), jusqu'à [rendreChampsAuSite].
+  ///
+  /// - [nom] : espaces superflus retirés ; vide ou trop long
+  ///   ([longueurMaxNomTitre]) refusé.
+  /// - [titresAlternatifs] : remplacent tous les noms alternatifs (noms
+  ///   vides, en double ou identiques au nom principal retirés).
+  /// - [resume], [auteur], [statut] : un texte vide efface la valeur (qui
+  ///   reste protégée : le site ne la remettra pas).
+  /// - [categories] : remplacent toutes les catégories (noms vides et
+  ///   doublons retirés ; liste vide = aucune). Les regroupements de
+  ///   catégories (`ServiceCategories`) s'appliquent tels quels aux
+  ///   nouvelles catégories : rien d'autre à faire.
+  /// - [niveauContenu] : `safe`, `suggestive`, `erotica`, `pornographic`,
+  ///   ou un texte vide pour « inconnu ».
+  ///
+  /// Nom changé : la couverture enregistrée sur l'appareil suit le titre
+  /// dans son nouveau dossier. Aucune requête réseau. Lève une
+  /// [ErreurService] (titre disparu, nom vide ou trop long, niveau de
+  /// contenu inconnu) ; rien n'est alors écrit.
+  Future<Titre> modifierTitre(
+    int idTitre, {
+    String? nom,
+    List<TitreAlternatif>? titresAlternatifs,
+    String? resume,
+    String? auteur,
+    String? statut,
+    List<String>? categories,
+    String? niveauContenu,
+  }) async {
+    final avant = await _exigerTitre(idTitre);
+    final nomPropre = nom == null ? null : _validerNomTitre(nom);
+    final niveau = niveauContenu?.trim().toLowerCase();
+    if (niveau != null &&
+        niveau.isNotEmpty &&
+        !niveauxContenu.contains(niveau)) {
+      throw ErreurService(
+        'Niveau de contenu inconnu : « $niveau » (valeurs possibles : '
+        '${niveauxContenu.join(', ')}).',
+      );
+    }
+    final Titre apres;
+    try {
+      apres = await _depotTitres.enregistrerModificationManuelle(
+        idTitre,
+        nom: nomPropre,
+        titresAlternatifs: titresAlternatifs == null
+            ? null
+            : nettoyerTitresAlternatifs(
+                titresAlternatifs,
+                nomPrincipal: nomPropre ?? avant.nom,
+              ),
+        resume: resume,
+        auteur: auteur,
+        statut: statut,
+        categories: categories == null ? null : nettoyerCategories(categories),
+        niveauContenu: niveau,
+      );
+    } on ErreurBaseDeDonnees catch (erreur) {
+      throw ErreurService(erreur.message, cause: erreur);
+    }
+    if (apres.nom != avant.nom) {
+      await _deplacerCouvertureLocale(avant, apres);
+    }
+    return apres;
+  }
+
+  /// « Rend au site » les [champs] du titre [idTitre] : ils ne sont plus
+  /// protégés, et la prochaine actualisation du titre ([actualiserTitre])
+  /// les remplace par les valeurs du site (en attendant, la valeur modifiée
+  /// reste affichée). Renvoie le titre relu. Un champ qui n'était pas
+  /// protégé est ignoré ; aucune requête réseau.
+  ///
+  /// Lève une [ErreurService] si le titre n'existe plus.
+  Future<Titre> rendreChampsAuSite(int idTitre, Set<ChampTitre> champs) async {
+    final titre = await _exigerTitre(idTitre);
+    if (champs.isEmpty) return titre;
+    final bool trouve;
+    try {
+      trouve = await _depotTitres.rendreChampsAuSite(idTitre, champs);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      throw ErreurService(erreur.message, cause: erreur);
+    }
+    if (!trouve) throw const ErreurService("Ce titre n'existe plus.");
+    return await _depotTitres.chargerTitre(idTitre) ?? titre;
+  }
+
+  /// Nettoie [nom] (espaces superflus) et lève une [ErreurService] s'il est
+  /// vide ou trop long.
+  static String _validerNomTitre(String nom) {
+    final propre = nom.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (propre.isEmpty) {
+      throw const ErreurService("Le nom d'un titre ne peut pas être vide.");
+    }
+    if (propre.length > longueurMaxNomTitre) {
+      throw const ErreurService(
+        'Le nom est trop long ($longueurMaxNomTitre caractères au plus).',
+      );
+    }
+    return propre;
+  }
+
+  /// Noms alternatifs nettoyés pour une modification à la main : espaces
+  /// superflus retirés, noms vides, trop longs, identiques à [nomPrincipal]
+  /// ou en double (sans tenir compte de la casse) retirés, le premier
+  /// gardant sa place. La langue est mise en minuscules. Fonction pure.
+  static List<TitreAlternatif> nettoyerTitresAlternatifs(
+    List<TitreAlternatif> alternatifs, {
+    String? nomPrincipal,
+  }) {
+    final vus = <String>{
+      if (nomPrincipal != null) nomPrincipal.trim().toLowerCase(),
+    };
+    final propres = <TitreAlternatif>[];
+    for (final alternatif in alternatifs) {
+      final nom = alternatif.nom.trim().replaceAll(RegExp(r'\s+'), ' ');
+      if (nom.isEmpty || nom.length > longueurMaxNomTitre) continue;
+      if (!vus.add(nom.toLowerCase())) continue;
+      propres.add(
+        TitreAlternatif(
+          nom: nom,
+          langue: alternatif.langue.trim().toLowerCase(),
+        ),
+      );
+    }
+    return propres;
+  }
+
+  /// Catégories nettoyées pour une modification à la main : noms vides
+  /// retirés, doublons (même nom normalisé, `Categorie.normaliserNom`)
+  /// retirés, le premier gardant sa place. Fonction pure.
+  static List<String> nettoyerCategories(List<String> categories) {
+    final vus = <String>{};
+    return <String>[
+      for (final categorie in categories)
+        if (Categorie.normaliserNom(categorie) case final nom
+            when nom.isNotEmpty && vus.add(nom))
+          categorie.trim(),
+    ];
+  }
+
+  /// Après un changement de nom : la couverture enregistrée sur l'appareil
+  /// est copiée dans le dossier du nouveau nom, puis retirée de l'ancien.
+  /// Ne lève jamais (la couverture n'est qu'un confort : à défaut, elle est
+  /// retéléchargée au prochain affichage).
+  // LIMITE : les archives déjà téléchargées restent dans l'ancien dossier
+  // (leur `nom_archive` enregistré les retrouve) ; les suivantes vont dans
+  // le nouveau. Celles d'avant la migration 4 (sans `nom_archive`) seraient
+  // cherchées dans le nouveau dossier : le contrôle du démarrage les marque
+  // alors « non téléchargées » et les règles les retéléchargent.
+  Future<void> _deplacerCouvertureLocale(Titre ancien, Titre nouveau) async {
+    final stockage = _stockage;
+    if (stockage == null) return;
+    try {
+      // Même dossier (le nettoyage du nom pour le système de fichiers peut
+      // donner le même) : rien à déplacer, et surtout rien à effacer.
+      if (stockage.cheminDossierTitre(ancien) ==
+          stockage.cheminDossierTitre(nouveau)) {
+        return;
+      }
+      final chemin = await stockage.cheminCouverture(ancien);
+      if (chemin == null) return;
+      final octets = await stockage.chargerCouverture(ancien);
+      if (octets == null) return;
+      await stockage.enregistrerCouverture(
+        nouveau,
+        octets,
+        extensionImage(octets, Uri.file(chemin).toString()),
+      );
+      await stockage.supprimerCouverture(ancien);
+    } catch (erreur) {
+      debugPrint('Couverture de « ${nouveau.nom} » non déplacée : $erreur');
+    }
+  }
 
   /// Supprime un titre, ses chapitres et sa couverture enregistrée.
   ///
@@ -2383,7 +2663,8 @@ class ServiceBibliotheque {
   }
 
   /// Écrit la couverture dans le dossier du titre (sans stockage : rien).
-  /// L'extension vient de [origine] (adresse ou chemin), `jpg` à défaut.
+  /// L'extension vient des octets (format reconnu), sinon de [origine]
+  /// (adresse ou chemin), `jpg` à défaut : voir [extensionImage].
   Future<void> _enregistrerCouvertureSurAppareil(
     Titre titre,
     Uint8List octets,
@@ -2391,17 +2672,12 @@ class ServiceBibliotheque {
   ) async {
     final stockage = _stockage;
     if (stockage == null) return;
-    final extension = estCouvertureLocale(origine)
-        ? StockageTelechargements.extensionDepuisUrl(
-            Uri.file(origine).toString(),
-          )
-        : StockageTelechargements.extensionDepuisUrl(origine);
+    final extension = extensionImage(
+      octets,
+      estCouvertureLocale(origine) ? Uri.file(origine).toString() : origine,
+    );
     try {
-      await stockage.enregistrerCouverture(
-        titre,
-        octets,
-        extension ?? extensionImageParDefaut,
-      );
+      await stockage.enregistrerCouverture(titre, octets, extension);
     } on ErreurStockage catch (erreur) {
       throw ErreurService(
         "La couverture n'a pas pu être enregistrée sur l'appareil.",

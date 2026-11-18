@@ -134,7 +134,11 @@ class ContenuExport {
     this.languesGenerales = const <String>[],
     this.niveauxContenu = const <String>[],
     this.equivalences = const <EquivalenceExportee>[],
+    this.archiveComplete = false,
   });
+
+  /// Réglage « Archive complète » du client (format 4).
+  final bool archiveComplete;
 
   /// Regroupements de catégories (format 3), triés par référence puis par
   /// catégorie.
@@ -449,6 +453,9 @@ class ServiceExport {
       niveauxContenu: parametres == null
           ? const <String>[]
           : await parametres.chargerNiveauxContenu(),
+      archiveComplete:
+          await parametres?.chargerArchiveComplete() ??
+          ServiceParametres.archiveCompleteParDefaut,
       equivalences: <EquivalenceExportee>[
         // Groupes déjà triés par référence, rattachées triées par nom.
         for (final groupe
@@ -508,9 +515,10 @@ class ServiceExport {
   /// Contenu du fichier JSON (indenté, UTF-8 sans échappement des accents).
   /// Fonction pure.
   ///
-  /// Format `versionFormatExport` (3) : `format`, `version`, `dateExport`
+  /// Format `versionFormatExport` (4) : `format`, `version`, `dateExport`
   /// (UTC, ISO 8601), `versionApplication`, `reglages` (`langues`,
-  /// `niveauxContenu`), `listes`, `sources`, `titres`, `equivalences`. Les titres désignent
+  /// `niveauxContenu`, `archiveComplete`), `listes`, `sources`, `titres`,
+  /// `equivalences`. Les titres désignent
   /// leur site par son nom **et** son `urlBase` (unique), pour que l'import
   /// retrouve le bon site même si deux sites portent le même nom. Champ
   /// `sites` (étape 8, ajout compatible) : tous les sites du titre (`url`,
@@ -524,6 +532,10 @@ class ServiceExport {
   /// Format 3 (compatible) : `equivalences`, regroupements de catégories
   /// (`categorie`, `reference`, par nom). Toujours écrit, même vide, pour
   /// que l'import distingue « aucun regroupement » d'un ancien fichier.
+  ///
+  /// Format 4 (compatible) : `titres[].champsManuels` (noms de `ChampTitre`
+  /// des champs modifiés à la main, liste vide si aucun) et
+  /// `reglages.archiveComplete` (booléen).
   static String produireJson(ContenuExport contenu) {
     Map<String, Object?> versSource(Source source) => <String, Object?>{
       'nom': source.nom,
@@ -598,6 +610,13 @@ class ServiceExport {
         // Format 2 (import R8) : la fiche importée est complète sans
         // relire le site.
         'resume': titre.resume,
+        // Format 4 : champs modifiés à la main (noms de `ChampTitre`, dans
+        // l'ordre de l'énumération pour un fichier stable). Sans eux, la
+        // première actualisation après un import effacerait ces choix.
+        'champsManuels': <String>[
+          for (final champ in ChampTitre.values)
+            if (titre.estManuel(champ)) champ.name,
+        ],
         'dernierChapitreLu': versChapitre(exporte.dernierChapitreLu),
         'nombreChapitres': exporte.nombreChapitres,
       };
@@ -611,6 +630,8 @@ class ServiceExport {
       'reglages': <String, Object?>{
         'langues': contenu.languesGenerales,
         'niveauxContenu': contenu.niveauxContenu,
+        // Format 4 : réglage « Archive complète ».
+        'archiveComplete': contenu.archiveComplete,
       },
       'listes': <Map<String, Object?>>[
         for (final liste in contenu.listes)

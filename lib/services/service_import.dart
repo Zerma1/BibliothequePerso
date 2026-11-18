@@ -129,7 +129,12 @@ class TitreImporte {
     this.resume,
     this.auteur,
     this.statut,
+    this.champsManuels = const <ChampTitre>{},
   });
+
+  /// Champs modifiés à la main sur l'appareil d'origine (format 4 ; vide
+  /// pour les formats 1 à 3). Noms inconnus de cette version ignorés.
+  final Set<ChampTitre> champsManuels;
 
   /// Position du titre dans le fichier (1 pour le premier).
   final int numero;
@@ -222,10 +227,15 @@ class ContenuImport {
     this.titres = const <TitreImporte>[],
     this.equivalences = const <EquivalenceImportee>[],
     this.erreursLecture = const <ErreurLigneImport>[],
+    this.archiveComplete,
   });
 
-  /// Version du format du fichier (1 à 3).
+  /// Version du format du fichier (1 à 4).
   final int versionFormat;
+
+  /// Réglage « Archive complète » (format 4), ou `null` s'il est absent du
+  /// fichier.
+  final bool? archiveComplete;
 
   /// Regroupements de catégories (format 3 ; vide pour les formats 1 et 2).
   final List<EquivalenceImportee> equivalences;
@@ -667,7 +677,11 @@ class ServiceImport {
     final reglages = donnees['reglages'];
     final reglagesLus = reglages is Map<String, Object?> ? reglages : null;
     final niveaux = reglagesLus?['niveauxContenu'];
+    final archiveComplete = reglagesLus?['archiveComplete'];
     return ContenuImport(
+      // Absent (formats 1 à 3) ou d'un autre type : réglage de l'appareil
+      // laissé tel quel.
+      archiveComplete: archiveComplete is bool ? archiveComplete : null,
       versionFormat: version,
       versionApplication: _texte(donnees, 'versionApplication'),
       languesGenerales: reglagesLus == null
@@ -846,6 +860,12 @@ class ServiceImport {
       resume: _texte(brut, 'resume'),
       auteur: _texte(brut, 'auteur'),
       statut: _texte(brut, 'statut'),
+      // Format 4 : même décodage que la base (noms inconnus ignorés).
+      champsManuels: <ChampTitre>{
+        for (final nomChamp in _textes(brut, 'champsManuels'))
+          for (final champ in ChampTitre.values)
+            if (champ.name == nomChamp) champ,
+      },
     );
   }
 
@@ -1209,8 +1229,9 @@ class _Ecriture {
 
   // ------------------------------------------------------------- Réglages
 
-  /// Enregistre les langues et niveaux de contenu du fichier. Renvoie
-  /// `true` si au moins l'un des deux a été écrit.
+  /// Enregistre les langues, les niveaux de contenu et (format 4) le réglage
+  /// « Archive complète » du fichier. Renvoie `true` si au moins l'un d'eux
+  /// a été écrit.
   Future<bool> importerReglages() async {
     final depot = _service._depotParametres;
     final parametres = _service._serviceParametres;
@@ -1244,6 +1265,23 @@ class _Ecriture {
           );
         } else {
           await parametres!.enregistrerNiveauxContenu(niveaux);
+        }
+        applique = true;
+      }
+      // Format 4 : « Archive complète » suit les autres réglages généraux
+      // (restauration sur un nouvel appareil, ou choix explicite du client).
+      // Les téléchargements correspondants commencent à la prochaine
+      // application des règles (démarrage, ou appel de l'interface).
+      final archiveComplete = _contenu.archiveComplete;
+      if (archiveComplete != null) {
+        if (depot != null) {
+          await depot.enregistrerEntier(
+            ServiceParametres.cleArchiveComplete,
+            archiveComplete ? 1 : 0,
+            executeur: _executeur,
+          );
+        } else {
+          await parametres!.enregistrerArchiveComplete(archiveComplete);
         }
         applique = true;
       }
@@ -1356,6 +1394,9 @@ class _Ecriture {
             : importe.langues.join(','),
         niveauContenu: importe.niveauContenu,
         couvertureChoisie: importe.couvertureChoisie,
+        // Format 4 : les champs modifiés à la main restent protégés sur ce
+        // nouvel appareil (sinon la première actualisation les écraserait).
+        champsManuels: importe.champsManuels,
         // Date de vérification laissée vide : la prochaine vérification
         // traite ce titre comme jamais vérifié et récupère ses chapitres.
       ),
@@ -1395,22 +1436,31 @@ class _Ecriture {
           ))
         categorie.nom,
     ];
+    // Champs modifiés à la main sur cet appareil (migration 10) : choix du
+    // client, jamais complétés par l'import (`enregistrerTitre` les
+    // ignorerait de toute façon ; les écarter ici garde le bilan juste).
+    // Les champs protégés du fichier ne sont repris que pour un titre
+    // ajouté : rien n'est remplacé sur un titre existant.
     final categoriesManquantes = <String>{
-      for (final brute in importe.categories)
-        if (Categorie.normaliserNom(brute) case final nom
-            when nom.isNotEmpty && !categoriesActuelles.contains(nom))
-          nom,
+      if (!existant.estManuel(ChampTitre.categories))
+        for (final brute in importe.categories)
+          if (Categorie.normaliserNom(brute) case final nom
+              when nom.isNotEmpty && !categoriesActuelles.contains(nom))
+            nom,
     };
     final nomsActuels = <String>{
       existant.nom,
       for (final alternatif in existant.titresAlternatifs) alternatif.nom,
     };
     final alternatifsManquants = <TitreAlternatif>[
-      for (final alternatif in importe.titresAlternatifs)
-        if (!nomsActuels.contains(alternatif.nom)) alternatif,
+      if (!existant.estManuel(ChampTitre.titresAlternatifs))
+        for (final alternatif in importe.titresAlternatifs)
+          if (!nomsActuels.contains(alternatif.nom)) alternatif,
     ];
     final niveauManquant =
-        existant.niveauContenu == null && importe.niveauContenu != null;
+        !existant.estManuel(ChampTitre.niveauContenu) &&
+        existant.niveauContenu == null &&
+        importe.niveauContenu != null;
     if (categoriesManquantes.isNotEmpty ||
         alternatifsManquants.isNotEmpty ||
         niveauManquant) {

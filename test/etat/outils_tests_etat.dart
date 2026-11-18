@@ -35,6 +35,7 @@ import 'package:bibliotheque_perso/modeles/liste_lecture.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/telechargement.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
+import 'package:bibliotheque_perso/modeles/titre_alternatif.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/services/planification_mises_a_jour.dart';
 import 'package:bibliotheque_perso/services/politique_telechargement.dart';
@@ -814,6 +815,80 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
   }
 
   @override
+  Future<ListeLecture> renommerListe(int idListe, String nom) async {
+    final index = listes.indexWhere((liste) => liste.id == idListe);
+    if (index < 0) throw const ErreurService("Cette liste n'existe plus.");
+    final renommee = listes[index].copierAvec(
+      nom: ServiceBibliotheque.nettoyerNomListe(nom),
+    );
+    listes[index] = renommee;
+    return renommee;
+  }
+
+  @override
+  Future<List<ListeLecture>> reordonnerListes(List<int> idsDansLOrdre) async {
+    final ordonnees = <ListeLecture>[
+      for (final id in idsDansLOrdre)
+        ...listes.where((liste) => liste.id == id),
+      ...listes.where((liste) => !idsDansLOrdre.contains(liste.id)),
+    ];
+    listes
+      ..clear()
+      ..addAll(<ListeLecture>[
+        for (var i = 0; i < ordonnees.length; i++)
+          ordonnees[i].copierAvec(ordre: i),
+      ]);
+    return List<ListeLecture>.of(listes);
+  }
+
+  @override
+  Future<Titre> modifierTitre(
+    int idTitre, {
+    String? nom,
+    List<TitreAlternatif>? titresAlternatifs,
+    String? resume,
+    String? auteur,
+    String? statut,
+    List<String>? categories,
+    String? niveauContenu,
+  }) async {
+    final index = titres.indexWhere((titre) => titre.id == idTitre);
+    if (index < 0) throw const ErreurService("Ce titre n'existe plus.");
+    final avant = titres[index];
+    final modifie = avant.copierAvec(
+      nom: nom ?? avant.nom,
+      titresAlternatifs: titresAlternatifs ?? avant.titresAlternatifs,
+      resume: resume ?? avant.resume,
+      auteur: auteur ?? avant.auteur,
+      statut: statut ?? avant.statut,
+      niveauContenu: niveauContenu ?? avant.niveauContenu,
+      champsManuels: <ChampTitre>{
+        ...avant.champsManuels,
+        if (nom != null) ChampTitre.nom,
+        if (titresAlternatifs != null) ChampTitre.titresAlternatifs,
+        if (resume != null) ChampTitre.resume,
+        if (auteur != null) ChampTitre.auteur,
+        if (statut != null) ChampTitre.statut,
+        if (categories != null) ChampTitre.categories,
+        if (niveauContenu != null) ChampTitre.niveauContenu,
+      },
+    );
+    titres[index] = modifie;
+    return modifie;
+  }
+
+  @override
+  Future<Titre> rendreChampsAuSite(int idTitre, Set<ChampTitre> champs) async {
+    final index = titres.indexWhere((titre) => titre.id == idTitre);
+    if (index < 0) throw const ErreurService("Ce titre n'existe plus.");
+    final rendu = titres[index].copierAvec(
+      champsManuels: titres[index].champsManuels.difference(champs),
+    );
+    titres[index] = rendu;
+    return rendu;
+  }
+
+  @override
   Future<void> supprimerTitre(int idTitre) async {
     titres.removeWhere((titre) => titre.id == idTitre);
   }
@@ -879,6 +954,7 @@ class FauxServiceAjoutSite implements ServiceAjoutSite {
     String? nom,
     String langueParDefaut = '',
     TypeSource? typeForce,
+    String? configurationSelecteurs,
   }) async {
     dernierAppel = (
       url: url,
@@ -1500,6 +1576,17 @@ class FauxServiceParametres implements ServiceParametres {
   @override
   Future<void> reinitialiserNiveauxContenu() async {
     niveaux = null;
+  }
+
+  /// Réglage « Archive complète » enregistré (faux stockage).
+  bool archiveComplete = ServiceParametres.archiveCompleteParDefaut;
+
+  @override
+  Future<bool> chargerArchiveComplete() async => archiveComplete;
+
+  @override
+  Future<void> enregistrerArchiveComplete(bool active) async {
+    archiveComplete = active;
   }
 
   /// Verrou de la file « enregistré ».

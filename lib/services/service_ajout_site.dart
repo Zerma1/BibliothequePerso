@@ -5,18 +5,36 @@ import 'dart:convert';
 
 import '../donnees/depot_sources.dart';
 import '../modeles/source.dart';
+import '../sources/client_http_poli.dart';
 import '../sources/detecteur_type_site.dart';
 import '../sources/erreur_source.dart';
+import '../sources/lisibilite_site.dart';
+import '../sources/rapport_erreur_source.dart' show extraireDebutReponse;
 import '../sources/source_generique.dart' show ConfigurationGenerique;
 import 'erreur_service.dart';
+import 'service_bibliotheque.dart' show ServiceBibliotheque;
 
 /// Valide une URL, détecte le type du site et enregistre la [Source].
 class ServiceAjoutSite {
   /// Crée le service.
-  const ServiceAjoutSite(this._depotSources, this._detecteur);
+  ///
+  /// [client] (facultatif pour ne pas casser les appelants existants) sert
+  /// à vérifier, avant l'ajout d'un site générique, que la page collée par
+  /// le client est lisible (voir [ajouterSite]). Il doit être le client
+  /// unique de l'application (délai par domaine partagé). Sans lui, cette
+  /// vérification n'est pas faite.
+  const ServiceAjoutSite(
+    this._depotSources,
+    this._detecteur, {
+    ClientHttpPoli? client,
+    // Un paramètre nommé ne peut pas être privé en Dart : champ privé
+    // initialisé dans la liste d'initialisation.
+    // ignore: prefer_initializing_formals
+  }) : _client = client;
 
   final DepotSources _depotSources;
   final DetecteurTypeSite _detecteur;
+  final ClientHttpPoli? _client;
 
   /// Ramène une URL quelconque du site à son URL de base (`schéma://hôte`).
   ///
@@ -47,13 +65,27 @@ class ServiceAjoutSite {
   /// nouvelle détection. [nom] et [langueParDefaut] sont facultatifs ;
   /// [typeForce] permet au client de corriger un type mal détecté.
   ///
-  /// Lève une `ErreurSource` (URL invalide, site injoignable) ou une
-  /// `ErreurBaseDeDonnees`.
+  /// **Site générique et adresse précise** (retour C2 de la 0.2.1-test :
+  /// une page Wikipédia était acceptée) : quand le type détecté (non forcé)
+  /// est générique et que [url] a un chemin (pas seulement la racine du
+  /// site), la page collée est récupérée (une requête de plus, avec le délai
+  /// par domaine) et passée à `verifierLisibilite`, avec les réglages
+  /// [configurationSelecteurs] que le client s'apprête à enregistrer. Si
+  /// elle n'est pas lisible, **rien n'est enregistré** et une `ErreurSource`
+  /// porte la première raison (l'interface propose alors « Pourquoi ce site
+  /// n'est pas lisible ? »). Une racine seule reste acceptée : l'accueil
+  /// d'un site à plusieurs œuvres ne liste pas de chapitres. Vérification
+  /// faite seulement si le service a reçu le client HTTP.
+  ///
+  /// Lève une `ErreurSource` (URL invalide, site injoignable, page
+  /// illisible), une [ErreurService] ([typeForce] incohérent avec le site,
+  /// voir [erreurTypeSite]) ou une `ErreurBaseDeDonnees`.
   Future<Source> ajouterSite(
     String url, {
     String? nom,
     String langueParDefaut = '',
     TypeSource? typeForce,
+    String? configurationSelecteurs,
   }) async {
     final uri = DetecteurTypeSite.validerUrl(url);
     final urlBase = calculerUrlBase(uri);
@@ -66,9 +98,19 @@ class ServiceAjoutSite {
       return existante;
     }
 
+    // Type corrigé par le client : refusé avant toute requête s'il ne peut
+    // pas lire ce site (MangaDex forcé sur un autre domaine…).
+    if (typeForce != null) {
+      final refus = erreurTypeSite(urlBase, typeForce);
+      if (refus != null) throw ErreurService(refus);
+    }
     // Une ErreurSource du détecteur remonte telle quelle : le type n'est pas
     // encore connu à ce stade (le rapport d'erreur indiquera « inconnu »).
     final type = typeForce ?? await _detecteur.detecter(urlBase);
+    if (typeForce == null && type == TypeSource.generique) {
+      // Réseau d'abord : un refus ici n'a encore rien écrit.
+      await _verifierPageCollee(uri, configurationSelecteurs);
+    }
     final nomFinal = (nom == null || nom.trim().isEmpty)
         ? proposerNom(uri)
         : nom.trim();
@@ -83,8 +125,86 @@ class ServiceAjoutSite {
     );
   }
 
+  /// `true` si [uri] désigne seulement la racine d'un site (chemin vide ou
+  /// `/`, sans paramètres) : l'accueil d'un site à plusieurs œuvres, qui ne
+  /// liste pas lui-même de chapitres. Fonction pure.
+  static bool estRacineSeule(Uri uri) =>
+      (uri.path.isEmpty || uri.path == '/') && uri.query.isEmpty;
+
+  /// Vérification C2 de [ajouterSite] : la page collée [uri] (si ce n'est
+  /// pas une racine seule) doit être lisible par l'adaptateur générique.
+  /// Lève une `ErreurSource` sinon.
+  Future<void> _verifierPageCollee(
+    Uri uri,
+    String? configurationSelecteurs,
+  ) async {
+    final client = _client;
+    if (client == null || estRacineSeule(uri)) return;
+    final String html;
+    try {
+      // Une seule requête : la page n'est lue qu'une fois, sans suivre ses
+      // liens (charge des sites, PLAYBOOK.md section 10).
+      html = await client.recupererTexte(uri);
+    } on ErreurSource catch (erreur) {
+      throw erreur.avecContexte(typeDetecte: TypeSource.generique);
+    }
+    final diagnostic = verifierLisibilite(
+      html,
+      uri,
+      configurationSelecteurs: configurationSelecteurs,
+    );
+    if (diagnostic.estLisible) return;
+    throw ErreurSource(
+      uri.toString(),
+      diagnostic.raisons.first,
+      typeDetecte: TypeSource.generique,
+      protectionAntiRobot: diagnostic.protectionAntiRobot,
+      // Début de la page (déjà nettoyé des données personnelles) pour le
+      // rapport d'erreur exportable.
+      extraitReponse: extraireDebutReponse(html),
+    );
+  }
+
+  /// Motif du refus du type [type] pour le site d'adresse [urlBase], ou
+  /// `null` s'il est cohérent. Fonction pure.
+  ///
+  /// Les sites reconnus par leur domaine (MangaDex, Scan-Manga, WEBTOON) ne
+  /// sont lus que par leur adaptateur dédié : leur type ne peut pas changer,
+  /// et ces types ne peuvent pas être donnés à un autre site (l'adaptateur
+  /// n'y comprendrait rien). Les types Madara, MangaThemesia et générique
+  /// sont libres pour tout autre site : le détecteur peut se tromper, et le
+  /// client corrige.
+  static String? erreurTypeSite(String urlBase, TypeSource type) {
+    final uri = Uri.tryParse(urlBase.trim());
+    final parDomaine = uri == null
+        ? null
+        : DetecteurTypeSite.verifierDomaine(uri);
+    if (parDomaine != null && type != parDomaine) {
+      return "Ce site est lu par son adaptateur dédié "
+          "(${ServiceBibliotheque.nomTypeSource(parDomaine)}) : son type ne "
+          'peut pas être changé.';
+    }
+    if (parDomaine == null &&
+        ServiceBibliotheque.estTypeAAdaptateurParDomaine(type)) {
+      return 'Le type ${ServiceBibliotheque.nomTypeSource(type)} est réservé '
+          'au site officiel ; choisissez WordPress Madara, WordPress '
+          'MangaThemesia ou générique.';
+    }
+    return null;
+  }
+
   /// Modifie une source existante (nom, langues, type, activation, réglages
   /// d'un site générique).
+  ///
+  /// **Changement de type** (tâche X5) : accepté s'il est cohérent
+  /// ([erreurTypeSite], sinon [ErreurService] et rien n'est écrit). Le type
+  /// n'est vérifié que s'il change : un site enregistré avant cette règle
+  /// peut toujours être renommé. L'adaptateur suit le nouveau type dès la
+  /// lecture suivante (il est recréé à chaque lecture). Quitter le type
+  /// générique **efface** ses réglages avancés (sélecteurs CSS), qui ne
+  /// servent qu'à lui. Les adresses des titres et chapitres déjà
+  /// enregistrés ne changent pas : la prochaine actualisation les relit
+  /// avec le nouvel adaptateur.
   ///
   /// Les langues sont des codes ISO 639-1 séparés par des virgules, par ordre
   /// de préférence (« fr,en ») ; elles sont mises en minuscules et les
@@ -105,11 +225,21 @@ class ServiceAjoutSite {
         .join(',');
     final brut = source.configurationSelecteurs;
     final id = source.id;
-    final avant = id == null
-        ? null
-        : (await _depotSources.chargerSource(id))?.configurationSelecteurs;
+    final ancienne = id == null ? null : await _depotSources.chargerSource(id);
+    if (ancienne == null || ancienne.typeSource != source.typeSource) {
+      final refus = erreurTypeSite(
+        ancienne?.urlBase ?? source.urlBase,
+        source.typeSource,
+      );
+      if (refus != null) throw ErreurService(refus);
+    }
+    final avant = ancienne?.configurationSelecteurs;
     final String? reglages;
-    if (brut != null && brut == avant) {
+    if (source.typeSource != TypeSource.generique) {
+      // Réglages propres au type générique : inutiles (et trompeurs dans le
+      // formulaire) pour un autre type.
+      reglages = null;
+    } else if (brut != null && brut == avant) {
       reglages = brut;
     } else {
       reglages = normaliserReglagesGeneriques(brut);

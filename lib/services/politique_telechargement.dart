@@ -146,19 +146,36 @@ class PlanTelechargement {
 /// retiré du titre (hors de [idsSourcesLiees]) ne sont jamais retenus ; leurs
 /// archives sont à supprimer (suppression différée de 24 h côté service),
 /// même pour un titre ni favori ni suivi.
+///
+/// **Archive complète** ([archiveComplete], décision du client sur la
+/// 0.2.1-test : le NAS garde tous les chapitres au cas où les sites les
+/// suppriment) : pour **tout** titre, favori, suivi ou non, chaque numéro
+/// téléchargeable est voulu (une version par numéro, choisie comme pour un
+/// favori : langue préférée, version déjà téléchargée gardée pour un numéro
+/// lu). Les autres langues, les chapitres externes et ceux des sites retirés
+/// ou en lien seul ne sont jamais téléchargés ; et **rien** n'est à
+/// supprimer (ni fenêtre glissante, ni « N derniers lus », ni autre langue,
+/// ni site retiré) : seul le client supprime une archive.
 class PolitiqueTelechargement {
   /// Crée la politique avec les [reglages] et les [languesPreferees] (codes
   /// ISO 639-1, par ordre de préférence).
   ///
   /// [idSourcePrincipale] : site principal du titre (départage deux versions
   /// équivalentes) ; [idsSourcesLiees] : sites encore liés au titre (`null`
-  /// = tous les chapitres sont considérés comme venant d'un site lié).
+  /// = tous les chapitres sont considérés comme venant d'un site lié) ;
+  /// [archiveComplete] : réglage « Archive complète » du client.
   const PolitiqueTelechargement({
     this.reglages = const ReglagesTelechargement(),
     this.languesPreferees = const <String>[],
     this.idSourcePrincipale,
     this.idsSourcesLiees,
+    this.archiveComplete = false,
   });
+
+  /// `true` si le client a activé « Archive complète » : tout est voulu,
+  /// rien n'est supprimé automatiquement (voir la documentation de la
+  /// classe).
+  final bool archiveComplete;
 
   /// Limites appliquées.
   final ReglagesTelechargement reglages;
@@ -366,6 +383,7 @@ class PolitiqueTelechargement {
     required bool estFavori,
     required bool estSuivi,
   }) {
+    if (archiveComplete) return _calculerArchiveComplete(chapitres);
     if (!estFavori && !estSuivi) {
       // Les téléchargements manuels sont conservés, sauf ceux d'un site
       // retiré du titre : le client a décidé de ne plus suivre ce site.
@@ -487,6 +505,34 @@ class PolitiqueTelechargement {
       idsVoulus: voulus,
       idsATelecharger: aTelecharger,
       idsASupprimer: aSupprimer,
+    );
+  }
+
+  /// Plan en « Archive complète » ([archiveComplete]) : une version par
+  /// numéro téléchargeable, toutes voulues, aucune suppression.
+  PlanTelechargement _calculerArchiveComplete(List<Chapitre> chapitres) {
+    final voulus = <int>{};
+    final aTelecharger = <int>[];
+    for (final numero in choisirVersions(chapitres)) {
+      // Même filtre que les règles ordinaires : un numéro seulement externe,
+      // dans une autre langue ou d'un site retiré n'est jamais téléchargé
+      // (règle du client : jamais d'autre langue, même pour l'archive).
+      if (!numero.versions.any(estTelechargeable)) continue;
+      // Choix d'un favori : pour un numéro lu, la version déjà sur
+      // l'appareil suffit (pas de second téléchargement dans la langue
+      // préférée d'un chapitre déjà lu et archivé).
+      final retenue = _meilleureVersion(_candidates(numero, estFavori: true));
+      voulus.add(retenue.id!);
+      if (!retenue.estTelecharge) aTelecharger.add(retenue.id!);
+    }
+    // Aucune suppression automatique : les archives d'une autre langue, d'un
+    // site retiré ou en trop restent (le client peut toujours les supprimer
+    // lui-même). Les suppressions déjà prévues sont annulées par le service,
+    // qui voit qu'elles ne sont plus dans `idsASupprimer`.
+    return PlanTelechargement(
+      idsVoulus: voulus,
+      idsATelecharger: aTelecharger,
+      idsASupprimer: const <int>[],
     );
   }
 

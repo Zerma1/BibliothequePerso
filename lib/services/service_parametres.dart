@@ -146,6 +146,43 @@ class ServiceParametres {
     }
   }
 
+  /// Clé : « Archive complète » (retour du client sur la 0.2.1-test, X7).
+  /// Activée, **tous** les chapitres connus de **tous** les titres de la
+  /// bibliothèque sont voulus (une version par numéro, dans les langues du
+  /// client), et aucune archive n'est supprimée automatiquement : le dossier
+  /// des chapitres (en général un NAS) garde tout, au cas où les sites
+  /// retireraient des chapitres. Voir `PolitiqueTelechargement.archiveComplete`.
+  ///
+  /// Enregistrée comme un entier (1 activée, 0 désactivée) : la table
+  /// `parametres` ne stocke que du texte, et `DepotParametres` sait déjà lire
+  /// et écrire les entiers.
+  static const String cleArchiveComplete = 'telechargement.archive_complete';
+
+  /// « Archive complète » tant que le client n'a rien choisi : désactivée
+  /// (les règles favoris / suivis s'appliquent).
+  static const bool archiveCompleteParDefaut = false;
+
+  /// `true` si le client a activé « Archive complète » ([cleArchiveComplete]).
+  /// Une valeur illisible vaut [archiveCompleteParDefaut].
+  Future<bool> chargerArchiveComplete() async {
+    final valeur = await _depot.chargerEntier(cleArchiveComplete);
+    // Toute valeur autre que 0 ou 1 (écrite à la main, base abîmée) est
+    // ignorée : activer l'archive complète par erreur lancerait des milliers
+    // de téléchargements.
+    if (valeur == 1) return true;
+    if (valeur == 0) return false;
+    return archiveCompleteParDefaut;
+  }
+
+  /// Active ou désactive « Archive complète » ([cleArchiveComplete]).
+  ///
+  /// N'applique pas les règles : l'appelant lance ensuite
+  /// `ServiceTelechargement.appliquerReglesATous` (mise en file de tous les
+  /// chapitres à l'activation ; à la désactivation, les archives qui ne sont
+  /// plus voulues passent en suppression différée de 24 h).
+  Future<void> enregistrerArchiveComplete(bool active) =>
+      _depot.enregistrerEntier(cleArchiveComplete, active ? 1 : 0);
+
   /// Nombre de recherches de mises à jour par jour (2 par défaut : 00:00 et
   /// 12:00 UTC).
   Future<int> chargerVerificationsParJour() async {
