@@ -13,6 +13,7 @@ import 'package:bibliotheque_perso/donnees/depot_titres_sources.dart';
 import 'package:bibliotheque_perso/donnees/stockage_telechargements.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
+import 'package:bibliotheque_perso/modeles/journal.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/telechargement.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
@@ -286,6 +287,41 @@ void main() {
         .where((corps) => corps['success'] == false);
     expect(echecsSignales, hasLength(1));
   });
+
+  test(
+    'note dans le journal la mise en file, le début, la fin et un échec',
+    () async {
+      final journal = JournalMemoire();
+      Journal.actuel = journal;
+      addTearDown(() => Journal.actuel = const JournalSilencieux());
+      final premier = await chapitre(1);
+      await service.telechargerChapitre(premier.id!);
+      await service.lancerTraitement();
+
+      final messages = journal.entrees
+          .where((e) => e.categorie == CategorieJournal.telechargement)
+          .map((e) => e.message)
+          .toList();
+      expect(messages, contains(contains('mis en file (demande manuelle)')));
+      expect(messages, contains(endsWith(': début')));
+      expect(
+        messages,
+        contains(allOf(contains('terminé en'), contains('$nombreImages page'))),
+      );
+
+      nombre403Restants = 99;
+      final second = await chapitre(2);
+      await service.telechargerChapitre(second.id!);
+      await service.lancerTraitement();
+
+      final echec = journal.entrees.lastWhere(
+        (e) => e.niveau == NiveauJournal.erreur,
+      );
+      expect(echec.categorie, CategorieJournal.telechargement);
+      expect(echec.message, contains('en échec'));
+      expect(echec.erreur, isNotNull);
+    },
+  );
 
   test('un échec répété met le téléchargement en échec sans archive', () async {
     nombre403Restants = 99;

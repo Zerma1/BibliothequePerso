@@ -5,6 +5,7 @@ library;
 import 'package:html/dom.dart' show Element;
 import 'package:html/parser.dart' show parse;
 
+import '../modeles/journal.dart';
 import '../modeles/source.dart';
 import 'client_http_poli.dart';
 import 'erreur_source.dart';
@@ -70,10 +71,20 @@ class DetecteurTypeSite {
     final uri = validerUrl(url);
     final parDomaine = verifierDomaine(uri);
     if (parDomaine != null) {
+      Journal.actuel.info(
+        CategorieJournal.sources,
+        'Type détecté pour ${uri.host} : ${parDomaine.name} (domaine connu)',
+      );
       return parDomaine;
     }
     final html = await _client.recupererTexte(uri);
-    return detecterDepuisHtml(html);
+    final type = detecterDepuisHtml(html);
+    Journal.actuel.info(
+      CategorieJournal.sources,
+      'Type détecté pour ${uri.host} : ${type.name} (page analysée'
+      '${type == TypeSource.generique ? ', aucun thème reconnu' : ''})',
+    );
+    return type;
   }
 
   /// Détecte le type à partir du [html] de la page d'accueil (sans réseau).

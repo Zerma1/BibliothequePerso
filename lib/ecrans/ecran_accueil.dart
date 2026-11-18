@@ -9,6 +9,7 @@ import '../etat/etat_dossier_chapitres.dart';
 import '../etat/etat_mises_a_jour.dart';
 import '../etat/etat_parutions.dart';
 import '../etat/etat_telechargements.dart';
+import '../etat/journal_interface.dart';
 import '../widgets/bandeaux_dossier_chapitres.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/textes.dart';
@@ -102,6 +103,11 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
       // Des chapitres ont pu être lus depuis la bibliothèque : la liste et
       // ses badges « Nouveau » sont relus (base seulement, sans réseau).
       context.read<EtatParutions>().charger();
+    }
+    if (index != _indexOnglet) {
+      // Le journal garde le fil de la navigation : utile pour relire un
+      // retour de test (« l'erreur est arrivée en ouvrant tel onglet »).
+      noterActionInterface('Onglet « ${_onglets[index].libelle} » ouvert');
     }
     setState(() => _indexOnglet = index);
   }

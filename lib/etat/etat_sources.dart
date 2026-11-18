@@ -1,9 +1,8 @@
 /// État de l'écran Sources : sites configurés et ajout d'un site.
 library;
 
-import 'package:flutter/foundation.dart';
-
 import '../modeles/erreur_base_de_donnees.dart';
+import '../modeles/journal.dart';
 import '../modeles/source.dart';
 import '../services/erreur_service.dart';
 import '../services/service_ajout_site.dart';
@@ -327,8 +326,11 @@ class EtatSources extends EtatNotifiant {
         try {
           await service.appliquerReglesATous();
         } catch (erreur, pile) {
-          debugPrint(
-            'Règles non appliquées après modification : $erreur\n$pile',
+          Journal.actuel.avertissement(
+            CategorieJournal.telechargement,
+            'Règles non appliquées après modification du site',
+            erreur: erreur,
+            pile: pile,
           );
         }
       }

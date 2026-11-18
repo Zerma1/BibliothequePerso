@@ -5,8 +5,7 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
-
+import '../modeles/journal.dart';
 import '../services/dossier_chapitres.dart';
 import '../services/service_telechargement.dart';
 import 'description_erreur.dart';
@@ -154,9 +153,10 @@ class EtatDossierChapitres extends EtatNotifiant {
       return await _service.verifierAccesDossier();
     } catch (exception) {
       // Le service ne lève jamais ; par prudence, l'état connu est gardé.
-      debugPrint(
-        'Vérification du dossier des chapitres impossible : '
-        '$exception',
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        'Vérification du dossier des chapitres impossible',
+        erreur: exception,
       );
       return _service.accesDossier;
     } finally {

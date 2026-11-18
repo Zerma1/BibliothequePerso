@@ -4,6 +4,7 @@ library;
 
 import '../donnees/depot_parametres.dart';
 import '../modeles/constantes.dart';
+import '../modeles/journal.dart';
 import 'constantes_services.dart';
 import 'erreur_service.dart';
 import 'planification_mises_a_jour.dart';
@@ -72,6 +73,16 @@ class ServiceParametres {
   static const String cleDeplacementDossierEnCours =
       'telechargement.dossier.deplacement_en_cours';
 
+  /// Clé : « Journal détaillé (débogage) », entier 1 (activé) ou 0
+  /// (désactivé, par défaut). Activé, le journal de fichier garde aussi les
+  /// entrées de débogage.
+  ///
+  /// Lue et écrite par `ServiceJournal` (même raison que
+  /// [cleDossierChapitres] : pas de nouvelle méthode d'instance ici, que
+  /// tous les faux `ServiceParametres` des tests de l'interface devraient
+  /// suivre).
+  static const String cleJournalDetaille = 'journal.detaille';
+
   /// Valeur maximale acceptée pour une limite, pour éviter qu'une faute de
   /// frappe (1000 au lieu de 10) ne lance des centaines de téléchargements.
   static const int limiteMaximale = 500;
@@ -132,7 +143,18 @@ class ServiceParametres {
       cleSuivisApres,
       bornerAvantApres(reglages.suivisApres),
     );
+    _journaliser(
+      'téléchargement : favoris ${borner(reglages.favorisLusConserves)} '
+      'lus gardés, suivis ${borner(reglages.suivisInitial)} au départ, '
+      '${bornerAvantApres(reglages.suivisAvant)} avant, '
+      '${bornerAvantApres(reglages.suivisApres)} après',
+    );
   }
+
+  /// Note un réglage modifié dans le journal (valeurs seulement : aucun
+  /// réglage du client n'est une donnée sensible).
+  static void _journaliser(String description) =>
+      Journal.actuel.info(CategorieJournal.parametres, 'Réglage $description');
 
   /// Remet les réglages de téléchargement à leurs valeurs par défaut.
   Future<void> reinitialiserReglagesTelechargement() async {
@@ -144,6 +166,7 @@ class ServiceParametres {
     ]) {
       await _depot.supprimer(cle);
     }
+    _journaliser('téléchargement : valeurs par défaut rétablies');
   }
 
   /// Clé : « Archive complète » (retour du client sur la 0.2.1-test, X7).
@@ -180,8 +203,10 @@ class ServiceParametres {
   /// `ServiceTelechargement.appliquerReglesATous` (mise en file de tous les
   /// chapitres à l'activation ; à la désactivation, les archives qui ne sont
   /// plus voulues passent en suppression différée de 24 h).
-  Future<void> enregistrerArchiveComplete(bool active) =>
-      _depot.enregistrerEntier(cleArchiveComplete, active ? 1 : 0);
+  Future<void> enregistrerArchiveComplete(bool active) async {
+    await _depot.enregistrerEntier(cleArchiveComplete, active ? 1 : 0);
+    _journaliser('« Archive complète » ${active ? 'activée' : 'désactivée'}');
+  }
 
   /// Nombre de recherches de mises à jour par jour (2 par défaut : 00:00 et
   /// 12:00 UTC).
@@ -196,14 +221,14 @@ class ServiceParametres {
   }
 
   /// Enregistre le nombre de recherches par jour (ramené entre 1 et 24).
-  Future<void> enregistrerVerificationsParJour(int nombre) =>
-      _depot.enregistrerEntier(
-        cleVerificationsParJour,
-        nombre.clamp(
-          PlanificationMisesAJour.minimumParJour,
-          PlanificationMisesAJour.maximumParJour,
-        ),
-      );
+  Future<void> enregistrerVerificationsParJour(int nombre) async {
+    final borne = nombre.clamp(
+      PlanificationMisesAJour.minimumParJour,
+      PlanificationMisesAJour.maximumParJour,
+    );
+    await _depot.enregistrerEntier(cleVerificationsParJour, borne);
+    _journaliser('mises à jour : $borne vérification(s) par jour');
+  }
 
   /// Planification correspondant au réglage enregistré.
   Future<PlanificationMisesAJour> chargerPlanification() async =>
@@ -248,10 +273,9 @@ class ServiceParametres {
   /// l'intervalle normal).
   Future<void> enregistrerHeuresEnAttente(int heures) async {
     final maximum = maximumHeuresEnAttente(await chargerVerificationsParJour());
-    await _depot.enregistrerEntier(
-      cleHeuresEnAttente,
-      heures.clamp(1, maximum),
-    );
+    final borne = heures.clamp(1, maximum);
+    await _depot.enregistrerEntier(cleHeuresEnAttente, borne);
+    _journaliser('« En attente » : vérification toutes les $borne h');
   }
 
   /// Planification des vérifications des titres « En attente » (toutes les
@@ -289,15 +313,17 @@ class ServiceParametres {
   }
 
   /// Enregistre les niveaux de contenu choisis (valeurs inconnues ignorées).
-  Future<void> enregistrerNiveauxContenu(Iterable<String> niveaux) =>
-      _depot.enregistrerTexte(
-        cleNiveauxContenu,
-        nettoyerNiveauxContenu(niveaux).join(','),
-      );
+  Future<void> enregistrerNiveauxContenu(Iterable<String> niveaux) async {
+    final texte = nettoyerNiveauxContenu(niveaux).join(',');
+    await _depot.enregistrerTexte(cleNiveauxContenu, texte);
+    _journaliser('niveaux de contenu : « $texte »');
+  }
 
   /// Remet le filtre de niveau de contenu à sa valeur par défaut.
-  Future<void> reinitialiserNiveauxContenu() =>
-      _depot.supprimer(cleNiveauxContenu);
+  Future<void> reinitialiserNiveauxContenu() async {
+    await _depot.supprimer(cleNiveauxContenu);
+    _journaliser('niveaux de contenu : valeur par défaut rétablie');
+  }
 
   /// Garde les niveaux connus (`niveauxContenu`), sans doublon, dans l'ordre
   /// du plus sage au plus explicite.
@@ -330,6 +356,7 @@ class ServiceParametres {
       throw const ErreurService('Choisissez au moins une langue de lecture.');
     }
     await _depot.enregistrerTexte(cleLangues, propres.join(','));
+    _journaliser('langues de lecture : « ${propres.join(',')} »');
   }
 
   /// Nettoie une liste de codes de langue : minuscules, sans espaces, codes

@@ -4,9 +4,8 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
-
 import '../modeles/chapitre.dart';
+import '../modeles/journal.dart';
 import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
 import '../services/service_bibliotheque.dart';
@@ -119,7 +118,12 @@ class EtatTelechargements extends EtatNotifiant {
       // chose : la file et les fiches ouvertes se relisent d'elles-mêmes.
       return await _service.supprimerArchivesEchues();
     } catch (erreur, pile) {
-      debugPrint('Suppressions prévues non faites : $erreur\n$pile');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Suppressions prévues non faites',
+        erreur: erreur,
+        pile: pile,
+      );
       return 0;
     }
   }

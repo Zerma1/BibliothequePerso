@@ -6,6 +6,18 @@
 > restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
 > chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
 
+## 0.2.3-test — version de test (2026-11-18)
+
+Contient tout ce qu'apporte la 0.2.2-test, plus :
+- **Journal de l'application** : un fichier par jour dans
+  `Documents\bibliotheque_perso\journaux\` (14 jours gardés, jamais sur le NAS) : requêtes vers
+  les sites, ajouts, vérifications, téléchargements, import/export, réglages, plantages, tâche de
+  fond Android. Mots de passe, jetons, cookies et contenu des pages jamais écrits.
+- **Paramètres → Journal** : dossier, fichiers, « Exporter le journal du jour / des 7 derniers
+  jours », interrupteur « Journal détaillé » (diagnostic).
+- Les **rapports d'erreur** contiennent les 200 dernières lignes du journal (sans nom
+  d'utilisateur, adresse IP ni courriel).
+
 ## 0.2.2-test — version de test (2026-11-18)
 
 Suite aux retours sur la 0.2.1-test :

@@ -38,6 +38,7 @@ import '../modeles/titre.dart';
 import 'client_http_poli.dart';
 import 'constantes_sources.dart';
 import 'erreur_source.dart';
+import 'journal_sources.dart';
 import 'outils_sources.dart';
 import 'outils_wordpress.dart';
 import 'protection_anti_robot.dart';
@@ -413,35 +414,46 @@ class SourceGenerique implements SourceSite {
   /// (`Titre.urlTitre`), même si [urlTitre] était celle d'un chapitre.
   @override
   Future<FicheTitre> recupererFiche(String urlTitre) {
-    return OutilsWordPress.avecType(TypeSource.generique, () async {
-      final page = await _recupererPageTitre(urlTitre);
-      return OutilsWordPress.avecExtrait(
-        page.html,
-        () => analyserFiche(page.html, page.url, configuration: configuration),
-      );
-    });
+    return JournalSources.operation(
+      'Générique',
+      'fiche',
+      urlTitre,
+      () => OutilsWordPress.avecType(TypeSource.generique, () async {
+        final page = await _recupererPageTitre(urlTitre);
+        return OutilsWordPress.avecExtrait(
+          page.html,
+          () =>
+              analyserFiche(page.html, page.url, configuration: configuration),
+        );
+      }),
+    );
   }
 
   /// Récupère les chapitres de [urlTitre] (même page que [recupererFiche]),
   /// du plus ancien au plus récent.
   @override
   Future<List<Chapitre>> recupererChapitres(String urlTitre) {
-    return OutilsWordPress.avecType(TypeSource.generique, () async {
-      final page = await _recupererPageTitre(urlTitre);
-      return OutilsWordPress.avecExtrait(page.html, () {
-        final chapitres = analyserChapitres(
-          page.html,
-          page.url,
-          configuration: configuration,
-          languesPreferees: languesPreferees,
-          maintenant: _maintenant(),
-        );
-        if (chapitres.isEmpty) {
-          throw ErreurSource(page.url.toString(), _messageSansChapitre);
-        }
-        return chapitres;
-      });
-    });
+    return JournalSources.operation(
+      'Générique',
+      'chapitres',
+      urlTitre,
+      () => OutilsWordPress.avecType(TypeSource.generique, () async {
+        final page = await _recupererPageTitre(urlTitre);
+        return OutilsWordPress.avecExtrait(page.html, () {
+          final chapitres = analyserChapitres(
+            page.html,
+            page.url,
+            configuration: configuration,
+            languesPreferees: languesPreferees,
+            maintenant: _maintenant(),
+          );
+          if (chapitres.isEmpty) {
+            throw ErreurSource(page.url.toString(), _messageSansChapitre);
+          }
+          return chapitres;
+        });
+      }),
+    );
   }
 
   /// Récupère les adresses des images du chapitre [urlChapitre].
@@ -451,14 +463,19 @@ class SourceGenerique implements SourceSite {
   /// lecteur, même si elles sont hébergées ailleurs.
   @override
   Future<ContenuChapitre> recupererContenu(String urlChapitre) {
-    return OutilsWordPress.avecType(TypeSource.generique, () async {
-      final uri = validerUrl(urlChapitre);
-      final html = await _recupererPage(uri);
-      return OutilsWordPress.avecExtrait(
-        html,
-        () => analyserContenu(html, uri, configuration: configuration),
-      );
-    });
+    return JournalSources.operation(
+      'Générique',
+      'chapitre',
+      urlChapitre,
+      () => OutilsWordPress.avecType(TypeSource.generique, () async {
+        final uri = validerUrl(urlChapitre);
+        final html = await _recupererPage(uri);
+        return OutilsWordPress.avecExtrait(
+          html,
+          () => analyserContenu(html, uri, configuration: configuration),
+        );
+      }),
+    );
   }
 
   // ---------------------------------------------------------------------

@@ -9,7 +9,7 @@ library;
 import 'dart:io' show File, FileSystemException;
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../donnees/constantes_donnees.dart' show tailleMaxCouverture;
 import '../donnees/depot_categories.dart';
@@ -25,6 +25,7 @@ import '../modeles/chapitre.dart';
 import '../modeles/constantes.dart';
 import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/fiche_titre.dart';
+import '../modeles/journal.dart';
 import '../modeles/lien_titre_source.dart';
 import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
@@ -555,16 +556,46 @@ class ServiceBibliotheque {
     String urlTitre, {
     List<int> idsListes = const <int>[],
   }) async {
-    final existant = await _chargerTitreLieEnSecondaire(urlTitre.trim());
-    if (existant != null) {
-      return _renvoyerTitreExistant(existant, idsListes);
+    try {
+      final existant = await _chargerTitreLieEnSecondaire(urlTitre.trim());
+      if (existant != null) {
+        final resultat = await _renvoyerTitreExistant(existant, idsListes);
+        Journal.actuel.info(
+          CategorieJournal.bibliotheque,
+          'Titre déjà présent : n°${resultat.titre.id} '
+          '« ${resultat.titre.nom} »',
+        );
+        return resultat;
+      }
+      final source = await _trouverOuAjouterSource(urlTitre);
+      final resultat = await _enregistrerDepuisSource(
+        source,
+        urlTitre.trim(),
+        idsListes: idsListes,
+      );
+      Journal.actuel.info(
+        CategorieJournal.bibliotheque,
+        'Titre ajouté : n°${resultat.titre.id} « ${resultat.titre.nom} » '
+        '(site ${source.urlBase}, ${resultat.nombreNouveauxChapitres} '
+        'chapitre(s))',
+      );
+      return resultat;
+    } catch (erreur) {
+      // Refus attendu (site inconnu, page illisible) : la raison suffit ;
+      // seule la racine du site est notée (l'adresse peut être personnelle).
+      Journal.actuel.avertissement(
+        CategorieJournal.bibliotheque,
+        "Ajout d'un titre de « ${_hoteJournal(urlTitre)} » refusé",
+        erreur: erreur,
+      );
+      rethrow;
     }
-    final source = await _trouverOuAjouterSource(urlTitre);
-    return _enregistrerDepuisSource(
-      source,
-      urlTitre.trim(),
-      idsListes: idsListes,
-    );
+  }
+
+  /// Hôte de [url] pour le journal (`?` si l'adresse est illisible).
+  static String _hoteJournal(String url) {
+    final hote = Uri.tryParse(url.trim())?.host ?? '';
+    return hote.isEmpty ? '?' : hote;
   }
 
   /// Relit la fiche et les chapitres d'un titre déjà enregistré, sur **tous**
@@ -897,6 +928,36 @@ class ServiceBibliotheque {
     String urlTitre, {
     bool lienSeul = false,
   }) async {
+    try {
+      final resultat = await _ajouterSiteAuTitre(
+        idTitre,
+        urlTitre,
+        lienSeul: lienSeul,
+      );
+      Journal.actuel.info(
+        CategorieJournal.bibliotheque,
+        'Site « ${_hoteJournal(urlTitre)} » ajouté au titre n°$idTitre'
+        '${lienSeul ? ' (lien seul)' : ''} : '
+        '${resultat.nombreNouveauxChapitres} chapitre(s)',
+      );
+      return resultat;
+    } catch (erreur) {
+      Journal.actuel.avertissement(
+        CategorieJournal.bibliotheque,
+        'Ajout du site « ${_hoteJournal(urlTitre)} » au titre n°$idTitre '
+        'refusé',
+        erreur: erreur,
+      );
+      rethrow;
+    }
+  }
+
+  /// Corps de [ajouterSiteAuTitre], sans journalisation.
+  Future<ResultatAjoutTitre> _ajouterSiteAuTitre(
+    int idTitre,
+    String urlTitre, {
+    required bool lienSeul,
+  }) async {
     final depot = _exigerDepotTitresSources();
     final uri = DetecteurTypeSite.validerUrl(urlTitre);
     final url = urlTitre.trim();
@@ -996,6 +1057,11 @@ class ServiceBibliotheque {
     // Après le retrait (un retrait refusé ne doit rien programmer).
     await _planifierSuppressionArchivesDuSite(idTitre, idSource);
     await _classerEnAttenteSansErreur(idTitre);
+    Journal.actuel.info(
+      CategorieJournal.bibliotheque,
+      'Site n°$idSource retiré du titre n°$idTitre : $supprimes chapitre(s) '
+      'supprimé(s)',
+    );
     return supprimes;
   }
 
@@ -1291,6 +1357,7 @@ class ServiceBibliotheque {
     // la prochaine application des règles de téléchargement les programme
     // (les chapitres d'un site retiré ou d'un lien seul y sont à supprimer).
     final echeance = DateTime.now().toUtc().add(delaiSuppressionDifferee);
+    var prevues = 0;
     for (final chapitre in await _depotChapitres.chargerChapitres(
       idTitre,
       idSource: idSource,
@@ -1303,6 +1370,14 @@ class ServiceBibliotheque {
         continue;
       }
       await _depotChapitres.planifierSuppression(id, echeance);
+      prevues++;
+    }
+    if (prevues > 0) {
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Suppression prévue de $prevues archive(s) du site n°$idSource '
+        '(titre n°$idTitre)',
+      );
     }
   }
 
@@ -1329,7 +1404,11 @@ class ServiceBibliotheque {
       source = await _serviceAjoutSite.trouverSourcePourUrl(url);
     } catch (erreur) {
       // Base illisible : le diagnostic se fait sans les réglages du site.
-      debugPrint('Diagnostic de $url : site configuré illisible : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.bibliotheque,
+        'Diagnostic de « ${uri.host} » : site configuré illisible',
+        erreur: erreur,
+      );
     }
     final type = source?.typeSource ?? DetecteurTypeSite.verifierDomaine(uri);
     if (type != null && estTypeAAdaptateurParDomaine(type)) {
@@ -1658,6 +1737,10 @@ class ServiceBibliotheque {
     await _refuserListeAutomatique(idListe);
     await _depotListes.ajouterTitre(idListe, idTitre);
     await _classerEnAttenteSansErreur(idTitre);
+    Journal.actuel.info(
+      CategorieJournal.bibliotheque,
+      'Titre n°$idTitre ajouté à la liste n°$idListe',
+    );
   }
 
   /// Retire le titre de la liste (le titre reste dans la bibliothèque), puis
@@ -1670,6 +1753,10 @@ class ServiceBibliotheque {
     await _refuserListeAutomatique(idListe);
     await _depotListes.retirerTitre(idListe, idTitre);
     await _classerEnAttenteSansErreur(idTitre);
+    Journal.actuel.info(
+      CategorieJournal.bibliotheque,
+      'Titre n°$idTitre retiré de la liste n°$idListe',
+    );
   }
 
   Future<void> _refuserListeAutomatique(int idListe) async {
@@ -1727,7 +1814,12 @@ class ServiceBibliotheque {
     final propre = _validerNomListe(nom);
     await _refuserNomListePris(propre);
     try {
-      return await _depotListes.creerListe(propre);
+      final liste = await _depotListes.creerListe(propre);
+      Journal.actuel.info(
+        CategorieJournal.bibliotheque,
+        'Liste créée : n°${liste.id} « ${liste.nom} »',
+      );
+      return liste;
     } on ErreurBaseDeDonnees catch (erreur) {
       // Messages du dépôt déjà clairs (« Une liste nommée … existe déjà »).
       throw ErreurService(erreur.message, cause: erreur);
@@ -1745,7 +1837,12 @@ class ServiceBibliotheque {
     final propre = _validerNomListe(nom);
     await _refuserNomListePris(propre, idListe: idListe);
     try {
-      return await _depotListes.renommerListe(idListe, propre);
+      final liste = await _depotListes.renommerListe(idListe, propre);
+      Journal.actuel.info(
+        CategorieJournal.bibliotheque,
+        'Liste n°$idListe renommée en « ${liste.nom} »',
+      );
+      return liste;
     } on ErreurBaseDeDonnees catch (erreur) {
       throw ErreurService(erreur.message, cause: erreur);
     }
@@ -1763,6 +1860,10 @@ class ServiceBibliotheque {
     } on ErreurBaseDeDonnees catch (erreur) {
       throw ErreurService(erreur.message, cause: erreur);
     }
+    Journal.actuel.info(
+      CategorieJournal.bibliotheque,
+      'Liste n°$idListe supprimée',
+    );
   }
 
   /// Enregistre l'ordre d'affichage des listes ([idsDansLOrdre] : de la
@@ -1775,7 +1876,12 @@ class ServiceBibliotheque {
   /// fois ou n'existe plus.
   Future<List<ListeLecture>> reordonnerListes(List<int> idsDansLOrdre) async {
     try {
-      return await _depotListes.enregistrerOrdre(idsDansLOrdre);
+      final listes = await _depotListes.enregistrerOrdre(idsDansLOrdre);
+      Journal.actuel.info(
+        CategorieJournal.bibliotheque,
+        'Ordre des listes enregistré (${listes.length} liste(s))',
+      );
+      return listes;
     } on ErreurBaseDeDonnees catch (erreur) {
       throw ErreurService(
         "L'ordre des listes n'a pas pu être enregistré : ${erreur.message}",
@@ -1835,10 +1941,18 @@ class ServiceBibliotheque {
       } on ErreurStockage catch (erreur) {
         // Une image restée sur le disque ne doit pas empêcher la suppression
         // demandée par le client.
-        debugPrint('Couverture de « ${titre.nom} » non supprimée : $erreur');
+        Journal.actuel.avertissement(
+          CategorieJournal.stockage,
+          'Couverture de « ${titre.nom} » non supprimée',
+          erreur: erreur,
+        );
       }
     }
     await _depotTitres.supprimerTitre(idTitre);
+    Journal.actuel.info(
+      CategorieJournal.bibliotheque,
+      'Titre n°$idTitre${titre == null ? '' : ' « ${titre.nom} »'} supprimé',
+    );
   }
 
   /// Marque un chapitre lu ou non lu.
@@ -1968,8 +2082,11 @@ class ServiceBibliotheque {
     try {
       return await classerEnAttente(idTitre);
     } catch (erreur, pile) {
-      debugPrint(
-        'Classement « En attente » du titre n°$idTitre : $erreur\n$pile',
+      Journal.actuel.avertissement(
+        CategorieJournal.bibliotheque,
+        'Classement « En attente » du titre n°$idTitre impossible',
+        erreur: erreur,
+        pile: pile,
       );
       return false;
     }
@@ -2312,7 +2429,11 @@ class ServiceBibliotheque {
     try {
       return await _stockage?.cheminCouverture(titre);
     } on ErreurStockage catch (erreur) {
-      debugPrint('Couverture de « ${titre.nom} » introuvable : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        'Couverture de « ${titre.nom} » introuvable',
+        erreur: erreur,
+      );
       return null;
     }
   }
@@ -2339,7 +2460,11 @@ class ServiceBibliotheque {
         await _stockage?.supprimerCouverture(titre);
       }
     } on ErreurStockage catch (erreur) {
-      debugPrint('Couverture locale de « ${titre.nom} » illisible : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        'Couverture locale de « ${titre.nom} » illisible',
+        erreur: erreur,
+      );
     }
     final voulue = titre.couvertureAffichee;
     if (voulue == null || _couverturesEnEchec.contains(voulue)) return null;
@@ -2357,7 +2482,11 @@ class ServiceBibliotheque {
       return octets;
     } catch (erreur) {
       _couverturesEnEchec.add(voulue);
-      debugPrint('Couverture de « ${titre.nom} » indisponible : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        'Couverture de « ${titre.nom} » indisponible',
+        erreur: erreur,
+      );
       return null;
     }
   }
@@ -2394,7 +2523,11 @@ class ServiceBibliotheque {
       // Une seule tentative par session : la fiche rouverte affiche
       // directement la vignette, sans solliciter le site.
       _originalesEnEchec.add(voulue);
-      debugPrint('Couverture originale de « ${titre.nom} » : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        'Couverture originale de « ${titre.nom} » indisponible',
+        erreur: erreur,
+      );
       return chargerCouverture(titre);
     }
   }
@@ -2547,7 +2680,11 @@ class ServiceBibliotheque {
     } catch (erreur) {
       // La couverture n'est qu'un confort : le titre est bien ajouté, et
       // l'affichage réessaiera ([chargerCouverture]).
-      debugPrint('Couverture de « ${titre.nom} » non enregistrée : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        'Couverture de « ${titre.nom} » non enregistrée',
+        erreur: erreur,
+      );
     }
   }
 

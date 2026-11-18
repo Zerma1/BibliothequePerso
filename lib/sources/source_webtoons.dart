@@ -31,6 +31,7 @@ import '../modeles/titre.dart';
 import 'client_http_poli.dart';
 import 'constantes_sources.dart';
 import 'erreur_source.dart';
+import 'journal_sources.dart';
 import 'outils_sources.dart';
 import 'rapport_erreur_source.dart';
 import 'source_site.dart';
@@ -166,11 +167,16 @@ class SourceWebtoons implements SourceSite {
   /// requête, ou aucune si la même page vient d'être lue).
   @override
   Future<FicheTitre> recupererFiche(String urlTitre) {
-    return _avecTypeSite(() async {
-      final uri = validerUrlTitre(urlTitre);
-      final html = await _recupererPremierePage(uri);
-      return _avecExtrait(html, () => analyserFiche(html, uri));
-    });
+    return JournalSources.operation(
+      'WEBTOON',
+      'fiche',
+      urlTitre,
+      () => _avecTypeSite(() async {
+        final uri = validerUrlTitre(urlTitre);
+        final html = await _recupererPremierePage(uri);
+        return _avecExtrait(html, () => analyserFiche(html, uri));
+      }),
+    );
   }
 
   /// Récupère tous les épisodes du titre, page après page (1 s entre deux
@@ -181,35 +187,49 @@ class SourceWebtoons implements SourceSite {
   /// anciens ne sont pas listés (la liste commence par les plus récents).
   @override
   Future<List<Chapitre>> recupererChapitres(String urlTitre) {
-    return _avecTypeSite(() async {
-      final uri = validerUrlTitre(urlTitre);
-      // Ordre du site : du plus récent au plus ancien.
-      final episodes = <Chapitre>[];
-      final urlsVues = <String>{};
-      var html = await _recupererPremierePage(uri);
-      for (var page = 1; page <= nombreMaxPages; page++) {
-        if (page > 1) {
-          html = await _recupererTexte(adressePage(uri, page));
+    return JournalSources.operation(
+      'WEBTOON',
+      'chapitres',
+      urlTitre,
+      () => _avecTypeSite(() async {
+        final uri = validerUrlTitre(urlTitre);
+        // Ordre du site : du plus récent au plus ancien.
+        final episodes = <Chapitre>[];
+        final urlsVues = <String>{};
+        var html = await _recupererPremierePage(uri);
+        for (var page = 1; page <= nombreMaxPages; page++) {
+          if (page > 1) {
+            html = await _recupererTexte(adressePage(uri, page));
+          }
+          final courant = html;
+          final dePage = _avecExtrait(
+            courant,
+            () => analyserEpisodes(courant, uri),
+          );
+          final nouveaux = dePage.where((e) => urlsVues.add(e.urlChapitre));
+          final avant = episodes.length;
+          episodes.addAll(nouveaux);
+          // Garde-fou : une page sans épisode nouveau (paramètre `page` ignoré
+          // par le site, page vide) arrête la lecture au lieu de boucler.
+          if (page > 1 && episodes.length == avant) {
+            break;
+          }
+          if (!aPageSuivante(courant, uri, page)) {
+            break;
+          }
+          if (page == nombreMaxPages) {
+            // Plafond atteint alors que le site annonce encore une page : les
+            // épisodes les plus anciens manquent.
+            JournalSources.avertir(
+              'WEBTOON',
+              'liste incomplète : $nombreMaxPages pages lues sur plus '
+                  '($uri)',
+            );
+          }
         }
-        final courant = html;
-        final dePage = _avecExtrait(
-          courant,
-          () => analyserEpisodes(courant, uri),
-        );
-        final nouveaux = dePage.where((e) => urlsVues.add(e.urlChapitre));
-        final avant = episodes.length;
-        episodes.addAll(nouveaux);
-        // Garde-fou : une page sans épisode nouveau (paramètre `page` ignoré
-        // par le site, page vide) arrête la lecture au lieu de boucler.
-        if (page > 1 && episodes.length == avant) {
-          break;
-        }
-        if (!aPageSuivante(courant, uri, page)) {
-          break;
-        }
-      }
-      return episodes.reversed.toList();
-    });
+        return episodes.reversed.toList();
+      }),
+    );
   }
 
   /// Lève toujours une [ErreurSource], sans requête : le serveur d'images de
@@ -218,6 +238,11 @@ class SourceWebtoons implements SourceSite {
   /// se lit sur le site (`Chapitre.urlExterne`).
   @override
   Future<ContenuChapitre> recupererContenu(String urlChapitre) async {
+    JournalSources.avertir(
+      'WEBTOON',
+      'épisode protégé, lisible seulement sur le site '
+          '($urlChapitre)',
+    );
     throw ErreurSource(
       urlChapitre,
       'Épisode lisible uniquement sur WEBTOON : ouvrez-le sur le site '

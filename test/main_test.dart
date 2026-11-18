@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:bibliotheque_perso/main.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
+import 'package:bibliotheque_perso/modeles/journal.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/services/planification_mises_a_jour.dart';
 import 'package:bibliotheque_perso/services/service_sources_par_defaut.dart';
@@ -171,6 +172,42 @@ void main() {
       dossierTelechargements: dossierArchives.path,
     );
     expect(reussi, isFalse);
+  });
+
+  test("la tâche de fond remet le journal précédent à la fin, réussite comme "
+      "échec, sans le fermer", () async {
+    final precedent = JournalMemoire();
+    Journal.actuel = precedent;
+    addTearDown(() => Journal.actuel = const JournalSilencieux());
+
+    expect(
+      await executerTacheDeFond(
+        chemin: inMemoryDatabasePath,
+        fabrique: databaseFactoryFfi,
+        client: creerClient(),
+        dossierTelechargements: dossierArchives.path,
+      ),
+      isTrue,
+    );
+    expect(Journal.actuel, same(precedent));
+
+    final dossier = await Directory.systemTemp.createTemp('bibliotheque_test');
+    addTearDown(() => dossier.delete(recursive: true));
+    final fichier = File(chemins.join(dossier.path, 'fichier'));
+    await fichier.writeAsString('pas un dossier');
+    expect(
+      await executerTacheDeFond(
+        chemin: chemins.join(fichier.path, 'base.db'),
+        fabrique: databaseFactoryFfi,
+        client: creerClient(),
+        dossierTelechargements: dossierArchives.path,
+      ),
+      isFalse,
+    );
+    expect(Journal.actuel, same(precedent));
+    // Les lignes de la tâche de fond vont dans son propre fichier, pas dans
+    // le journal de l'isolat appelant.
+    expect(precedent.entrees, isEmpty);
   });
 
   test(

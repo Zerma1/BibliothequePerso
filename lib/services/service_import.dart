@@ -28,6 +28,7 @@ import '../donnees/depot_titres_sources.dart';
 import '../donnees/gestionnaire_transactions.dart';
 import '../modeles/categorie.dart';
 import '../modeles/erreur_base_de_donnees.dart';
+import '../modeles/journal.dart';
 import '../modeles/lien_titre_source.dart';
 import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
@@ -573,7 +574,24 @@ class ServiceImport {
   Future<ResultatImport> _partager(Future<ResultatImport> Function() action) {
     final enCours = _enCours;
     if (enCours != null) return enCours;
-    final nouveau = action();
+    Journal.actuel.info(CategorieJournal.export, 'Import : début');
+    final nouveau = action().then(
+      (resultat) {
+        _journaliserBilan(resultat);
+        return resultat;
+      },
+      onError: (Object erreur, StackTrace pile) {
+        Journal.actuel.erreur(
+          CategorieJournal.export,
+          'Import refusé ou annulé : rien importé',
+          erreur: erreur,
+          // Un fichier refusé (`ErreurService`) se comprend avec son
+          // message ; la pile ne sert que pour une erreur inattendue.
+          pile: erreur is ErreurService ? null : pile,
+        );
+        Error.throwWithStackTrace(erreur, pile);
+      },
+    );
     _enCours = nouveau;
     // Libéré après coup, réussite ou échec : un nouvel import reste possible.
     nouveau.then<void>(
@@ -581,6 +599,41 @@ class ServiceImport {
       onError: (Object _) => _enCours = null,
     );
     return nouveau;
+  }
+
+  /// Nombre maximal de lignes en erreur recopiées dans le journal : au-delà,
+  /// seul leur nombre est indiqué (un fichier très abîmé ne doit pas remplir
+  /// le journal).
+  static const int nombreMaxErreursJournalisees = 20;
+
+  /// Écrit le bilan de [resultat] dans le journal, avec les premières
+  /// lignes en erreur.
+  static void _journaliserBilan(ResultatImport resultat) {
+    final journal = Journal.actuel;
+    journal.info(
+      CategorieJournal.export,
+      'Import terminé (format ${resultat.versionFormat}) : '
+      '${resultat.titresAjoutes} titre(s) ajouté(s), '
+      '${resultat.titresCompletes} complété(s), ${resultat.titresIgnores} '
+      'déjà présent(s), ${resultat.sitesAjoutes} site(s), '
+      '${resultat.listesAjoutees} liste(s), ${resultat.regroupementsAjoutes} '
+      'regroupement(s), ${resultat.erreurs.length} erreur(s)'
+      '${resultat.reglagesGenerauxAppliques ? ', réglages repris' : ''}'
+      '${resultat.archiveCompleteActivee ? ', archive complète activée' : ''}',
+    );
+    for (final erreur in resultat.erreurs.take(nombreMaxErreursJournalisees)) {
+      journal.avertissement(
+        CategorieJournal.export,
+        'Import : ${erreur.description}',
+      );
+    }
+    final restantes = resultat.erreurs.length - nombreMaxErreursJournalisees;
+    if (restantes > 0) {
+      journal.avertissement(
+        CategorieJournal.export,
+        'Import : $restantes autre(s) erreur(s) non recopiée(s)',
+      );
+    }
   }
 
   // ---------------------------------------------------- Lecture (pure)

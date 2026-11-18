@@ -19,6 +19,7 @@ import 'package:bibliotheque_perso/etat/etat_bibliotheque.dart';
 import 'package:bibliotheque_perso/etat/etat_couvertures.dart';
 import 'package:bibliotheque_perso/etat/etat_dossier_chapitres.dart';
 import 'package:bibliotheque_perso/etat/etat_export.dart';
+import 'package:bibliotheque_perso/etat/etat_journal.dart';
 import 'package:bibliotheque_perso/etat/etat_mises_a_jour.dart';
 import 'package:bibliotheque_perso/etat/etat_parametres.dart';
 import 'package:bibliotheque_perso/etat/etat_parutions.dart';
@@ -44,6 +45,7 @@ import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
 import 'package:bibliotheque_perso/services/service_categories.dart';
 import 'package:bibliotheque_perso/services/service_export.dart';
 import 'package:bibliotheque_perso/services/service_import.dart';
+import 'package:bibliotheque_perso/services/service_journal.dart';
 import 'package:bibliotheque_perso/services/service_mises_a_jour.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
 import 'package:bibliotheque_perso/services/service_rapports_erreur.dart';
@@ -1878,6 +1880,77 @@ class FauxServiceRapportsErreur implements ServiceRapportsErreur {
   }
 }
 
+/// Faux `ServiceJournal` : fichiers fictifs en mémoire, aucun accès disque.
+class FauxServiceJournal implements ServiceJournal {
+  /// Fichiers renvoyés par [listerFichiers] (du plus ancien au plus récent,
+  /// comme le vrai service).
+  List<FichierJournal> fichiers = <FichierJournal>[
+    FichierJournal(
+      chemin: 'C:/journaux/journal-2026-11-17.log',
+      jour: DateTime(2026, 11, 17),
+      numero: 1,
+    ),
+    FichierJournal(
+      chemin: 'C:/journaux/journal-2026-11-18.log',
+      jour: DateTime(2026, 11, 18),
+      numero: 1,
+    ),
+  ];
+
+  /// Nombre de jours demandés à chaque appel de [exporterJournal].
+  final List<int> joursExportes = <int>[];
+
+  /// Erreur levée par [exporterJournal], si définie.
+  Object? erreurExport;
+
+  /// Erreur levée par [enregistrerJournalDetaille], si définie.
+  Object? erreurReglage;
+
+  /// Si défini, [exporterJournal] attend qu'il soit complété.
+  Completer<void>? retenue;
+
+  /// Réglage « Journal détaillé » enregistré.
+  bool detaille = false;
+
+  /// Nombre d'appels à [listerFichiers].
+  int nombreListes = 0;
+
+  @override
+  String get dossierJournaux => 'C:/journaux';
+
+  @override
+  String get dossierRapports => 'C:/rapports';
+
+  @override
+  Future<List<FichierJournal>> listerFichiers() async {
+    nombreListes++;
+    return List<FichierJournal>.of(fichiers);
+  }
+
+  @override
+  Future<String> exporterJournal({int jours = 1}) async {
+    joursExportes.add(jours);
+    final attente = retenue;
+    if (attente != null) await attente.future;
+    final panne = erreurExport;
+    if (panne != null) throw panne;
+    return 'C:/rapports/journal_export_${joursExportes.length}.log';
+  }
+
+  @override
+  Future<bool> chargerJournalDetaille() async => detaille;
+
+  @override
+  Future<void> enregistrerJournalDetaille(bool actif) async {
+    final panne = erreurReglage;
+    if (panne != null) throw panne;
+    detaille = actif;
+  }
+
+  @override
+  Future<bool> appliquerReglageJournal() async => detaille;
+}
+
 /// Faux `ServiceExport` : n'écrit aucun fichier, renvoie des chemins fictifs.
 class FauxServiceExport implements ServiceExport {
   /// Nombre d'appels à [exporter].
@@ -2404,6 +2477,8 @@ Widget envelopper(
   FauxServiceImport? importation,
   FauxServiceCategories? categories,
   FauxServiceDossierChapitres? dossierChapitres,
+  FauxServiceJournal? journal,
+  Future<int> Function(String chemin)? mesurerTailleJournal,
   Future<List<String>> Function()? listerExports,
   bool verifierMisesAJourAuDemarrage = false,
   DateTime Function()? maintenant,
@@ -2475,6 +2550,13 @@ Widget envelopper(
       if (dossierChapitres != null)
         ChangeNotifierProvider<EtatDossierChapitres>(
           create: (_) => EtatDossierChapitres(dossierChapitres)..charger(),
+        ),
+      // Section « Journal » seulement si un faux service est fourni.
+      if (journal != null)
+        ChangeNotifierProvider<EtatJournal>(
+          create: (_) =>
+              EtatJournal(journal, mesurerTaille: mesurerTailleJournal)
+                ..charger(),
         ),
     ],
     child: BibliothequePersoApp(accueil: enfant),

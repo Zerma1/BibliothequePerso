@@ -126,6 +126,10 @@ class ServiceDossierChapitres {
   /// file, arrêtée pendant le déplacement inachevé, est relancée.
   Future<void> abandonnerDeplacementInacheve() async {
     await _depot.supprimer(ServiceParametres.cleDeplacementDossierEnCours);
+    Journal.actuel.info(
+      CategorieJournal.stockage,
+      'Déplacement inachevé des chapitres abandonné',
+    );
     _service._signaler();
     unawaited(_service.lancerTraitement());
   }
@@ -144,6 +148,10 @@ class ServiceDossierChapitres {
   void reprendreFile() {
     if (_service._dossierChange || !_service._enPause) return;
     _service._enPause = false;
+    Journal.actuel.info(
+      CategorieJournal.telechargement,
+      'File de téléchargement reprise (demande du client)',
+    );
     _service._signaler();
     unawaited(_service.lancerTraitement());
   }
@@ -202,8 +210,34 @@ class ServiceDossierChapitres {
     // bouton « Supprimer ») : un fichier en cours de copie serait effacé de
     // l'ancien dossier en laissant sa copie dans le nouveau.
     _service._changementDossierEnCours = true;
+    final demande = nouveauDossier?.trim() ?? '';
+    Journal.actuel.info(
+      CategorieJournal.stockage,
+      'Changement du dossier des chapitres demandé vers '
+      '« ${demande.isEmpty ? 'dossier par défaut' : demande} » '
+      '(${deplacerArchives ? 'avec' : 'sans'} déplacement)',
+    );
     try {
-      return await changement;
+      final resultat = await changement;
+      final bilan = resultat.bilan;
+      final detail = bilan == null
+          ? 'archives non déplacées'
+          : '${bilan.nombreFichiers} fichier(s), ${bilan.nombreCopies} '
+                'copié(s), ${bilan.nombreDejaPresents} déjà présent(s), '
+                '${bilan.cheminsEnConflit.length} conflit(s)';
+      Journal.actuel.info(
+        CategorieJournal.stockage,
+        'Dossier des chapitres changé : ${resultat.cheminDossier} ($detail), '
+        'effectif au prochain démarrage',
+      );
+      return resultat;
+    } catch (erreur) {
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        'Changement du dossier des chapitres refusé ou interrompu',
+        erreur: erreur,
+      );
+      rethrow;
     } finally {
       _changement = null;
       _service._changementDossierEnCours = false;
@@ -259,6 +293,12 @@ class ServiceDossierChapitres {
 
     final etaitEnPause = service._enPause;
     service._enPause = true;
+    if (!etaitEnPause) {
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'File de téléchargement en pause (changement du dossier)',
+      );
+    }
     // Pause gardée après un refus « chapitre en cours » : la file s'arrête
     // après ce chapitre et la demande suivante du client peut aboutir.
     var garderPause = false;
@@ -322,7 +362,13 @@ class ServiceDossierChapitres {
         // Échec : la file reprend comme avant, toujours sur l'ancien dossier
         // (le réglage n'a pas changé).
         service._enPause = etaitEnPause;
-        if (!etaitEnPause) unawaited(service.lancerTraitement());
+        if (!etaitEnPause) {
+          Journal.actuel.info(
+            CategorieJournal.telechargement,
+            'File de téléchargement reprise (changement du dossier annulé)',
+          );
+          unawaited(service.lancerTraitement());
+        }
       }
       service._signaler();
     }
@@ -364,7 +410,11 @@ class ServiceDossierChapitres {
           } catch (erreur) {
             // Le verrou reste valable jusqu'à son expiration ; prochain
             // essai au tour suivant.
-            debugPrint('Verrou non renouvelé pendant le déplacement : $erreur');
+            Journal.actuel.avertissement(
+              CategorieJournal.stockage,
+              'Verrou non renouvelé pendant le déplacement',
+              erreur: erreur,
+            );
           }
         },
       );
@@ -384,7 +434,11 @@ class ServiceDossierChapitres {
             ServiceParametres.cleDeplacementDossierEnCours,
           );
         } catch (erreurRepere) {
-          debugPrint('Repère de déplacement non effacé : $erreurRepere');
+          Journal.actuel.avertissement(
+            CategorieJournal.stockage,
+            'Repère de déplacement non effacé',
+            erreur: erreurRepere,
+          );
         }
         throw ErreurService(erreur.message, cause: erreur);
       }

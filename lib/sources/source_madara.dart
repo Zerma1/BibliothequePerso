@@ -36,6 +36,7 @@ import '../modeles/titre_alternatif.dart';
 import 'client_http_poli.dart';
 import 'constantes_sources.dart';
 import 'erreur_source.dart';
+import 'journal_sources.dart';
 import 'outils_wordpress.dart';
 import 'source_site.dart';
 
@@ -121,37 +122,50 @@ class SourceMadara implements SourceSite {
   /// LIMITE : seule la première page de résultats est lue.
   @override
   Future<List<Titre>> rechercher(String requete) {
-    return OutilsWordPress.avecType(TypeSource.madara, () async {
-      final texte = requete.trim();
-      if (texte.isEmpty) {
-        return const <Titre>[];
-      }
-      final base = Uri.parse(urlBase);
-      final uri = base
-          .resolve('/')
-          .replace(
-            queryParameters: <String, String>{
-              's': texte,
-              'post_type': 'wp-manga',
-            },
-          );
-      final html = await _client.recupererTexte(uri);
-      return OutilsWordPress.avecExtrait(
-        html,
-        () => analyserRecherche(html, uri),
-      );
-    });
+    return JournalSources.operation(
+      'Madara',
+      'recherche',
+      requete,
+      () => OutilsWordPress.avecType(TypeSource.madara, () async {
+        final texte = requete.trim();
+        if (texte.isEmpty) {
+          return const <Titre>[];
+        }
+        final base = Uri.parse(urlBase);
+        final uri = base
+            .resolve('/')
+            .replace(
+              queryParameters: <String, String>{
+                's': texte,
+                'post_type': 'wp-manga',
+              },
+            );
+        final html = await _client.recupererTexte(uri);
+        return OutilsWordPress.avecExtrait(
+          html,
+          () => analyserRecherche(html, uri),
+        );
+      }),
+    );
   }
 
   /// Récupère la fiche d'un titre depuis sa page (une requête, ou aucune si
   /// la même page vient d'être lue).
   @override
   Future<FicheTitre> recupererFiche(String urlTitre) {
-    return OutilsWordPress.avecType(TypeSource.madara, () async {
-      final uri = validerUrlTitre(urlTitre);
-      final html = await _recupererPage(uri);
-      return OutilsWordPress.avecExtrait(html, () => analyserFiche(html, uri));
-    });
+    return JournalSources.operation(
+      'Madara',
+      'fiche',
+      urlTitre,
+      () => OutilsWordPress.avecType(TypeSource.madara, () async {
+        final uri = validerUrlTitre(urlTitre);
+        final html = await _recupererPage(uri);
+        return OutilsWordPress.avecExtrait(
+          html,
+          () => analyserFiche(html, uri),
+        );
+      }),
+    );
   }
 
   /// Récupère tous les chapitres du titre, du plus ancien au plus récent.
@@ -167,116 +181,128 @@ class SourceMadara implements SourceSite {
   /// sont pas listés.
   @override
   Future<List<Chapitre>> recupererChapitres(String urlTitre) {
-    return OutilsWordPress.avecType(TypeSource.madara, () async {
-      final uri = validerUrlTitre(urlTitre);
-      final html = await _recupererPage(uri);
-      final document = OutilsWordPress.avecExtrait(html, () {
-        final document = parse(html);
-        _verifierFiche(document, uri);
-        return document;
-      });
-      final langue = OutilsWordPress.langueDepuisPage(
-        document,
-        languesPreferees,
-      );
-      final maintenant = _maintenant();
-
-      // Liste présente dans la fiche (anciennes versions, ou réglage « pas de
-      // chargement AJAX » du thème).
-      if (document.querySelector('li.wp-manga-chapter') != null) {
-        return analyserChapitres(
-          html,
-          uri,
-          langue: langue,
-          maintenant: maintenant,
-        ).reversed.toList();
-      }
-      final conteneur = document.querySelector('#manga-chapters-holder');
-      if (conteneur == null) {
-        throw ErreurSource(
-          uri.toString(),
-          'Fiche Madara sans liste de chapitres (ni dans la page, ni '
-          '#manga-chapters-holder)',
+    return JournalSources.operation(
+      'Madara',
+      'chapitres',
+      urlTitre,
+      () => OutilsWordPress.avecType(TypeSource.madara, () async {
+        final uri = validerUrlTitre(urlTitre);
+        final html = await _recupererPage(uri);
+        final document = OutilsWordPress.avecExtrait(html, () {
+          final document = parse(html);
+          _verifierFiche(document, uri);
+          return document;
+        });
+        final langue = OutilsWordPress.langueDepuisPage(
+          document,
+          languesPreferees,
         );
-      }
+        final maintenant = _maintenant();
 
-      final chapitres = <Chapitre>[];
-      final urlsVues = <String>{};
-      try {
-        for (var page = 1; page <= nombreMaxPages; page++) {
-          final adresse = uri
-              .resolve('ajax/chapters/')
-              .replace(queryParameters: <String, String>{'t': '$page'});
-          final reponse = await _client.envoyerFormulaire(
-            adresse,
-            referer: uri.toString(),
-            // Requête de lecture : la renvoyer après une coupure est sans
-            // risque.
-            nouvellesTentatives: nombreMaxNouvellesTentatives,
+        // Liste présente dans la fiche (anciennes versions, ou réglage « pas de
+        // chargement AJAX » du thème).
+        if (document.querySelector('li.wp-manga-chapter') != null) {
+          return analyserChapitres(
+            html,
+            uri,
+            langue: langue,
+            maintenant: maintenant,
+          ).reversed.toList();
+        }
+        final conteneur = document.querySelector('#manga-chapters-holder');
+        if (conteneur == null) {
+          throw ErreurSource(
+            uri.toString(),
+            'Fiche Madara sans liste de chapitres (ni dans la page, ni '
+            '#manga-chapters-holder)',
           );
-          final dePage = OutilsWordPress.avecExtrait(reponse, () {
-            // Les pages suivantes ne sont demandées que si la page 1 en
-            // annonçait : seule la page 1 peut être une réponse étrangère.
-            if (page == 1) {
-              verifierReponseChapitres(reponse, adresse);
-            }
-            return analyserChapitres(
-              reponse,
-              uri,
-              langue: langue,
-              maintenant: maintenant,
+        }
+
+        final chapitres = <Chapitre>[];
+        final urlsVues = <String>{};
+        try {
+          for (var page = 1; page <= nombreMaxPages; page++) {
+            final adresse = uri
+                .resolve('ajax/chapters/')
+                .replace(queryParameters: <String, String>{'t': '$page'});
+            final reponse = await _client.envoyerFormulaire(
+              adresse,
+              referer: uri.toString(),
+              // Requête de lecture : la renvoyer après une coupure est sans
+              // risque.
+              nouvellesTentatives: nombreMaxNouvellesTentatives,
             );
-          });
-          final avant = chapitres.length;
-          chapitres.addAll(dePage.where((c) => urlsVues.add(c.urlChapitre)));
-          // Garde-fou : une page sans chapitre nouveau arrête la lecture.
-          if (chapitres.length == avant || !aPageSuivante(reponse, page)) {
-            break;
-          }
-        }
-      } on ErreurSource catch (erreur) {
-        final code = erreur.codeStatut;
-        // Seul un échec dès la première page signale un site sans ce point
-        // d'accès ; un échec plus loin est une vraie erreur.
-        if (chapitres.isNotEmpty ||
-            !codesHttpSansAjaxChapitresMadara.contains(code)) {
-          rethrow;
-        }
-        // Ancien point d'accès du thème (Madara 1.x) : identifiant du titre
-        // dans `data-id` du conteneur.
-        final idTitre = conteneur.attributes['data-id']?.trim() ?? '';
-        if (idTitre.isEmpty) {
-          rethrow;
-        }
-        final adresseAncienne = uri.resolve('/wp-admin/admin-ajax.php');
-        final reponse = await _client.envoyerFormulaire(
-          adresseAncienne,
-          champs: <String, String>{
-            'action': 'manga_get_chapters',
-            'manga': idTitre,
-          },
-          referer: uri.toString(),
-          nouvellesTentatives: nombreMaxNouvellesTentatives,
-        );
-        chapitres
-          ..clear()
-          ..addAll(
-            OutilsWordPress.avecExtrait(reponse, () {
-              // Une réponse en 200 qui n'est pas une liste du thème (page
-              // de cache, anti-robot) donnerait sinon une liste vide
-              // silencieuse.
-              verifierReponseChapitres(reponse, adresseAncienne);
+            final dePage = OutilsWordPress.avecExtrait(reponse, () {
+              // Les pages suivantes ne sont demandées que si la page 1 en
+              // annonçait : seule la page 1 peut être une réponse étrangère.
+              if (page == 1) {
+                verifierReponseChapitres(reponse, adresse);
+              }
               return analyserChapitres(
                 reponse,
                 uri,
                 langue: langue,
                 maintenant: maintenant,
               );
-            }),
+            });
+            final avant = chapitres.length;
+            chapitres.addAll(dePage.where((c) => urlsVues.add(c.urlChapitre)));
+            // Garde-fou : une page sans chapitre nouveau arrête la lecture.
+            if (chapitres.length == avant || !aPageSuivante(reponse, page)) {
+              break;
+            }
+            if (page == nombreMaxPages) {
+              // Plafond atteint alors que le thème annonce encore une page.
+              JournalSources.avertir(
+                'Madara',
+                'liste incomplète : $nombreMaxPages pages lues sur plus ($uri)',
+              );
+            }
+          }
+        } on ErreurSource catch (erreur) {
+          final code = erreur.codeStatut;
+          // Seul un échec dès la première page signale un site sans ce point
+          // d'accès ; un échec plus loin est une vraie erreur.
+          if (chapitres.isNotEmpty ||
+              !codesHttpSansAjaxChapitresMadara.contains(code)) {
+            rethrow;
+          }
+          // Ancien point d'accès du thème (Madara 1.x) : identifiant du titre
+          // dans `data-id` du conteneur.
+          final idTitre = conteneur.attributes['data-id']?.trim() ?? '';
+          if (idTitre.isEmpty) {
+            rethrow;
+          }
+          final adresseAncienne = uri.resolve('/wp-admin/admin-ajax.php');
+          final reponse = await _client.envoyerFormulaire(
+            adresseAncienne,
+            champs: <String, String>{
+              'action': 'manga_get_chapters',
+              'manga': idTitre,
+            },
+            referer: uri.toString(),
+            nouvellesTentatives: nombreMaxNouvellesTentatives,
           );
-      }
-      return chapitres.reversed.toList();
-    });
+          chapitres
+            ..clear()
+            ..addAll(
+              OutilsWordPress.avecExtrait(reponse, () {
+                // Une réponse en 200 qui n'est pas une liste du thème (page
+                // de cache, anti-robot) donnerait sinon une liste vide
+                // silencieuse.
+                verifierReponseChapitres(reponse, adresseAncienne);
+                return analyserChapitres(
+                  reponse,
+                  uri,
+                  langue: langue,
+                  maintenant: maintenant,
+                );
+              }),
+            );
+        }
+        return chapitres.reversed.toList();
+      }),
+    );
   }
 
   /// Récupère les adresses des images du chapitre [urlChapitre] (page lue en
@@ -287,18 +313,23 @@ class SourceMadara implements SourceSite {
   /// lecteur : beaucoup de sites Madara refusent les images sans lui.
   @override
   Future<ContenuChapitre> recupererContenu(String urlChapitre) {
-    return OutilsWordPress.avecType(TypeSource.madara, () async {
-      final uri = OutilsWordPress.validerUrlPage(
-        urlChapitre,
-        TypeSource.madara,
-        'https://<site>/manga/<nom>/<chapitre>/ attendu',
-      );
-      final html = await _client.recupererTexte(adresseLectureEnListe(uri));
-      return OutilsWordPress.avecExtrait(
-        html,
-        () => analyserContenu(html, uri),
-      );
-    });
+    return JournalSources.operation(
+      'Madara',
+      'chapitre',
+      urlChapitre,
+      () => OutilsWordPress.avecType(TypeSource.madara, () async {
+        final uri = OutilsWordPress.validerUrlPage(
+          urlChapitre,
+          TypeSource.madara,
+          'https://<site>/manga/<nom>/<chapitre>/ attendu',
+        );
+        final html = await _client.recupererTexte(adresseLectureEnListe(uri));
+        return OutilsWordPress.avecExtrait(
+          html,
+          () => analyserContenu(html, uri),
+        );
+      }),
+    );
   }
 
   // ---------------------------------------------------------------------

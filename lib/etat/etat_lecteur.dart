@@ -12,6 +12,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../modeles/chapitre.dart';
+import '../modeles/journal.dart';
 import '../modeles/source.dart';
 import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
@@ -263,6 +264,7 @@ class EtatLecteur extends EtatNotifiant {
       // externe, mais s'il arrive ici, le lecteur ne lit rien et propose
       // seulement le lien vers le site de l'éditeur.
       _nature = NatureContenu.externe;
+      _noterOuverture(chapitre, 'chapitre externe (lien seulement)');
       notifier();
       return;
     }
@@ -279,6 +281,10 @@ class EtatLecteur extends EtatNotifiant {
         // de le télécharger ou de l'ouvrir sur le site.
         if (numero == _numeroOuverture) {
           _nature = NatureContenu.nonTelecharge;
+          _noterOuverture(
+            chapitre,
+            'non téléchargé (${telechargement?.statut.name ?? 'hors file'})',
+          );
           notifier();
         }
         return;
@@ -288,16 +294,23 @@ class EtatLecteur extends EtatNotifiant {
         if (numero != _numeroOuverture) return;
         _nombrePages = pages;
         _nature = NatureContenu.images;
+        _noterOuverture(chapitre, '$pages page(s) depuis le disque');
       } else {
         final html = await _serviceTelechargement.lireTexte(chapitre.id!);
         if (numero != _numeroOuverture) return;
         _texte = texteLisibleDepuisHtml(html ?? '');
         _nature = NatureContenu.texte;
+        _noterOuverture(chapitre, 'texte (${_texte.length} caractères)');
       }
       notifier();
     } catch (erreur, pile) {
       if (numero != _numeroOuverture) return;
       _erreur = DescriptionErreur.depuis(erreur, pile);
+      Journal.actuel.avertissement(
+        CategorieJournal.interface,
+        'Lecteur : chapitre n°${chapitre.id} du titre n°$idTitre illisible',
+        erreur: erreur,
+      );
       notifier();
     }
   }
@@ -412,6 +425,11 @@ class EtatLecteur extends EtatNotifiant {
     try {
       if (!chapitre.estLu) {
         await _serviceBibliotheque.marquerLu(id);
+        // Le service ne journalise pas ce marquage (simple écriture en base).
+        Journal.actuel.info(
+          CategorieJournal.interface,
+          'Lecteur : chapitre n°$id marqué lu (fin de lecture)',
+        );
         if (_chapitre?.id == id) {
           _chapitre = chapitre.copierAvec(estLu: true);
         }
@@ -422,7 +440,12 @@ class EtatLecteur extends EtatNotifiant {
     } catch (erreur, pile) {
       // L'échec du marquage ne doit pas interrompre la lecture.
       _idsMarques.remove(id);
-      debugPrint('Chapitre non marqué lu : $erreur\n$pile');
+      Journal.actuel.avertissement(
+        CategorieJournal.interface,
+        'Lecteur : chapitre n°$id non marqué lu',
+        erreur: erreur,
+        pile: pile,
+      );
     }
   }
 
@@ -510,13 +533,41 @@ class EtatLecteur extends EtatNotifiant {
         }
         notifier();
       } catch (erreur, pile) {
-        debugPrint('Lecteur : file illisible : $erreur\n$pile');
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Lecteur : file de téléchargement illisible',
+          erreur: erreur,
+          pile: pile,
+        );
       }
     } while (_relectureFileRedemandee);
   }
 
+  /// Note dans le journal le chapitre ouvert et ce que le lecteur affiche
+  /// (le service ne voit pas la lecture elle-même).
+  void _noterOuverture(Chapitre chapitre, String contenu) {
+    final numero = chapitre.numero;
+    // « 12 » plutôt que « 12.0 » : le numéro tel que le client le voit.
+    final numeroLisible = numero.isFinite && numero == numero.truncateToDouble()
+        ? numero.toInt().toString()
+        : numero.toString();
+    Journal.actuel.info(
+      CategorieJournal.interface,
+      'Lecteur : chapitre n°${chapitre.id} (numéro $numeroLisible) du titre '
+      'n°$idTitre ouvert : $contenu',
+    );
+  }
+
   @override
   void dispose() {
+    final chapitre = _chapitre;
+    if (chapitre != null) {
+      Journal.actuel.info(
+        CategorieJournal.interface,
+        'Lecteur fermé : chapitre n°${chapitre.id} du titre n°$idTitre'
+        '${_nombrePages > 0 ? ', page ${_pageCourante + 1}/$_nombrePages' : ''}',
+      );
+    }
     unawaited(_abonnement.cancel());
     final protege = _idProtege;
     if (protege != null) {

@@ -22,6 +22,7 @@ import '../donnees/depot_titres_sources.dart';
 import '../donnees/stockage_telechargements.dart';
 import '../modeles/chapitre.dart';
 import '../modeles/groupe_categories.dart';
+import '../modeles/journal.dart';
 import '../modeles/lien_titre_source.dart';
 import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
@@ -286,7 +287,26 @@ class ServiceExport {
   Future<ResultatExport> exporter({DateTime? date}) {
     final enCours = _enCours;
     if (enCours != null) return enCours;
-    final nouveau = _exporter(date ?? _horloge());
+    final nouveau = _exporter(date ?? _horloge()).then(
+      (resultat) {
+        Journal.actuel.info(
+          CategorieJournal.export,
+          'Export terminé : ${resultat.nombreTitres} titre(s), '
+          '${resultat.nombreSites} site(s) dans '
+          '${chemins.basename(resultat.cheminJson)}',
+        );
+        return resultat;
+      },
+      onError: (Object erreur, StackTrace pile) {
+        Journal.actuel.erreur(
+          CategorieJournal.export,
+          'Export impossible',
+          erreur: erreur,
+          pile: pile,
+        );
+        Error.throwWithStackTrace(erreur, pile);
+      },
+    );
     _enCours = nouveau;
     // Libéré après coup, réussite ou échec : un nouvel export reste possible.
     nouveau.then<void>(

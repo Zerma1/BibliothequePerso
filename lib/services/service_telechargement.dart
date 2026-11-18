@@ -24,6 +24,7 @@ import '../donnees/stockage_telechargements.dart';
 import '../modeles/chapitre.dart';
 import '../modeles/constantes.dart';
 import '../modeles/contenu_chapitre.dart';
+import '../modeles/journal.dart';
 import '../modeles/source.dart';
 import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
@@ -264,7 +265,12 @@ class ServiceTelechargement {
     } catch (erreur, pile) {
       // Le contrôle sera refait au prochain démarrage ; il ne doit pas
       // empêcher la file de tourner.
-      debugPrint('Contrôle des archives impossible : $erreur\n$pile');
+      Journal.actuel.erreur(
+        CategorieJournal.stockage,
+        'Contrôle des archives impossible',
+        erreur: erreur,
+        pile: pile,
+      );
     }
     await appliquerReglesATous();
   }
@@ -355,17 +361,22 @@ class ServiceTelechargement {
         }
         enAttente.add(id);
         if (enAttente.length > nombreMaximalArchivesManquantesDAffilee) {
-          debugPrint(
+          Journal.actuel.avertissement(
+            CategorieJournal.stockage,
             'Contrôle des archives arrêté : plus de '
             '$nombreMaximalArchivesManquantesDAffilee archives manquantes '
-            "d'affilée sur ${_stockage.dossierRacine} (partage instable ?).",
+            "d'affilée sur ${_stockage.dossierRacine} (partage instable ?)",
           );
           termine = false;
           break;
         }
       } catch (erreur) {
         // Un chapitre illisible ne doit pas empêcher le contrôle des autres.
-        debugPrint('Contrôle de l\'archive du chapitre n°$id : $erreur');
+        Journal.actuel.avertissement(
+          CategorieJournal.stockage,
+          "Contrôle de l'archive du chapitre n°$id impossible",
+          erreur: erreur,
+        );
       }
     }
     // LIMITE : sur un dossier personnalisé, plus de
@@ -375,7 +386,14 @@ class ServiceTelechargement {
     if (termine) {
       nombre += await _marquerArchivesManquantes(enAttente);
     }
-    if (nombre > 0) _signaler();
+    if (nombre > 0) {
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        '$nombre archive(s) manquante(s) : chapitres remis à « non '
+        'téléchargé »',
+      );
+      _signaler();
+    }
     return nombre;
   }
 
@@ -405,7 +423,11 @@ class ServiceTelechargement {
         await _marquerArchiveManquante(id);
         nombre++;
       } catch (erreur) {
-        debugPrint('Archive manquante du chapitre n°$id non notée : $erreur');
+        Journal.actuel.avertissement(
+          CategorieJournal.stockage,
+          'Archive manquante du chapitre n°$id non notée',
+          erreur: erreur,
+        );
       }
     }
     return nombre;
@@ -506,7 +528,11 @@ class ServiceTelechargement {
             chemins.normalize(_stockage.dossierRacine.trim()),
           );
     } catch (erreur) {
-      debugPrint('Dossier des chapitres réglé illisible : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.parametres,
+        'Dossier des chapitres réglé illisible',
+        erreur: erreur,
+      );
       return true;
     }
   }
@@ -534,7 +560,11 @@ class ServiceTelechargement {
       );
       return cible != null && cible.trim().isNotEmpty;
     } catch (erreur) {
-      debugPrint('Déplacement des archives inachevé ? $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.parametres,
+        'Repère de déplacement des archives illisible',
+        erreur: erreur,
+      );
       return true;
     }
   }
@@ -561,7 +591,11 @@ class ServiceTelechargement {
     try {
       injoignable = await _dossierInjoignable();
     } catch (erreur) {
-      debugPrint('Contrôle du dossier des chapitres impossible : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        'Contrôle du dossier des chapitres impossible',
+        erreur: erreur,
+      );
       injoignable = _stockage.estPersonnalise;
     }
     final ancien = _accesDossier;
@@ -577,6 +611,21 @@ class ServiceTelechargement {
           );
     _accesDossier = nouveau;
     if (nouveau != ancien) {
+      // Seuls les changements d'état sont notés : le contrôle est refait
+      // avant chaque chapitre et toutes les 2 minutes quand le NAS est
+      // éteint, une ligne à chaque fois noierait le journal.
+      if (nouveau.estAccessible) {
+        Journal.actuel.info(
+          CategorieJournal.stockage,
+          'Dossier des chapitres accessible : ${nouveau.chemin}',
+        );
+      } else {
+        Journal.actuel.avertissement(
+          CategorieJournal.stockage,
+          'Dossier des chapitres inaccessible (${nouveau.nature?.name}) : '
+          '${nouveau.chemin}, téléchargements en pause',
+        );
+      }
       _signaler();
       // Retour du NAS : les téléchargements en attente repartent sans
       // attendre la prochaine action du client.
@@ -639,7 +688,12 @@ class ServiceTelechargement {
       await _depotChapitres.marquerGardes(anciens);
       await _serviceParametres.supprimerChapitresGardes();
     } catch (erreur, pile) {
-      debugPrint('Reprise des chapitres gardés impossible : $erreur\n$pile');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Reprise des chapitres gardés impossible',
+        erreur: erreur,
+        pile: pile,
+      );
       _repriseGardes = null;
     }
   }();
@@ -690,8 +744,10 @@ class ServiceTelechargement {
         _signaler();
       }
     } catch (erreur) {
-      debugPrint(
-        'Suppression prévue du chapitre n°$idChapitre non repoussée : $erreur',
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Suppression prévue du chapitre n°$idChapitre non repoussée',
+        erreur: erreur,
       );
     }
   }
@@ -763,17 +819,33 @@ class ServiceTelechargement {
       // Retenu seulement une fois les titres lus : si la lecture a échoué,
       // la désactivation sera encore reconnue à l'appel suivant.
       _archiveCompleteAppliquee = archiveComplete;
+      var aTelecharger = 0;
+      var aSupprimer = 0;
+      var enEchec = 0;
       for (final idTitre in ids) {
         try {
-          await _appliquerRegles(idTitre, supprimerEchues: false);
+          final plan = await _appliquerRegles(idTitre, supprimerEchues: false);
+          aTelecharger += plan.idsATelecharger.length;
+          aSupprimer += plan.idsASupprimer.length;
         } catch (erreur, pile) {
           // Par exemple une écriture refusée pendant que l'autre isolat
           // écrit : ce titre sera repris à la prochaine application.
-          debugPrint(
-            'Règles du titre n°$idTitre non appliquées : $erreur\n$pile',
+          enEchec++;
+          Journal.actuel.avertissement(
+            CategorieJournal.telechargement,
+            'Règles du titre n°$idTitre non appliquées',
+            erreur: erreur,
+            pile: pile,
           );
         }
       }
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Règles appliquées à ${ids.length} titre(s)'
+        '${archiveComplete ? ' (archive complète)' : ''} : '
+        '$aTelecharger à télécharger, $aSupprimer à supprimer'
+        '${enEchec > 0 ? ', $enEchec titre(s) en échec' : ''}',
+      );
     } finally {
       // Une seule passe pour tous les titres (et même si la lecture des
       // listes a échoué) : les échéances concernent aussi des titres sortis
@@ -907,9 +979,13 @@ class ServiceTelechargement {
     // complète ; l'inverse pourrait laisser un trou dans sa lecture.
     // LIMITE : pas de transaction commune (les dépôts ouvrent chacune la
     // leur) ; une application suivante des règles termine le travail.
+    var misEnFile = 0;
     for (final idChapitre in plan.idsATelecharger) {
-      await _mettreEnFileAutomatiquement(idChapitre);
+      if (await _mettreEnFileAutomatiquement(idChapitre)) misEnFile++;
     }
+    var retiresDeLaFile = 0;
+    var suppressionsPrevues = 0;
+    var suppressionsAnnulees = 0;
     // Les téléchargements en attente qui ne sont plus voulus (lecture qui a
     // avancé, titre retiré de Favoris et Suivis) sont retirés de la file ;
     // ceux que le client a demandés à la main restent.
@@ -936,6 +1012,7 @@ class ServiceTelechargement {
           !_demandesManuelles.contains(idChapitre);
       if (plusVoulu || idsExternes.contains(idChapitre)) {
         await _depotTelechargements.supprimerTelechargement(telechargement.id!);
+        retiresDeLaFile++;
       }
     }
     // Suppression différée (décision du client) : une date est posée pour
@@ -954,10 +1031,30 @@ class ServiceTelechargement {
       final voulu = !aSupprimer.contains(id) || chapitre.estGarde;
       if (!voulu && chapitre.dateSuppressionPrevue == null) {
         await _depotChapitres.planifierSuppression(id, echeance);
+        suppressionsPrevues++;
       } else if (voulu && chapitre.dateSuppressionPrevue != null) {
         await _depotChapitres.planifierSuppression(id, null);
+        suppressionsAnnulees++;
       }
     }
+    // Une ligne seulement quand quelque chose change : les règles sont
+    // appliquées à chaque lecture et à chaque démarrage, pour tous les
+    // titres ; un titre déjà à jour ne mérite qu'une ligne de débogage.
+    final aChange =
+        misEnFile +
+            retiresDeLaFile +
+            suppressionsPrevues +
+            suppressionsAnnulees >
+        0;
+    Journal.actuel.journaliser(
+      aChange ? NiveauJournal.info : NiveauJournal.debogage,
+      CategorieJournal.telechargement,
+      'Règles du titre n°$idTitre : ${plan.idsATelecharger.length} à '
+      'télécharger, ${plan.idsASupprimer.length} à supprimer ; $misEnFile '
+      'mis en file, $retiresDeLaFile retiré(s) de la file, '
+      '$suppressionsPrevues suppression(s) prévue(s), $suppressionsAnnulees '
+      'annulée(s)',
+    );
     if (supprimerEchues) {
       await _supprimerArchivesEchuesSansErreur(signalerChangement: false);
     }
@@ -1038,9 +1135,18 @@ class ServiceTelechargement {
         await supprimerTelechargement(id, signalerChangement: false);
         nombre++;
       } catch (erreur) {
-        debugPrint('Suppression prévue du chapitre n°$id impossible : $erreur');
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Suppression prévue du chapitre n°$id impossible',
+          erreur: erreur,
+        );
       }
     }
+    Journal.actuel.info(
+      CategorieJournal.telechargement,
+      'Suppressions échues : $nombre archive(s) supprimée(s), $annulees '
+      'annulée(s) sur ${echues.length}',
+    );
     // Les dates annulées changent l'affichage (fin du compte à rebours
     // rouge) même si rien n'a été effacé.
     if (annulees > 0) _signaler();
@@ -1056,7 +1162,12 @@ class ServiceTelechargement {
       final nombre = await _supprimerArchivesEchues();
       if (nombre > 0 && signalerChangement) _signaler();
     } catch (erreur, pile) {
-      debugPrint('Suppressions prévues non faites : $erreur\n$pile');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Suppressions prévues non faites',
+        erreur: erreur,
+        pile: pile,
+      );
     }
   }
 
@@ -1105,7 +1216,8 @@ class ServiceTelechargement {
       _depotChapitres.chargerSuppressionsPrevues(idTitre: idTitre);
 
   /// Met un chapitre voulu par les règles en file, ou relance son échec.
-  Future<void> _mettreEnFileAutomatiquement(int idChapitre) async {
+  /// Renvoie `true` si la file a changé (pour le bilan du journal).
+  Future<bool> _mettreEnFileAutomatiquement(int idChapitre) async {
     // Relu juste avant : l'autre isolat a pu le terminer depuis le calcul du
     // plan.
     final chapitre = await _depotChapitres.chargerChapitre(idChapitre);
@@ -1113,23 +1225,34 @@ class ServiceTelechargement {
     // l'écarte déjà ; contrôle redit ici car il a pu devenir externe depuis
     // le calcul du plan.
     if (chapitre == null || chapitre.estTelecharge || chapitre.estExterne) {
-      return;
+      return false;
     }
     final existant = await _depotTelechargements.chargerParChapitre(idChapitre);
     if (existant == null) {
       await _depotTelechargements.ajouterEnFile(idChapitre);
-      return;
+      Journal.actuel.debogage(
+        CategorieJournal.telechargement,
+        'Chapitre n°$idChapitre mis en file (règles)',
+      );
+      return true;
     }
     // Seul un échec est relancé : « en attente » et « en cours » sont déjà
     // pris en charge, et « terminé » signifie qu'un autre traitement vient de
     // finir (l'état du chapitre sera à jour au prochain calcul).
-    if (existant.statut != StatutTelechargement.echec) return;
+    if (existant.statut != StatutTelechargement.echec) return false;
     // Pas de relance sans fin d'un chapitre que le site refuse.
-    if ((_echecs[idChapitre] ?? 0) >= nombreMaximalEchecsAutomatiques) return;
+    if ((_echecs[idChapitre] ?? 0) >= nombreMaximalEchecsAutomatiques) {
+      return false;
+    }
     await _depotTelechargements.enregistrerStatut(
       existant.id!,
       StatutTelechargement.enAttente,
     );
+    Journal.actuel.debogage(
+      CategorieJournal.telechargement,
+      'Chapitre n°$idChapitre relancé après un échec (règles)',
+    );
+    return true;
   }
 
   // ------------------------------------------------- Actions du client
@@ -1160,10 +1283,18 @@ class ServiceTelechargement {
     final existant = await _depotTelechargements.chargerParChapitre(idChapitre);
     if (existant == null) {
       await _depotTelechargements.ajouterEnFile(idChapitre);
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Chapitre n°$idChapitre mis en file (demande manuelle)',
+      );
     } else if (existant.statut == StatutTelechargement.echec) {
       await _depotTelechargements.enregistrerStatut(
         existant.id!,
         StatutTelechargement.enAttente,
+      );
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Chapitre n°$idChapitre relancé (demande manuelle)',
       );
     }
     _signaler();
@@ -1188,10 +1319,12 @@ class ServiceTelechargement {
     _verifierArchivesSurPlace();
     await _verifierAucunDeplacement();
     final chapitres = await _depotChapitres.chargerChapitres(idTitre);
+    var archives = 0;
     for (final chapitre in chapitres) {
       final id = chapitre.id;
       if (id != null && chapitre.estTelecharge) {
         await supprimerTelechargement(id, signalerChangement: false);
+        archives++;
       }
     }
     final titre = await _depotTitres.chargerTitre(idTitre);
@@ -1200,6 +1333,11 @@ class ServiceTelechargement {
       await _stockage.supprimerCouverture(titre);
     }
     await _depotTitres.supprimerTitre(idTitre);
+    Journal.actuel.info(
+      CategorieJournal.bibliotheque,
+      'Titre n°$idTitre${titre == null ? '' : ' « ${titre.nom} »'} supprimé '
+      'avec $archives archive(s)',
+    );
     _signaler();
   }
 
@@ -1249,6 +1387,18 @@ class ServiceTelechargement {
     }
     // Efface aussi le nom d'archive et la suppression prévue.
     await _depotChapitres.enregistrerArchive(idChapitre, null);
+    if (avant != null && (avant.estTelecharge || avant.nomArchive != null)) {
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Archive du chapitre n°$idChapitre supprimée'
+        '${avant.dateSuppressionPrevue != null ? ' (suppression prévue)' : ''}',
+      );
+    } else if (ligne != null) {
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Chapitre n°$idChapitre retiré de la file',
+      );
+    }
     // Un chapitre supprimé n'a plus à être « gardé » : s'il est retéléchargé,
     // les règles s'appliquent à nouveau normalement.
     if (chapitre?.estGarde ?? false) {
@@ -1426,7 +1576,12 @@ class ServiceTelechargement {
       // Une erreur de base (par exemple une écriture concurrente de l'autre
       // isolat) ne doit pas remonter jusqu'à l'interface : la file sera
       // reprise au prochain lancement.
-      debugPrint('Traitement de la file interrompu : $erreur\n$pile');
+      Journal.actuel.erreur(
+        CategorieJournal.telechargement,
+        'Traitement de la file interrompu',
+        erreur: erreur,
+        pile: pile,
+      );
     }
   }
 
@@ -1449,7 +1604,11 @@ class ServiceTelechargement {
     } catch (erreur) {
       // Un fichier partiel impossible à effacer ne doit pas bloquer la file :
       // l'écriture du même chapitre repartira de zéro.
-      debugPrint('Nettoyage des archives partielles impossible : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        'Nettoyage des archives partielles impossible',
+        erreur: erreur,
+      );
     }
   }
 
@@ -1531,7 +1690,11 @@ class ServiceTelechargement {
       // Un renouvellement manqué (base momentanément occupée) ne doit pas
       // faire échouer le chapitre : le verrou reste valable jusqu'à son
       // expiration, et sera revérifié à la page suivante.
-      debugPrint('Renouvellement du verrou impossible : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Renouvellement du verrou impossible',
+        erreur: erreur,
+      );
       return true;
     }
   }
@@ -1546,7 +1709,11 @@ class ServiceTelechargement {
       }
     } catch (erreur) {
       // Le verrou expirera de lui-même.
-      debugPrint('Libération du verrou de téléchargement impossible : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Libération du verrou de téléchargement impossible',
+        erreur: erreur,
+      );
     }
   }
 
@@ -1574,7 +1741,11 @@ class ServiceTelechargement {
         _planifierNouvelEssai(_dureeVerrou + margeNouvelEssaiVerrou);
       }
     } catch (erreur) {
-      debugPrint('Contrôle des téléchargements en cours impossible : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Contrôle des téléchargements en cours impossible',
+        erreur: erreur,
+      );
     }
   }
 
@@ -1613,6 +1784,11 @@ class ServiceTelechargement {
     // l'enregistrement échoue, sinon elle resterait sur le disque sans
     // qu'aucun chapitre ne la désigne.
     String? archiveOrpheline;
+    // Durée et nombre de pages pour le journal (aide au diagnostic d'un site
+    // lent ou d'un chapitre incomplet).
+    final chrono = Stopwatch()..start();
+    var nombrePages = 0;
+    var description = 'chapitre n°$idChapitre';
     try {
       // Déjà « en cours » : la ligne a été réservée par reserverProchain().
       _signaler();
@@ -1622,8 +1798,20 @@ class ServiceTelechargement {
       // la ligne est retirée sans rien demander au site.
       if (contexte == null || contexte.chapitre.estExterne) {
         await _depotTelechargements.supprimerTelechargement(id);
+        Journal.actuel.info(
+          CategorieJournal.telechargement,
+          'Chapitre n°$idChapitre retiré de la file (disparu ou externe)',
+        );
         return true;
       }
+      description =
+          'chapitre n°$idChapitre (« ${contexte.titre.nom} » '
+          'ch. ${_formaterNumero(contexte.chapitre.numero)} '
+          '${contexte.chapitre.langue}, ${contexte.source.nom})';
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Téléchargement du $description : début',
+      );
       final adaptateur = _fabriqueSources.creer(contexte.source);
       var contenu = await adaptateur.recupererContenu(
         contexte.chapitre.urlChapitre,
@@ -1638,6 +1826,7 @@ class ServiceTelechargement {
         await ecriture.ajouterTexte(texte);
       } else {
         final total = contenu.urlsImages.length;
+        nombrePages = total;
         await _depotTelechargements.enregistrerProgression(
           id,
           nombrePagesFaites: 0,
@@ -1692,17 +1881,35 @@ class ServiceTelechargement {
         // plus voulue et ne serait suivie par aucune ligne en base.
         archiveOrpheline = null;
         await _stockage.supprimerArchive(nomArchive);
+        Journal.actuel.info(
+          CategorieJournal.telechargement,
+          'Téléchargement du $description annulé à la fin',
+        );
         return true;
       }
       archiveOrpheline = null;
       _echecs.remove(idChapitre);
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Téléchargement du $description : terminé en '
+        '${_formaterDuree(chrono.elapsed)}, '
+        '${contenu.estTexte ? 'texte' : '$nombrePages page(s)'}',
+      );
     } on _Annulation {
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Téléchargement du $description annulé',
+      );
       await _abandonner(ecriture);
     } on _VerrouPerdu {
       // L'autre isolat a repris la file : on efface seulement notre archive
       // partielle, sans toucher la ligne de file (c'est désormais à lui de
       // la gérer ; elle sera reprise comme interrompue).
-      debugPrint('Téléchargement n°$id abandonné : verrou repris ailleurs');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Téléchargement du $description abandonné : file reprise par '
+        "l'autre isolat",
+      );
       await _abandonner(ecriture);
     } catch (erreur, pile) {
       await _abandonner(ecriture);
@@ -1711,9 +1918,11 @@ class ServiceTelechargement {
         // NAS éteint, partage déconnecté : le site n'y est pour rien. Le
         // chapitre retourne en attente (sans échec ni compteur) et la file
         // s'arrête jusqu'au retour du dossier.
-        debugPrint(
-          'Téléchargement n°$id suspendu : dossier des chapitres '
-          'inaccessible ($erreur)',
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Téléchargement du $description suspendu : dossier des chapitres '
+          'inaccessible (NAS ?)',
+          erreur: erreur,
         );
         try {
           await _depotTelechargements.enregistrerStatut(
@@ -1722,8 +1931,10 @@ class ServiceTelechargement {
           );
         } catch (erreurStatut) {
           // La ligne restera « en cours » et sera reprise comme interrompue.
-          debugPrint(
-            'Téléchargement n°$id non remis en attente : $erreurStatut',
+          Journal.actuel.avertissement(
+            CategorieJournal.telechargement,
+            'Téléchargement n°$id non remis en attente',
+            erreur: erreurStatut,
           );
         }
         await _actualiserAcces(
@@ -1731,8 +1942,17 @@ class ServiceTelechargement {
         );
         return false;
       }
-      debugPrint('Téléchargement n°$id en échec : $erreur\n$pile');
       _echecs.update(idChapitre, (n) => n + 1, ifAbsent: () => 1);
+      // La pile n'est utile que pour une erreur inattendue : un refus du
+      // site (`ErreurSource`) se comprend avec son message.
+      Journal.actuel.erreur(
+        CategorieJournal.telechargement,
+        'Téléchargement du $description en échec après '
+        '${_formaterDuree(chrono.elapsed)} (échec n°${_echecs[idChapitre]}) : '
+        '${_messageErreur(erreur)}',
+        erreur: erreur,
+        pile: erreur is ErreurSource ? null : pile,
+      );
       try {
         await _depotTelechargements.enregistrerStatut(
           id,
@@ -1742,8 +1962,10 @@ class ServiceTelechargement {
       } catch (erreurStatut) {
         // La ligne restera « en cours » et sera reprise au prochain
         // traitement.
-        debugPrint(
-          'Statut du téléchargement n°$id non enregistré : $erreurStatut',
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Statut du téléchargement n°$id non enregistré',
+          erreur: erreurStatut,
         );
       }
     } finally {
@@ -1788,7 +2010,11 @@ class ServiceTelechargement {
     } catch (erreur) {
       // LIMITE : l'archive reste sur le disque sans chapitre associé ; elle
       // sera remplacée si ce chapitre est retéléchargé sous le même nom.
-      debugPrint('Archive orpheline $nomArchive non effacée : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        'Archive orpheline $nomArchive non effacée',
+        erreur: erreur,
+      );
     }
   }
 
@@ -1888,5 +2114,18 @@ class ServiceTelechargement {
     if (erreur is ErreurSource) return erreur.message;
     if (erreur is ErreurService) return erreur.message;
     return erreur.toString();
+  }
+
+  /// Numéro de chapitre lisible pour le journal : `12` plutôt que `12.0`.
+  static String _formaterNumero(double numero) =>
+      numero == numero.truncateToDouble() && numero.isFinite
+      ? numero.toInt().toString()
+      : numero.toString();
+
+  /// Durée lisible pour le journal : `850 ms` ou `12,4 s`.
+  static String _formaterDuree(Duration duree) {
+    final ms = duree.inMilliseconds;
+    if (ms < Duration.millisecondsPerSecond) return '$ms ms';
+    return '${(ms / Duration.millisecondsPerSecond).toStringAsFixed(1).replaceAll('.', ',')} s';
   }
 }

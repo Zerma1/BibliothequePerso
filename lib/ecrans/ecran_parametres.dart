@@ -1,4 +1,5 @@
-/// Écran Paramètres : règles de téléchargement, sites et « À propos ».
+/// Écran Paramètres : règles de téléchargement, sites, journal et « À
+/// propos ».
 library;
 
 import 'package:material_ui/material_ui.dart';
@@ -17,6 +18,7 @@ import '../widgets/editeur_langues.dart';
 import '../widgets/messages.dart';
 import '../widgets/section_categories_regroupees.dart';
 import '../widgets/section_dossier_chapitres.dart';
+import '../widgets/section_journal.dart';
 import '../widgets/section_pliable.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
@@ -56,6 +58,9 @@ class EcranParametres extends StatelessWidget {
               // Après les sites : les catégories viennent d'eux.
               SectionCategoriesRegroupees(),
               _SectionExport(),
+              // Juste avant « À propos » : on vient y chercher le journal à
+              // joindre à un retour de test, comme la version.
+              SectionJournal(),
               _SectionAPropos(),
             ],
           ),

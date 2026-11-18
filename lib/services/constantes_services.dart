@@ -105,6 +105,39 @@ const String nomDossierRapports = 'rapports';
 /// fin.
 const int nombreMaximalRapports = 50;
 
+/// Nombre de lignes de la fin du journal jointes à un rapport d'erreur :
+/// assez pour voir ce qui a précédé l'erreur (requêtes, étapes), assez peu
+/// pour que le rapport reste lisible.
+const int nombreLignesJournalRapport = 200;
+
+/// Délai maximal accordé au journal pour écrire ses entrées en attente puis
+/// être relu, avant un export du journal ou un rapport d'erreur. Écrire un
+/// lot prend quelques millisecondes : au-delà de quelques secondes, le
+/// journal est bloqué (disque plein, fichier verrouillé) et l'export ou le
+/// rapport continue sans les entrées en attente plutôt que d'attendre sans
+/// fin.
+const Duration delaiMaxJournal = Duration(seconds: 3);
+
+/// Préfixe du nom d'un journal exporté
+/// (`journal_export_20261118_143000.log`), dans le dossier des rapports.
+const String prefixeFichierJournalExporte = 'journal_export_';
+
+/// Nombre de jours de journaux copiés par « Exporter le journal », par
+/// défaut (aujourd'hui seulement).
+const int joursJournalExportesParDefaut = 1;
+
+/// Nombre maximal de journaux exportés gardés dans le dossier des rapports :
+/// les plus anciens sont effacés au-delà (chaque export peut peser
+/// plusieurs Mo).
+const int nombreMaximalJournauxExportes = 20;
+
+/// Extension d'un journal exporté.
+const String extensionFichierJournalExporte = 'log';
+
+/// Nombre maximal de jours copiés par « Exporter le journal » : le dossier
+/// n'en garde de toute façon que 14 (`joursConservationJournaux`).
+const int joursJournalExportesMaximum = 14;
+
 /// Préfixe du nom d'un rapport d'erreur (`rapport_20261116_143000.txt`).
 const String prefixeFichierRapport = 'rapport_';
 

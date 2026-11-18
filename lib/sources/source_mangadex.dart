@@ -51,6 +51,7 @@ import 'client_http_poli.dart';
 import 'constantes_sources.dart';
 import 'couverture_site.dart';
 import 'erreur_source.dart';
+import 'journal_sources.dart';
 import 'lecture_json.dart';
 import 'outils_sources.dart';
 import 'rapport_erreur_source.dart';
@@ -235,28 +236,33 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
   /// « Pornographic titles are hidden by default »).
   @override
   Future<List<Titre>> rechercher(String requete) {
-    return _avecTypeSite(() async {
-      final texte = requete.trim();
-      final niveaux = niveauxContenuRecherche;
-      if (texte.isEmpty || (niveaux != null && niveaux.isEmpty)) {
-        return const <Titre>[];
-      }
-      final uri = Uri.https(domaineApiMangaDex, '/manga', <String, Object>{
-        'title': texte,
-        'limit': '$taillePageRechercheMangaDex',
-        // Reference expansion (docs/01-concepts/reference-expansion) : évite
-        // une requête par titre pour la couverture et l'auteur.
-        'includes[]': <String>['cover_art', 'author', 'artist'],
-        'contentRating[]': ?niveaux,
-      });
-      return _lireJson(
-        uri,
-        (json, url) => <Titre>[
-          for (final manga in json.lireListeObjets('data', url))
-            _construireTitre(manga, url),
-        ],
-      );
-    });
+    return JournalSources.operation(
+      'MangaDex',
+      'recherche',
+      requete,
+      () => _avecTypeSite(() async {
+        final texte = requete.trim();
+        final niveaux = niveauxContenuRecherche;
+        if (texte.isEmpty || (niveaux != null && niveaux.isEmpty)) {
+          return const <Titre>[];
+        }
+        final uri = Uri.https(domaineApiMangaDex, '/manga', <String, Object>{
+          'title': texte,
+          'limit': '$taillePageRechercheMangaDex',
+          // Reference expansion (docs/01-concepts/reference-expansion) : évite
+          // une requête par titre pour la couverture et l'auteur.
+          'includes[]': <String>['cover_art', 'author', 'artist'],
+          'contentRating[]': ?niveaux,
+        });
+        return _lireJson(
+          uri,
+          (json, url) => <Titre>[
+            for (final manga in json.lireListeObjets('data', url))
+              _construireTitre(manga, url),
+          ],
+        );
+      }),
+    );
   }
 
   /// Fiche d'un titre : `GET /manga/{id}?includes[]=cover_art&includes[]=author
@@ -267,34 +273,43 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
   /// `Titre.niveauContenu`.
   @override
   Future<FicheTitre> recupererFiche(String urlTitre) {
-    return _avecTypeSite(() async {
-      final id = extraireIdTitre(urlTitre);
-      final uri = Uri.https(domaineApiMangaDex, '/manga/$id', <String, Object>{
-        'includes[]': <String>['cover_art', 'author', 'artist'],
-      });
-      return _lireJson(uri, (json, url) {
-        final manga = json.lireObjet('data', url);
-        final attributs = manga.lireObjet('attributes', url);
-
-        // Catégories = tags du titre (MangaAttributes.tags →
-        // Tag.attributes.name, un LocalizedString). Les tags MangaDex ont un
-        // nom anglais ; on prend sinon le premier nom disponible.
-        final categories = <String>[];
-        for (final tag in attributs.lireListeObjets('tags', url)) {
-          final noms = tag
-              .lireObjet('attributes', url)
-              .lireTextesLocalises('name', url);
-          final nom = noms['en'] ?? (noms.isEmpty ? null : noms.values.first);
-          if (nom != null && nom.trim().isNotEmpty) {
-            categories.add(nom.trim());
-          }
-        }
-        return FicheTitre(
-          titre: _construireTitre(manga, url),
-          categories: categories,
+    return JournalSources.operation(
+      'MangaDex',
+      'fiche',
+      urlTitre,
+      () => _avecTypeSite(() async {
+        final id = extraireIdTitre(urlTitre);
+        final uri = Uri.https(
+          domaineApiMangaDex,
+          '/manga/$id',
+          <String, Object>{
+            'includes[]': <String>['cover_art', 'author', 'artist'],
+          },
         );
-      });
-    });
+        return _lireJson(uri, (json, url) {
+          final manga = json.lireObjet('data', url);
+          final attributs = manga.lireObjet('attributes', url);
+
+          // Catégories = tags du titre (MangaAttributes.tags →
+          // Tag.attributes.name, un LocalizedString). Les tags MangaDex ont un
+          // nom anglais ; on prend sinon le premier nom disponible.
+          final categories = <String>[];
+          for (final tag in attributs.lireListeObjets('tags', url)) {
+            final noms = tag
+                .lireObjet('attributes', url)
+                .lireTextesLocalises('name', url);
+            final nom = noms['en'] ?? (noms.isEmpty ? null : noms.values.first);
+            if (nom != null && nom.trim().isNotEmpty) {
+              categories.add(nom.trim());
+            }
+          }
+          return FicheTitre(
+            titre: _construireTitre(manga, url),
+            categories: categories,
+          );
+        });
+      }),
+    );
   }
 
   /// Toutes les couvertures d'un titre (une par volume en général) :
@@ -397,90 +412,105 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
   /// résultats de l'API (il faut alors filtrer par langue).
   @override
   Future<List<Chapitre>> recupererChapitres(String urlTitre) {
-    return _avecTypeSite(() async {
-      final id = extraireIdTitre(urlTitre);
-      final chapitres = <Chapitre>[];
-      // Un chapitre ajouté ou retiré pendant la lecture des pages décale les
-      // offsets : la même entrée peut revenir sur deux pages. On ne la garde
-      // qu'une fois (l'UUID est unique, comme `url_chapitre` en base).
-      final idsVus = <String>{};
-      var offset = 0;
-      while (true) {
-        final restantAvantPlafond = plafondOffsetMangaDex - offset;
-        final limit = taillePageChapitres < restantAvantPlafond
-            ? taillePageChapitres
-            : restantAvantPlafond;
-        final uri = Uri.https(
-          domaineApiMangaDex,
-          '/manga/$id/feed',
-          <String, Object>{
-            'limit': '$limit',
-            'offset': '$offset',
-            'order[chapter]': 'asc',
-            // Départage des chapitres de même numéro (plusieurs langues ou
-            // groupes) : api.yaml, feedParameters.order accepte `createdAt`.
-            'order[createdAt]': 'asc',
-            // Tous les niveaux (énumération `contentRating` de api.yaml).
-            // Sans ce paramètre, l'API applique le défaut [safe, suggestive,
-            // erotica] et un titre que le client suit déjà pourrait renvoyer
-            // un flux vide sans erreur.
-            'contentRating[]': niveauxContenu,
-            // Ni `includeExternalUrl` ni `includeEmptyPages` : voir la
-            // documentation de la méthode (chapitres externes, R4).
-            'includeFuturePublishAt': '0',
-            if (languesChapitres.isNotEmpty)
-              'translatedLanguage[]': languesChapitres,
-          },
-        );
-        final page = await _lireJson(uri, (json, url) {
-          final donnees = json.lireListeObjets('data', url);
-          final total = json.lireEntier('total', url);
-          // Dès la première page, `total` dit si l'on atteindra le plafond :
-          // inutile de lire 20 pages pour échouer ensuite.
-          if (total > plafondOffsetMangaDex) {
-            throw ErreurSource(
-              urlTitre,
-              "Trop de chapitres ($total) : l'API MangaDex refuse de dépasser "
-              '$plafondOffsetMangaDex résultats. Choisir une langue de '
-              'chapitres pour cette source.',
-            );
-          }
-          return (
-            total: total,
-            nombre: donnees.length,
-            chapitres: <(String, Chapitre?)>[
-              for (final chapitre in donnees)
-                (
-                  chapitre.lireTexte('id', url),
-                  _construireChapitre(chapitre, url),
-                ),
-            ],
+    return JournalSources.operation(
+      'MangaDex',
+      'chapitres',
+      urlTitre,
+      () => _avecTypeSite(() async {
+        final id = extraireIdTitre(urlTitre);
+        final chapitres = <Chapitre>[];
+        // Un chapitre ajouté ou retiré pendant la lecture des pages décale les
+        // offsets : la même entrée peut revenir sur deux pages. On ne la garde
+        // qu'une fois (l'UUID est unique, comme `url_chapitre` en base).
+        final idsVus = <String>{};
+        // Chapitres sans page ni lien externe, comptés pour le journal.
+        var illisibles = 0;
+        var offset = 0;
+        while (true) {
+          final restantAvantPlafond = plafondOffsetMangaDex - offset;
+          final limit = taillePageChapitres < restantAvantPlafond
+              ? taillePageChapitres
+              : restantAvantPlafond;
+          final uri = Uri.https(
+            domaineApiMangaDex,
+            '/manga/$id/feed',
+            <String, Object>{
+              'limit': '$limit',
+              'offset': '$offset',
+              'order[chapter]': 'asc',
+              // Départage des chapitres de même numéro (plusieurs langues ou
+              // groupes) : api.yaml, feedParameters.order accepte `createdAt`.
+              'order[createdAt]': 'asc',
+              // Tous les niveaux (énumération `contentRating` de api.yaml).
+              // Sans ce paramètre, l'API applique le défaut [safe, suggestive,
+              // erotica] et un titre que le client suit déjà pourrait renvoyer
+              // un flux vide sans erreur.
+              'contentRating[]': niveauxContenu,
+              // Ni `includeExternalUrl` ni `includeEmptyPages` : voir la
+              // documentation de la méthode (chapitres externes, R4).
+              'includeFuturePublishAt': '0',
+              if (languesChapitres.isNotEmpty)
+                'translatedLanguage[]': languesChapitres,
+            },
           );
-        });
-        for (final (idChapitre, chapitre) in page.chapitres) {
-          if (chapitre == null) {
-            // Chapitre vide et non externe : illisible, ignoré.
-            continue;
+          final page = await _lireJson(uri, (json, url) {
+            final donnees = json.lireListeObjets('data', url);
+            final total = json.lireEntier('total', url);
+            // Dès la première page, `total` dit si l'on atteindra le plafond :
+            // inutile de lire 20 pages pour échouer ensuite.
+            if (total > plafondOffsetMangaDex) {
+              throw ErreurSource(
+                urlTitre,
+                "Trop de chapitres ($total) : l'API MangaDex refuse de dépasser "
+                '$plafondOffsetMangaDex résultats. Choisir une langue de '
+                'chapitres pour cette source.',
+              );
+            }
+            return (
+              total: total,
+              nombre: donnees.length,
+              chapitres: <(String, Chapitre?)>[
+                for (final chapitre in donnees)
+                  (
+                    chapitre.lireTexte('id', url),
+                    _construireChapitre(chapitre, url),
+                  ),
+              ],
+            );
+          });
+          for (final (idChapitre, chapitre) in page.chapitres) {
+            if (chapitre == null) {
+              // Chapitre vide et non externe : illisible, ignoré.
+              illisibles++;
+              continue;
+            }
+            // Mémorisé pour que [recupererContenu] reconnaisse un chapitre
+            // externe sans requête supplémentaire.
+            _urlsExternesConnues[idChapitre] = chapitre.urlExterne;
+            if (idsVus.add(idChapitre)) {
+              chapitres.add(chapitre);
+            }
           }
-          // Mémorisé pour que [recupererContenu] reconnaisse un chapitre
-          // externe sans requête supplémentaire.
-          _urlsExternesConnues[idChapitre] = chapitre.urlExterne;
-          if (idsVus.add(idChapitre)) {
-            chapitres.add(chapitre);
+          offset += page.nombre;
+          // Page vide : l'API a fini (docs/01-concepts/pagination : un offset
+          // au delà du total renvoie une collection vide). On s'arrête aussi
+          // pour ne jamais boucler indéfiniment si `total` est incohérent.
+          if (page.nombre == 0 ||
+              offset >= page.total ||
+              offset >= plafondOffsetMangaDex) {
+            break;
           }
         }
-        offset += page.nombre;
-        // Page vide : l'API a fini (docs/01-concepts/pagination : un offset
-        // au delà du total renvoie une collection vide). On s'arrête aussi
-        // pour ne jamais boucler indéfiniment si `total` est incohérent.
-        if (page.nombre == 0 ||
-            offset >= page.total ||
-            offset >= plafondOffsetMangaDex) {
-          break;
+        if (illisibles > 0) {
+          JournalSources.avertir(
+            'MangaDex',
+            '$illisibles chapitre${illisibles > 1 ? 's' : ''} sans page '
+                'ignoré${illisibles > 1 ? 's' : ''} ($urlTitre)',
+          );
         }
-      }
-      return chapitres;
-    });
+        return chapitres;
+      }),
+    );
   }
 
   /// URLs des images d'un chapitre : `GET /at-home/server/{chapterId}`
@@ -506,64 +536,70 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
   /// `ChapterResponse`) vérifie d'abord `externalUrl`.
   @override
   Future<ContenuChapitre> recupererContenu(String urlChapitre) {
-    return _avecTypeSite(() async {
-      final id = extraireIdChapitre(urlChapitre);
-      final String? urlExterne;
-      if (_urlsExternesConnues.containsKey(id)) {
-        urlExterne = _urlsExternesConnues[id];
-      } else {
-        urlExterne = await _lireJson(
-          Uri.https(domaineApiMangaDex, '/chapter/$id'),
-          (json, url) => _lireUrlExterne(
-            json.lireObjet('data', url).lireObjet('attributes', url),
-            id,
-          ),
-        );
-        _urlsExternesConnues[id] = urlExterne;
-      }
-      if (urlExterne != null) {
-        throw ErreurSource(
-          urlChapitre,
-          'Chapitre hébergé sur un site externe '
-          '(${nomSiteExterne(urlExterne)} : $urlExterne) : aucune page à '
-          'récupérer sur MangaDex',
-        );
-      }
-      final uri = Uri.https(domaineApiMangaDex, '/at-home/server/$id');
-      return _lireJson(
-        uri,
-        limite: const LimiteRequetes(
-          '$domaineApiMangaDex/at-home/server',
-          delaiMinimalAtHomeMangaDex,
-        ),
-        (json, url) {
-          // La doc insiste : « Do NOT assume any format [...] Just use it
-          // as-is ». On concatène donc baseUrl tel quel au lieu d'utiliser
-          // Uri.resolve (qui supprimerait le dernier segment d'un baseUrl
-          // sans « / » final).
-          final baseUrl = json.lireTexte('baseUrl', url);
-          final chapitre = json.lireObjet('chapter', url);
-          final hash = chapitre.lireTexte('hash', url);
-          final qualite = qualiteReduite ? 'data-saver' : 'data';
-          final fichiers = chapitre.lireListeTextes(
-            qualiteReduite ? 'dataSaver' : 'data',
-            url,
+    return JournalSources.operation(
+      'MangaDex',
+      'chapitre',
+      urlChapitre,
+      () => _avecTypeSite(() async {
+        final id = extraireIdChapitre(urlChapitre);
+        final String? urlExterne;
+        if (_urlsExternesConnues.containsKey(id)) {
+          urlExterne = _urlsExternesConnues[id];
+        } else {
+          urlExterne = await _lireJson(
+            Uri.https(domaineApiMangaDex, '/chapter/$id'),
+            (json, url) => _lireUrlExterne(
+              json.lireObjet('data', url).lireObjet('attributes', url),
+              id,
+            ),
           );
-          if (fichiers.isEmpty) {
-            throw ErreurSource(
-              urlChapitre,
-              'Aucune page disponible sur MangaDex pour ce chapitre '
-              '(chapitre externe ou retiré)',
+          _urlsExternesConnues[id] = urlExterne;
+        }
+        if (urlExterne != null) {
+          throw ErreurSource(
+            urlChapitre,
+            'Chapitre hébergé sur un site externe '
+            '(${nomSiteExterne(urlExterne)} : $urlExterne) : aucune page à '
+            'récupérer sur MangaDex',
+          );
+        }
+        final uri = Uri.https(domaineApiMangaDex, '/at-home/server/$id');
+        return _lireJson(
+          uri,
+          limite: const LimiteRequetes(
+            '$domaineApiMangaDex/at-home/server',
+            delaiMinimalAtHomeMangaDex,
+          ),
+          (json, url) {
+            // La doc insiste : « Do NOT assume any format [...] Just use it
+            // as-is ». On concatène donc baseUrl tel quel au lieu d'utiliser
+            // Uri.resolve (qui supprimerait le dernier segment d'un baseUrl
+            // sans « / » final).
+            final baseUrl = json.lireTexte('baseUrl', url);
+            final chapitre = json.lireObjet('chapter', url);
+            final hash = chapitre.lireTexte('hash', url);
+            final qualite = qualiteReduite ? 'data-saver' : 'data';
+            final fichiers = chapitre.lireListeTextes(
+              qualiteReduite ? 'dataSaver' : 'data',
+              url,
             );
-          }
-          // Pas de Referer : la doc MangaDex n'en exige pas pour les images
-          // et interdit seulement les en-têtes d'authentification.
-          return ContenuChapitre.images(<String>[
-            for (final fichier in fichiers) '$baseUrl/$qualite/$hash/$fichier',
-          ]);
-        },
-      );
-    });
+            if (fichiers.isEmpty) {
+              throw ErreurSource(
+                urlChapitre,
+                'Aucune page disponible sur MangaDex pour ce chapitre '
+                '(chapitre externe ou retiré)',
+              );
+            }
+            // Pas de Referer : la doc MangaDex n'en exige pas pour les images
+            // et interdit seulement les en-têtes d'authentification.
+            return ContenuChapitre.images(<String>[
+              for (final fichier in fichiers)
+                '$baseUrl/$qualite/$hash/$fichier',
+            ]);
+          },
+        );
+      }),
+    );
   }
 
   // ---------------------------------------------------------------------

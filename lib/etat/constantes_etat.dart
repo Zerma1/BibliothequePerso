@@ -19,3 +19,7 @@ const Duration intervalleControleEcheance = Duration(minutes: 15);
 /// Fiche d'un titre : rafraîchissement du compte à rebours des suppressions
 /// prévues (affiché à la minute près).
 const Duration intervalleCompteARebours = Duration(minutes: 1);
+
+/// Paramètres, section « Journal » : nombre de jours du bouton « Exporter
+/// les 7 derniers jours » (le bouton « du jour » en copie 1).
+const int joursExportJournalSemaine = 7;
