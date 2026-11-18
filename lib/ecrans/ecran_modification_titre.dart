@@ -83,10 +83,14 @@ class _EtatEcranModificationTitre extends State<EcranModificationTitre> {
   ];
   late List<String> _categories = List<String>.of(_categoriesInitiales);
   // Un niveau inconnu de la liste (valeur d'un site) est montré « Inconnu ».
-  late String _niveau =
+  // L'enregistrement compare au niveau affiché au départ, pas à la valeur
+  // brute : sinon un niveau hors liste serait effacé (et protégé) alors que
+  // le client n'a pas touché au champ.
+  late final String _niveauInitial =
       EtatTitre.niveauxContenuPossibles.contains(_titre.niveauContenu)
       ? _titre.niveauContenu!
       : '';
+  late String _niveau = _niveauInitial;
 
   @override
   void dispose() {
@@ -112,10 +116,24 @@ class _EtatEcranModificationTitre extends State<EcranModificationTitre> {
     });
   }
 
-  List<TitreAlternatif> get _alternatifsSaisis => <TitreAlternatif>[
-    for (final ligne in _alternatifs)
-      if (ligne.nom.text.trim().isNotEmpty)
-        TitreAlternatif(nom: ligne.nom.text.trim(), langue: ligne.langue.text),
+  List<TitreAlternatif> get _alternatifsSaisis =>
+      _normaliserAlternatifs(<TitreAlternatif>[
+        for (final ligne in _alternatifs)
+          TitreAlternatif(nom: ligne.nom.text, langue: ligne.langue.text),
+      ]);
+
+  /// Même traitement pour la saisie et pour la valeur de départ : espaces
+  /// retirés, lignes sans nom ignorées. Sinon une ligne vide venue du site
+  /// suffirait à faire croire à une modification.
+  static List<TitreAlternatif> _normaliserAlternatifs(
+    List<TitreAlternatif> alternatifs,
+  ) => <TitreAlternatif>[
+    for (final alternatif in alternatifs)
+      if (alternatif.nom.trim().isNotEmpty)
+        TitreAlternatif(
+          nom: alternatif.nom.trim(),
+          langue: alternatif.langue.trim(),
+        ),
   ];
 
   static bool _memesAlternatifs(
@@ -147,9 +165,12 @@ class _EtatEcranModificationTitre extends State<EcranModificationTitre> {
     final resume = change(_resume.text, _titre.resume);
     final auteur = change(_auteur.text, _titre.auteur);
     final statut = change(_statut.text, _titre.statut);
-    final niveau = _niveau == (_titre.niveauContenu ?? '') ? null : _niveau;
+    final niveau = _niveau == _niveauInitial ? null : _niveau;
     final titresAlternatifs =
-        _memesAlternatifs(alternatifs, _titre.titresAlternatifs)
+        _memesAlternatifs(
+          alternatifs,
+          _normaliserAlternatifs(_titre.titresAlternatifs),
+        )
         ? null
         : alternatifs;
     final categories = _memesTextes(_categories, _categoriesInitiales)

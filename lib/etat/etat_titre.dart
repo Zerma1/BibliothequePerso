@@ -897,8 +897,13 @@ class EtatTitre extends EtatNotifiant {
   }
 
   /// Applique les règles de conservation si [idListe] est Favoris, Suivis
-  /// (les listes qui déclenchent des téléchargements) ou Terminés (qui les
-  /// arrête, sauf archive complète).
+  /// ou Terminés (ou si la liste est introuvable).
+  ///
+  /// Seules Favoris et Suivis (et l'archive complète) comptent pour la
+  /// politique de téléchargement : Terminés ne l'arrête pas (un titre à la
+  /// fois Suivis et Terminés reste téléchargé, voir `ClassementListes`). Le
+  /// déclenchement sur Terminés ne fait que relire la politique, sans effet
+  /// propre.
   Future<void> _appliquerReglesSiSysteme(int idListe) async {
     final liste = _listes.where((liste) => liste.id == idListe).firstOrNull;
     if (liste == null ||

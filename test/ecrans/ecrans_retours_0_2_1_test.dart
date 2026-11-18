@@ -10,6 +10,7 @@ import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
+import 'package:bibliotheque_perso/modeles/titre_alternatif.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/widgets/carte_titre.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
@@ -348,6 +349,41 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text(Textes.aucuneModification), findsOneWidget);
       expect(service.titres.single.champsManuels, isEmpty);
+    });
+
+    testWidgets('niveau hors liste et alternatif sans nom venus du site : '
+        'formulaire inchangé, rien n\'est effacé', (tester) async {
+      fenetreLarge(tester, hauteur: 2400);
+      service.ajouterTitreDeTest('Shinigami', idSource: 1);
+      service.titres[0] = service.titres[0].copierAvec(
+        niveauContenu: 'valeur-du-site',
+        titresAlternatifs: const <TitreAlternatif>[
+          TitreAlternatif(nom: ' Autre nom ', langue: 'ja '),
+          TitreAlternatif(nom: '  ', langue: 'en'),
+        ],
+      );
+      await tester.pumpWidget(
+        envelopper(
+          ChangeNotifierProvider<EtatTitre>(
+            create: (_) => EtatTitre(service, 1)..charger(),
+            child: const EcranTitre(),
+          ),
+          bibliotheque: service,
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.byTooltip(Textes.modifierFiche));
+      await tester.pumpAndSettle();
+      // Le niveau inconnu de la liste est montré « Inconnu ».
+      expect(find.text(Textes.niveauInconnu), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, Textes.enregistrer));
+      await tester.pumpAndSettle();
+
+      expect(find.text(Textes.aucuneModification), findsOneWidget);
+      final titre = service.titres.single;
+      expect(titre.champsManuels, isEmpty);
+      expect(titre.niveauContenu, 'valeur-du-site');
     });
 
     testWidgets('dialogue d\'ajout : rechercher sur MangaDex puis ajouter un '
