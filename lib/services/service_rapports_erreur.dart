@@ -11,8 +11,10 @@ import 'dart:io';
 
 import 'package:path/path.dart' as chemins;
 
+import '../donnees/journal_fichier.dart';
 import '../donnees/stockage_telechargements.dart'
     show cheminParDefautDossierTelechargements;
+import '../modeles/journal.dart';
 import '../modeles/source.dart';
 import '../sources/rapport_erreur_source.dart';
 import '../sources/erreur_source.dart';
@@ -28,14 +30,22 @@ class ServiceRapportsErreur {
   /// Crée le service sur [dossierRapports] (dossier temporaire dans les
   /// tests). [versionApplication] et [systeme] sont recopiés dans chaque
   /// rapport (système : celui de l'appareil par défaut).
+  ///
+  /// [dossierJournaux] : dossier des journaux de l'application, lu pour
+  /// joindre au rapport la fin du journal quand [Journal.actuel] n'est pas
+  /// un [JournalFichier] (par exemple dans les tests). Avec un
+  /// [JournalFichier] installé, c'est lui qui est lu (entrées en attente
+  /// écrites d'abord).
   ServiceRapportsErreur(
     this.dossierRapports, {
     String? versionApplication,
     String? systeme,
     DateTime Function()? horloge,
+    String? dossierJournaux,
   }) : _versionApplication = versionApplication,
        _systeme = systeme ?? Platform.operatingSystem,
-       _horloge = horloge ?? DateTime.now;
+       _horloge = horloge ?? DateTime.now,
+       _dossierJournaux = dossierJournaux;
 
   /// Crée le service sur le dossier par défaut :
   /// `<dossier documents>/bibliotheque_perso/rapports/`.
@@ -49,13 +59,14 @@ class ServiceRapportsErreur {
   // avant ajout. Windows et Linux ne sont pas concernés.
   static Future<ServiceRapportsErreur> parDefaut({
     String? versionApplication,
-  }) async => ServiceRapportsErreur(
-    chemins.join(
-      await cheminParDefautDossierTelechargements(),
-      nomDossierRapports,
-    ),
-    versionApplication: versionApplication,
-  );
+  }) async {
+    final racine = await cheminParDefautDossierTelechargements();
+    return ServiceRapportsErreur(
+      chemins.join(racine, nomDossierRapports),
+      versionApplication: versionApplication,
+      dossierJournaux: cheminDossierJournaux(racine),
+    );
+  }
 
   /// Dossier où les rapports sont écrits.
   final String dossierRapports;
@@ -63,6 +74,50 @@ class ServiceRapportsErreur {
   final String? _versionApplication;
   final String _systeme;
   final DateTime Function() _horloge;
+  final String? _dossierJournaux;
+
+  /// Titre de la section du rapport qui recopie la fin du journal.
+  static const String titreSectionJournal = 'Dernières lignes du journal';
+
+  /// Ajoute à [texte] la section [titreSectionJournal] avec [lignes]
+  /// (fonction pure). [texte] est renvoyé tel quel si [lignes] est vide.
+  ///
+  /// Les lignes sont déjà masquées à l'écriture du journal
+  /// (`masquerDonneesSensibles`) ; elles le sont une seconde fois ici, au
+  /// cas où un fichier ancien ou copié à la main serait lu.
+  static String ajouterLignesJournal(String texte, List<String> lignes) {
+    if (lignes.isEmpty) return texte;
+    final tampon = StringBuffer(texte);
+    if (!texte.endsWith('\n')) tampon.writeln();
+    tampon
+      ..writeln()
+      ..writeln('--- $titreSectionJournal (${lignes.length}) ---');
+    for (final ligne in lignes) {
+      tampon.writeln(masquerDonneesSensibles(ligne));
+    }
+    return tampon.toString();
+  }
+
+  /// Les [nombreLignesJournalRapport] dernières lignes du journal, ou une
+  /// liste vide s'il n'y en a pas (journal silencieux sans dossier connu,
+  /// fichier illisible). Ne lève jamais : un rapport sans journal vaut mieux
+  /// que pas de rapport.
+  Future<List<String>> _chargerLignesJournal() async {
+    try {
+      final journal = Journal.actuel;
+      if (journal is JournalFichier) {
+        return await journal.chargerDernieresLignes(nombreLignesJournalRapport);
+      }
+      final dossier = _dossierJournaux;
+      if (dossier == null) return const <String>[];
+      return await chargerDernieresLignesJournal(
+        dossier,
+        nombreLignesJournalRapport,
+      );
+    } catch (_) {
+      return const <String>[];
+    }
+  }
 
   /// Longueur maximale du message d'une erreur qui ne vient pas d'un site
   /// (une pile ou un message énorme ne doit pas remplir le rapport).
@@ -149,13 +204,23 @@ class ServiceRapportsErreur {
     TypeSource? typeDetecte,
   }) async {
     final date = _horloge().toUtc();
-    final texte = produireTexte(
-      erreur,
-      action: action,
-      typeDetecte: typeDetecte,
-      date: date,
-      versionApplication: _versionApplication,
-      systeme: _systeme,
+    // Noté avant la lecture du journal : la fin jointe au rapport montre
+    // ainsi l'erreur elle-même.
+    Journal.actuel.erreur(
+      CategorieJournal.interface,
+      "Rapport d'erreur demandé${action == null ? '' : ' ($action)'}",
+      erreur: erreur,
+    );
+    final texte = ajouterLignesJournal(
+      produireTexte(
+        erreur,
+        action: action,
+        typeDetecte: typeDetecte,
+        date: date,
+        versionApplication: _versionApplication,
+        systeme: _systeme,
+      ),
+      await _chargerLignesJournal(),
     );
     try {
       final dossier = Directory(dossierRapports);

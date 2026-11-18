@@ -22,6 +22,7 @@ import '../modeles/categorie.dart';
 import '../modeles/equivalence_categorie.dart';
 import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/groupe_categories.dart';
+import '../modeles/journal.dart';
 import '../modeles/titre.dart';
 import 'erreur_service.dart';
 
@@ -247,6 +248,7 @@ class ServiceCategories {
   Future<void> rattacherCategorie(int idCategorie, int idReference) => _ecrire(
     () => _depotEquivalences.rattacherCategorie(idCategorie, idReference),
     'Le regroupement des catégories a échoué.',
+    'catégorie n°$idCategorie rattachée à n°$idReference',
   );
 
   /// Rattache toutes les [idsCategories] à [idReference] en une fois (choix
@@ -286,6 +288,7 @@ class ServiceCategories {
           ? tout(null)
           : gestionnaire.executerEnTransaction<void>(tout),
       'Le regroupement des catégories a échoué : rien n\'a été modifié.',
+      '${ids.length} catégorie(s) regroupée(s) sous n°$idReference',
     );
   }
 
@@ -309,6 +312,7 @@ class ServiceCategories {
   Future<bool> detacherCategorie(int idCategorie) => _ecrire(
     () => _depotEquivalences.detacherCategorie(idCategorie),
     "La catégorie n'a pas pu être retirée de son groupe.",
+    'catégorie n°$idCategorie détachée de son groupe',
   );
 
   /// Dissout le groupe de la référence [idReference] : toutes ses
@@ -317,6 +321,7 @@ class ServiceCategories {
   Future<int> dissoudreGroupe(int idReference) => _ecrire(
     () => _depotEquivalences.dissoudreGroupe(idReference),
     "Le groupe n'a pas pu être dissous.",
+    'groupe n°$idReference dissous',
   );
 
   // ------------------------------------------------------------ Suggestions
@@ -539,17 +544,34 @@ class ServiceCategories {
   static Future<T> _ecrire<T>(
     Future<T> Function() ecriture,
     String messageEchec,
+    String action,
   ) async {
     try {
-      return await ecriture();
-    } on ErreurService {
+      final resultat = await ecriture();
+      Journal.actuel.info(
+        CategorieJournal.bibliotheque,
+        'Catégories : $action',
+      );
+      return resultat;
+    } on ErreurService catch (erreur) {
+      _journaliserRefus(action, erreur);
       rethrow;
     } on ErreurBaseDeDonnees catch (erreur) {
+      _journaliserRefus(action, erreur);
       throw ErreurService(erreur.message, cause: erreur);
     } on Exception catch (erreur) {
+      _journaliserRefus(action, erreur);
       // DatabaseException brute (base verrouillée, disque plein…) : jamais
       // jusqu'à l'interface.
       throw ErreurService(messageEchec, cause: erreur);
     }
   }
+
+  /// Note dans le journal le refus d'une écriture des regroupements.
+  static void _journaliserRefus(String action, Object erreur) =>
+      Journal.actuel.avertissement(
+        CategorieJournal.bibliotheque,
+        'Catégories : refusé ($action)',
+        erreur: erreur,
+      );
 }

@@ -10,6 +10,7 @@ import 'package:bibliotheque_perso/donnees/depot_titres.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres_sources.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
+import 'package:bibliotheque_perso/modeles/journal.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
 import 'package:bibliotheque_perso/services/service_ajout_site.dart';
@@ -146,6 +147,45 @@ void main() {
   });
 
   tearDown(() => base.close());
+
+  test(
+    'note le début, le bilan et chaque titre en échec dans le journal',
+    () async {
+      final journal = JournalMemoire();
+      Journal.actuel = journal;
+      addTearDown(() => Journal.actuel = const JournalSilencieux());
+      final source = await creerSource('a.test');
+      await creerTitre(source, 'un');
+      await creerTitre(source, 'deux');
+      bibliotheque.nouveauxParTitre['un'] = 2;
+      bibliotheque.titresEnErreur.add('deux');
+
+      await service.verifierTitresSuivis();
+
+      final messages = journal.entrees
+          .where((e) => e.categorie == CategorieJournal.misesAJour)
+          .map((e) => e.message)
+          .toList();
+      expect(messages.first, contains('début'));
+      expect(
+        messages,
+        contains(
+          allOf(
+            contains('2 titre(s)'),
+            contains('2 nouveau(x)'),
+            contains('1 en échec'),
+          ),
+        ),
+      );
+      final echec = journal.entrees.singleWhere(
+        (e) =>
+            e.niveau == NiveauJournal.avertissement &&
+            e.categorie == CategorieJournal.misesAJour,
+      );
+      expect(echec.message, contains('« deux »'));
+      expect(echec.erreur, isA<ErreurSource>());
+    },
+  );
 
   test('renvoie un rapport vide quand aucun titre n\'est suivi', () async {
     final source = await creerSource('a.test');

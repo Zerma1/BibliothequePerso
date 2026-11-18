@@ -4,6 +4,7 @@ library;
 import 'dart:convert';
 
 import '../donnees/depot_sources.dart';
+import '../modeles/journal.dart';
 import '../modeles/source.dart';
 import '../sources/client_http_poli.dart';
 import '../sources/detecteur_type_site.dart';
@@ -86,6 +87,43 @@ class ServiceAjoutSite {
   /// illisible), une [ErreurService] ([typeForce] incohérent avec le site,
   /// voir [erreurTypeSite]) ou une `ErreurBaseDeDonnees`.
   Future<Source> ajouterSite(
+    String url, {
+    String? nom,
+    String langueParDefaut = '',
+    TypeSource? typeForce,
+    String? configurationSelecteurs,
+  }) async {
+    // Seule la racine du site est journalisée : l'adresse collée peut
+    // contenir des paramètres personnels.
+    final hote = Uri.tryParse(url.trim())?.host ?? '';
+    try {
+      final source = await _ajouterSite(
+        url,
+        nom: nom,
+        langueParDefaut: langueParDefaut,
+        typeForce: typeForce,
+        configurationSelecteurs: configurationSelecteurs,
+      );
+      Journal.actuel.info(
+        CategorieJournal.bibliotheque,
+        'Site ajouté ou déjà configuré : ${source.urlBase} (n°${source.id}, '
+        'type ${source.typeSource.name})',
+      );
+      return source;
+    } catch (erreur) {
+      // Refus attendu (site illisible, type incohérent) : un avertissement
+      // avec la raison, sans pile (le rapport d'erreur la donne au besoin).
+      Journal.actuel.avertissement(
+        CategorieJournal.bibliotheque,
+        'Ajout du site « $hote » refusé',
+        erreur: erreur,
+      );
+      rethrow;
+    }
+  }
+
+  /// Corps de [ajouterSite], sans journalisation.
+  Future<Source> _ajouterSite(
     String url, {
     String? nom,
     String langueParDefaut = '',
@@ -291,7 +329,7 @@ class ServiceAjoutSite {
     } else {
       reglages = normaliserReglagesGeneriques(brut);
     }
-    return _depotSources.enregistrerSource(
+    final enregistree = await _depotSources.enregistrerSource(
       source.copierAvec(
         nom: source.nom.trim(),
         langueParDefaut: langues,
@@ -299,6 +337,12 @@ class ServiceAjoutSite {
         effacerConfigurationSelecteurs: reglages == null,
       ),
     );
+    Journal.actuel.info(
+      CategorieJournal.bibliotheque,
+      'Site n°${enregistree.id} modifié (type ${enregistree.typeSource.name}, '
+      '${enregistree.estActive ? 'actif' : 'inactif'})',
+    );
+    return enregistree;
   }
 
   // ------------------------------------------- Réglages d'un site générique
@@ -447,8 +491,13 @@ class ServiceAjoutSite {
 
   /// Supprime une source. Refusé (ErreurBaseDeDonnees) tant qu'elle a des
   /// titres, pour ne jamais effacer une partie de la bibliothèque.
-  Future<void> supprimerSource(int idSource) =>
-      _depotSources.supprimerSource(idSource);
+  Future<void> supprimerSource(int idSource) async {
+    await _depotSources.supprimerSource(idSource);
+    Journal.actuel.info(
+      CategorieJournal.bibliotheque,
+      'Site n°$idSource supprimé',
+    );
+  }
 
   /// Renvoie la source configurée qui correspond à l'hôte de [url], ou `null`.
   ///

@@ -7,12 +7,11 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show debugPrint;
-
 import '../donnees/depot_listes.dart';
 import '../donnees/depot_sources.dart';
 import '../donnees/depot_titres.dart';
 import '../modeles/constantes.dart';
+import '../modeles/journal.dart';
 import '../modeles/titre.dart';
 import 'classement_listes.dart';
 import 'planification_mises_a_jour.dart';
@@ -206,9 +205,21 @@ class ServiceMisesAJour {
   }
 
   Future<RapportMisesAJour> _lancer({required bool complete}) {
-    final nouvelle = _verifier(complete: complete).whenComplete(() {
-      _enCours = null;
-    });
+    final nouvelle = _verifier(complete: complete)
+        .catchError((Object erreur, StackTrace pile) {
+          // Échec global (base illisible…) : noté dans le journal puis
+          // renvoyé tel quel à l'appelant, qui l'affiche.
+          Journal.actuel.erreur(
+            CategorieJournal.misesAJour,
+            'Vérification interrompue',
+            erreur: erreur,
+            pile: pile,
+          );
+          Error.throwWithStackTrace(erreur, pile);
+        })
+        .whenComplete(() {
+          _enCours = null;
+        });
     _enCours = nouvelle;
     _enCoursEstComplete = complete;
     return nouvelle;
@@ -216,15 +227,29 @@ class ServiceMisesAJour {
 
   Future<RapportMisesAJour> _verifier({required bool complete}) async {
     final debut = _maintenant();
+    final genre = complete ? 'complète' : '« En attente »';
+    Journal.actuel.info(
+      CategorieJournal.misesAJour,
+      'Vérification $genre : début',
+    );
     // Classement « En attente » recalculé d'abord (base seulement) : les
     // langues du client ont pu changer depuis la dernière fois.
     try {
       await _serviceBibliotheque.classerTousEnAttente();
-    } catch (erreur) {
-      debugPrint('Classement « En attente » impossible : $erreur');
+    } catch (erreur, pile) {
+      Journal.actuel.avertissement(
+        CategorieJournal.misesAJour,
+        'Classement « En attente » impossible',
+        erreur: erreur,
+        pile: pile,
+      );
     }
     final (titres, idsAnnonces, idsActifs) = await _chargerTitresAVerifier(
       complete: complete,
+    );
+    Journal.actuel.info(
+      CategorieJournal.misesAJour,
+      'Vérification $genre : ${titres.length} titre(s) à vérifier',
     );
 
     // Étape 8 : une tâche par site d'un titre (principal et secondaires),
@@ -294,12 +319,49 @@ class ServiceMisesAJour {
       if (complete) await parametres.enregistrerDerniereVerification(fin);
       await parametres.enregistrerDerniereVerificationEnAttente(fin);
     }
-    return RapportMisesAJour(
+    final rapport = RapportMisesAJour(
       debut: debut,
       fin: fin,
       resultats: resultats,
       estEnAttenteSeulement: !complete,
     );
+    _journaliserBilan(rapport, genre);
+    return rapport;
+  }
+
+  /// Écrit le bilan de [rapport] dans le journal : une ligne de synthèse,
+  /// puis une ligne par titre en échec (tous les titres, annoncés ou non :
+  /// le journal sert au diagnostic, pas aux notifications).
+  void _journaliserBilan(RapportMisesAJour rapport, String genre) {
+    final journal = Journal.actuel;
+    final enEchec = rapport.resultats.where((r) => r.aEchoue).toList();
+    final nouveaux = rapport.resultats.fold<int>(
+      0,
+      (total, r) => total + r.nombreNouveauxChapitres,
+    );
+    final premiereLecture = rapport.resultats.fold<int>(
+      0,
+      (total, r) => total + r.nombreChapitresPremiereLecture,
+    );
+    final duree = rapport.fin.difference(rapport.debut);
+    journal.info(
+      CategorieJournal.misesAJour,
+      'Vérification $genre : fin en ${duree.inSeconds} s, '
+      '${rapport.resultats.length} titre(s), $nouveaux nouveau(x) '
+      'chapitre(s), $premiereLecture en première lecture, '
+      '${enEchec.length} en échec',
+    );
+    for (final resultat in enEchec) {
+      for (final MapEntry(key: idSource, value: erreur)
+          in resultat.erreursParSite.entries) {
+        journal.avertissement(
+          CategorieJournal.misesAJour,
+          'Titre n°${resultat.titre.id} « ${resultat.titre.nom} », '
+          'site n°$idSource : échec',
+          erreur: erreur,
+        );
+      }
+    }
   }
 
   /// Lance la vérification complète si une échéance prévue (00:00, 12:00
@@ -383,7 +445,11 @@ class ServiceMisesAJour {
         toutVerifier =
             await _serviceParametres?.chargerArchiveComplete() ?? false;
       } catch (erreur) {
-        debugPrint('Réglage « Archive complète » illisible : $erreur');
+        Journal.actuel.avertissement(
+          CategorieJournal.parametres,
+          'Réglage « Archive complète » illisible',
+          erreur: erreur,
+        );
       }
     }
     if (toutVerifier) {
