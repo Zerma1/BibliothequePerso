@@ -242,6 +242,9 @@ class ClientHttpPoli {
       enTetes: enTetes,
       limite: limite,
       nouvellesTentatives: _plafonnerTentatives(nouvellesTentatives),
+      // Une ligne par image (60 par chapitre) noierait le journal : le
+      // succès n'est gardé qu'en débogage, les échecs restent visibles.
+      niveauSucces: NiveauJournal.debogage,
     );
     if (exigerImage) {
       _verifierImage(uri, reponse, duree);
@@ -309,6 +312,9 @@ class ClientHttpPoli {
       limite: limite,
       nouvellesTentatives: _plafonnerTentatives(nouvellesTentatives),
       corpsPost: octetsCorps,
+      // Signalements MangaDex@Home : un par image, même raison que pour
+      // [recupererOctetsAvecDetails].
+      niveauSucces: NiveauJournal.debogage,
     );
     try {
       return _decoderTexte(reponse);
@@ -393,6 +399,13 @@ class ClientHttpPoli {
   /// Exécute la requête (GET, ou POST si [corpsPost] est fourni) avec les
   /// règles du client, et renvoie la réponse 2xx avec la durée de la
   /// tentative réussie.
+  ///
+  /// [niveauSucces] : niveau de la ligne de journal écrite pour une requête
+  /// réussie. `info` pour les pages et l'API (une ligne par étape utile) ;
+  /// `debogage` pour les requêtes répétées en masse (images de chapitre,
+  /// signalements MangaDex@Home), qui sinon noieraient les rapports d'erreur
+  /// (200 dernières lignes) et rempliraient le fichier de journal. Les
+  /// échecs, nouveaux essais, 429 et pages anti-robot gardent leur niveau.
   Future<(http.Response, Duration)> _executer(
     Uri uri, {
     required String? referer,
@@ -401,6 +414,7 @@ class ClientHttpPoli {
     required LimiteRequetes? limite,
     required int nouvellesTentatives,
     List<int>? corpsPost,
+    NiveauJournal niveauSucces = NiveauJournal.info,
   }) async {
     final url = uri.toString();
     final methode = corpsPost == null ? 'GET' : 'POST';
@@ -458,11 +472,16 @@ class ClientHttpPoli {
         if (code >= 200 && code < 300) {
           // Une ligne par requête réussie : jamais le corps, seulement sa
           // taille (une page peut contenir des données personnelles).
-          Journal.actuel.info(
-            CategorieJournal.reseau,
-            '$methode $urlJournal : '
-            '${_resume(code, reponse.bodyBytes.length, chrono.elapsed, essais)}',
-          );
+          // `estActif` évite de construire le message d'une ligne de
+          // débogage ignorée (une par image de chapitre).
+          if (Journal.actuel.estActif(niveauSucces)) {
+            Journal.actuel.journaliser(
+              niveauSucces,
+              CategorieJournal.reseau,
+              '$methode $urlJournal : '
+              '${_resume(code, reponse.bodyBytes.length, chrono.elapsed, essais)}',
+            );
+          }
           return (reponse, chrono.elapsed);
         }
         // Extrait nettoyé des données personnelles (une page d'erreur peut

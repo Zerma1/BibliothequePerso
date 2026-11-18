@@ -67,6 +67,80 @@ void main() {
       expect(message, contains(valeurMasqueeJournal));
     });
 
+    test("image réussie : une ligne de débogage, aucune ligne info", () async {
+      final client = creerClientTest(
+        (_) async => http.Response('octets', 200),
+        horloge,
+      );
+      await client.recupererOctets(Uri.parse('https://exemple.org/1.jpg'));
+      await client.recupererOctetsAvecDetails(
+        Uri.parse('https://exemple.org/2.jpg'),
+      );
+
+      final lignes = entreesDe(CategorieJournal.reseau)
+          .where((e) => e.message.startsWith('GET '))
+          .toList();
+      expect(lignes, hasLength(2));
+      expect(lignes.every((e) => e.niveau == NiveauJournal.debogage), isTrue);
+      expect(lignes.first.message, contains('HTTP 200'));
+      expect(
+        journal.entrees.where((e) => e.niveau == NiveauJournal.info),
+        isEmpty,
+      );
+    });
+
+    test("signalement JSON réussi : une ligne de débogage", () async {
+      final client = creerClientTest(
+        (_) async => http.Response('{"result":"ok"}', 200),
+        horloge,
+      );
+      await client.envoyerJson(
+        Uri.parse('https://api.exemple.org/report'),
+        <String, Object>{'success': true},
+      );
+      final ligne = entreesDe(CategorieJournal.reseau).single;
+      expect(ligne.niveau, NiveauJournal.debogage);
+      expect(ligne.message, contains('POST https://api.exemple.org/report'));
+    });
+
+    test("journal au niveau info : le succès d'une image n'est pas écrit, "
+        "son échec l'est", () async {
+      journal.niveauMinimal = NiveauJournal.info;
+      var appel = 0;
+      final client = creerClientTest((_) async {
+        appel++;
+        return appel == 1
+            ? http.Response('octets', 200)
+            : http.Response('absent', 404);
+      }, horloge);
+      await client.recupererOctets(Uri.parse('https://exemple.org/1.jpg'));
+      expect(journal.entrees, isEmpty);
+
+      await expectLater(
+        client.recupererOctetsAvecDetails(
+          Uri.parse('https://exemple.org/2.jpg'),
+          nouvellesTentatives: 0,
+        ),
+        throwsA(isA<ErreurSource>()),
+      );
+      final ligne = journal.entrees.single;
+      expect(ligne.niveau, NiveauJournal.avertissement);
+      expect(ligne.message, contains('HTTP 404'));
+    });
+
+    test('formulaire POST réussi (lecture Madara) : une ligne info', () async {
+      final client = creerClientTest(
+        (_) async => http.Response('<li>chapitre</li>', 200),
+        horloge,
+      );
+      await client.envoyerFormulaire(
+        Uri.parse('https://exemple.org/titre/ajax/chapters/'),
+      );
+      final ligne = entreesDe(CategorieJournal.reseau).single;
+      expect(ligne.niveau, NiveauJournal.info);
+      expect(ligne.message, contains('POST'));
+    });
+
     test('attente de politesse en débogage', () async {
       final client = creerClientTest(
         (_) async => http.Response('ok', 200),
