@@ -980,6 +980,79 @@ abstract final class Textes {
   /// Libellé du chemin du fichier Markdown.
   static const String fichierMarkdown = 'Fichier Markdown (lisible) :';
 
+  // ------------------------------------------------------- Journal (log)
+
+  /// Section « Journal » des paramètres.
+  static const String sectionJournal = 'Journal';
+
+  /// Résumé de la section « Journal » (section repliée).
+  static String resumeJournal({required bool detaille}) => detaille
+      ? "Journal détaillé activé : pensez à le désactiver ensuite"
+      : "Ce que fait l'application, à joindre à vos retours de test";
+
+  /// Explication en tête de la section « Journal ».
+  static const String explicationJournal =
+      "Le journal note ce que fait l'application (sans vos mots de passe ni "
+      "le contenu des pages). Joignez-le à vos retours de test.";
+
+  /// Intertitre du chemin du dossier des journaux.
+  static const String dossierJournaux = 'Dossier du journal :';
+
+  /// Intertitre de la liste des fichiers de journal.
+  static const String fichiersJournal = 'Fichiers du journal';
+
+  /// Aucun fichier de journal pour l'instant.
+  static const String aucunFichierJournal =
+      "Aucun fichier de journal pour l'instant : il est créé dès que "
+      "l'application note quelque chose.";
+
+  /// Bouton : exporter le journal du jour.
+  static const String exporterJournalDuJour = 'Exporter le journal du jour';
+
+  /// Bouton : exporter les 7 derniers jours du journal.
+  static const String exporterJournalSemaine = 'Exporter les 7 derniers jours';
+
+  /// Titre de la boîte affichée après un export du journal.
+  static const String journalExporte = 'Journal exporté';
+
+  /// Explication du journal exporté.
+  static const String explicationJournalExporte =
+      "Le journal est copié dans le fichier ci-dessous : joignez-le à vos "
+      "retours de test.";
+
+  /// Interrupteur du journal détaillé.
+  static const String journalDetaille = 'Journal détaillé (pour un diagnostic)';
+
+  /// Explication de l'interrupteur du journal détaillé.
+  static const String explicationJournalDetaille =
+      "Note beaucoup plus de lignes, utiles pour chercher un problème précis. "
+      "Le journal grossit vite : désactivez-le une fois le problème "
+      "reproduit et le journal exporté.";
+
+  /// Message après l'activation ou la désactivation du journal détaillé.
+  static String journalDetailleModifie(bool actif) =>
+      actif ? 'Journal détaillé activé.' : 'Journal détaillé désactivé.';
+
+  /// Ligne d'un fichier de journal : jour, numéro dans la journée (à partir
+  /// du deuxième) et taille si elle est connue.
+  static String ligneFichierJournal(DateTime jour, int numero, int? taille) {
+    final partie = numero > 1 ? ' (partie $numero)' : '';
+    final poids = taille == null ? '' : ' · ${formaterTaille(taille)}';
+    return '${formaterDate(jour)}$partie$poids';
+  }
+
+  /// Taille lisible d'un fichier : octets, Ko ou Mo (base 1024, une
+  /// décimale au-delà de l'octet, virgule française).
+  static String formaterTaille(int octets) {
+    const kilo = 1024;
+    if (octets < kilo) return '$octets o';
+    if (octets < kilo * kilo) {
+      return '${(octets / kilo).toStringAsFixed(1).replaceAll('.', ',')} Ko';
+    }
+    return '${(octets / (kilo * kilo)).toStringAsFixed(1).replaceAll('.', ',')}'
+        ' Mo';
+  }
+
   /// Introduction des règles de téléchargement.
   static const String introReglesTelechargement =
       'Les chapitres sont téléchargés automatiquement pour la lecture '

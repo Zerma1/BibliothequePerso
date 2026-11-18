@@ -3,8 +3,7 @@
 /// suivis) et « Mises à jour » (nombre de recherches par jour).
 library;
 
-import 'package:flutter/foundation.dart';
-
+import '../modeles/journal.dart';
 import '../services/planification_mises_a_jour.dart';
 import '../services/politique_telechargement.dart';
 import '../services/service_bibliotheque.dart';
@@ -192,7 +191,12 @@ class EtatParametres extends EtatNotifiant {
           .chargerDerniereVerification();
       notifier();
     } catch (erreur, pile) {
-      debugPrint('Date de vérification illisible : $erreur\n$pile');
+      Journal.actuel.avertissement(
+        CategorieJournal.parametres,
+        'Date de la dernière vérification illisible',
+        erreur: erreur,
+        pile: pile,
+      );
     }
   }
 
@@ -277,12 +281,22 @@ class EtatParametres extends EtatNotifiant {
         // les langues) ou en sortir : classement recalculé (base seulement).
         await _serviceBibliotheque?.classerTousEnAttente();
       } catch (erreur, pile) {
-        debugPrint('Classement « En attente » non refait : $erreur\n$pile');
+        Journal.actuel.avertissement(
+          CategorieJournal.bibliotheque,
+          'Classement « En attente » non refait après les langues',
+          erreur: erreur,
+          pile: pile,
+        );
       }
       try {
         await _serviceTelechargement.appliquerReglesATous();
       } catch (erreur, pile) {
-        debugPrint('Règles non appliquées après les langues : $erreur\n$pile');
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Règles non appliquées après les langues',
+          erreur: erreur,
+          pile: pile,
+        );
       }
       return const ResultatAction<bool>.reussite(true);
     } catch (erreur, pile) {
@@ -319,7 +333,12 @@ class EtatParametres extends EtatNotifiant {
       } catch (erreur, pile) {
         // Réglage enregistré : il sera appliqué au prochain démarrage ou à
         // la prochaine recherche de nouveaux chapitres.
-        debugPrint('Règles non appliquées (archive complète) : $erreur\n$pile');
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Règles non appliquées (archive complète)',
+          erreur: erreur,
+          pile: pile,
+        );
       }
       return ResultatAction<bool>.reussite(_archiveComplete);
     } catch (erreur, pile) {
@@ -393,7 +412,12 @@ class EtatParametres extends EtatNotifiant {
     try {
       await _serviceTelechargement.appliquerReglesATous();
     } catch (erreur, pile) {
-      debugPrint('Règles non appliquées : $erreur\n$pile');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Règles non appliquées',
+        erreur: erreur,
+        pile: pile,
+      );
     }
   }
 
@@ -410,7 +434,12 @@ class EtatParametres extends EtatNotifiant {
       } catch (erreur, pile) {
         // Les réglages sont enregistrés : ils seront appliqués au prochain
         // démarrage ou à la prochaine lecture.
-        debugPrint('Règles non appliquées après réglage : $erreur\n$pile');
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Règles non appliquées après réglage',
+          erreur: erreur,
+          pile: pile,
+        );
       }
       return const ResultatAction<bool>.reussite(true);
     } catch (erreur, pile) {

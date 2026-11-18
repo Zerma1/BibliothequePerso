@@ -8,7 +8,7 @@
 library;
 
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as chemins;
@@ -33,6 +33,7 @@ import 'ecrans/ecran_accueil.dart';
 import 'ecrans/ecran_erreur_demarrage.dart';
 import 'etat/etat_bibliotheque.dart';
 import 'etat/etat_export.dart';
+import 'etat/etat_journal.dart';
 import 'etat/etat_dossier_chapitres.dart';
 import 'etat/etat_couvertures.dart';
 import 'etat/etat_mises_a_jour.dart';
@@ -682,6 +683,7 @@ Future<void> demarrer() async {
       serviceImport: services.serviceImport,
       serviceCategories: services.serviceCategories,
       serviceDossierChapitres: services.serviceDossierChapitres,
+      serviceJournal: services.serviceJournal,
     );
   } catch (erreur, pile) {
     Journal.actuel.erreur(
@@ -715,6 +717,7 @@ Widget construireApplication({
   ServiceImport? serviceImport,
   ServiceCategories? serviceCategories,
   ServiceDossierChapitres? serviceDossierChapitres,
+  ServiceJournal? serviceJournal,
 }) {
   // Les états sont fournis au-dessus de MaterialApp : les écrans ouverts par
   // Navigator et les boîtes de dialogue y ont accès.
@@ -738,6 +741,14 @@ Widget construireApplication({
             serviceImport: serviceImport,
             listerExports: serviceExport.listerExportsJson,
           ),
+        ),
+      // Sans service (tests), la section « Journal » est masquée.
+      if (serviceJournal != null)
+        ChangeNotifierProvider<EtatJournal>(
+          create: (_) => EtatJournal(
+            serviceJournal,
+            mesurerTaille: (chemin) => File(chemin).length(),
+          )..charger(),
         ),
       ChangeNotifierProvider<EtatBibliotheque>(
         create: (_) => EtatBibliotheque(

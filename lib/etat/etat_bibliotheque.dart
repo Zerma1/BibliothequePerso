@@ -4,9 +4,8 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
-
 import '../modeles/constantes.dart';
+import '../modeles/journal.dart';
 import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
 import '../modeles/titre.dart';
@@ -661,7 +660,12 @@ class EtatBibliotheque extends EtatNotifiant {
     try {
       await service.appliquerRegles(idTitre);
     } catch (erreur, pile) {
-      debugPrint('Règles de téléchargement non appliquées : $erreur\n$pile');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Règles de téléchargement non appliquées au titre n°$idTitre',
+        erreur: erreur,
+        pile: pile,
+      );
     }
   }
 

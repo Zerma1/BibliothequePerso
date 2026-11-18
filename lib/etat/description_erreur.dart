@@ -10,6 +10,7 @@ library;
 import 'package:flutter/foundation.dart';
 
 import '../modeles/erreur_base_de_donnees.dart';
+import '../modeles/journal.dart';
 import '../services/erreur_service.dart';
 // EXCEPTION À LA RÈGLE DES COUCHES (etat → services seulement) : l'état doit
 // reconnaître l'erreur levée par les sites, qui traverse les services sans
@@ -95,7 +96,14 @@ class DescriptionErreur {
         estRapportable: erreur.cause is ErreurSource,
       );
     }
-    debugPrint("Erreur inattendue dans l'interface : $erreur\n$pile");
+    // Seule l'erreur imprévue est notée ici : les autres ont déjà été
+    // journalisées par la couche qui les a levées (site, base, service).
+    Journal.actuel.erreur(
+      CategorieJournal.interface,
+      "Erreur inattendue dans l'interface",
+      erreur: erreur,
+      pile: pile,
+    );
     return DescriptionErreur(
       NatureErreur.inattendue,
       detail: erreur.toString(),

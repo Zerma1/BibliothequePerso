@@ -11,6 +11,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../modeles/journal.dart';
 import '../services/planification_mises_a_jour.dart';
 import '../services/service_mises_a_jour.dart';
 import '../services/service_parametres.dart';
@@ -214,7 +215,12 @@ class EtatMisesAJour extends EtatNotifiant {
       try {
         await rappel(await _chargerPlanification());
       } catch (exception, pile) {
-        debugPrint('Replanification impossible : $exception\n$pile');
+        Journal.actuel.erreur(
+          CategorieJournal.misesAJour,
+          'Replanification impossible',
+          erreur: exception,
+          pile: pile,
+        );
       }
     }
   }
@@ -246,7 +252,12 @@ class EtatMisesAJour extends EtatNotifiant {
     } catch (exception, pile) {
       // Réglage illisible : on garde la valeur par défaut plutôt que de ne
       // plus jamais vérifier.
-      debugPrint('Planification illisible : $exception\n$pile');
+      Journal.actuel.avertissement(
+        CategorieJournal.misesAJour,
+        'Planification illisible : valeur par défaut utilisée',
+        erreur: exception,
+        pile: pile,
+      );
       prochaine = PlanificationMisesAJour(
         PlanificationMisesAJour.parDefautParJour,
       ).prochaineEcheance(instant);
@@ -317,8 +328,11 @@ class EtatMisesAJour extends EtatNotifiant {
         // sans être attendu ici, et respecte toujours les limites réglées.
         await telechargement.appliquerReglesATous();
       } catch (exception, pile) {
-        debugPrint(
-          'Règles non appliquées après mise à jour : $exception\n$pile',
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Règles non appliquées après mise à jour',
+          erreur: exception,
+          pile: pile,
         );
       }
     }

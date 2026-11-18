@@ -40,6 +40,7 @@ Future<void> basculerSitesDuTitre(WidgetTester tester) async {
 Future<void> deplierParametres(WidgetTester tester) async {
   for (final titre in <String>[
     Textes.sectionAPropos,
+    Textes.sectionJournal,
     Textes.sectionSauvegardeExport,
     Textes.sectionSites,
     Textes.sectionTelechargements,

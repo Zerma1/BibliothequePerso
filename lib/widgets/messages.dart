@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../etat/description_erreur.dart';
+import '../etat/journal_interface.dart';
 import 'textes.dart';
 
 /// Durée d'affichage d'un message d'erreur : plus longue que les 4 s par
@@ -86,14 +87,21 @@ Future<void> ouvrirLienExterne(BuildContext context, String url) async {
   final messager = ScaffoldMessenger.of(context);
   final uri = Uri.tryParse(url);
   var estOuvert = false;
+  Object? erreurOuverture;
   if (uri != null) {
     try {
       estOuvert = await launchUrl(uri, mode: LaunchMode.externalApplication);
     } catch (erreur) {
-      debugPrint('Ouverture du lien impossible ($url) : $erreur');
+      erreurOuverture = erreur;
     }
   }
   if (!estOuvert) {
+    // Une seule ligne par échec (adresse invalide, refus du système ou
+    // exception), avec l'adresse pour comprendre ce qui n'a pas marché.
+    noterProblemeInterface(
+      'Ouverture du lien impossible ($url)',
+      erreur: erreurOuverture,
+    );
     messager
       ..hideCurrentSnackBar()
       ..showSnackBar(const SnackBar(content: Text(Textes.lienImpossible)));

@@ -10,6 +10,7 @@ import 'package:flutter/foundation.dart';
 import '../modeles/categorie.dart';
 import '../modeles/chapitre.dart';
 import '../modeles/constantes.dart';
+import '../modeles/journal.dart';
 import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
 import '../modeles/telechargement.dart';
@@ -413,8 +414,11 @@ class EtatTitre extends EtatNotifiant {
         } catch (erreur, pile) {
           // L'action du client est faite ; les règles seront réappliquées
           // plus tard (démarrage, mises à jour).
-          debugPrint(
-            'Règles de téléchargement non appliquées : $erreur\n$pile',
+          Journal.actuel.avertissement(
+            CategorieJournal.telechargement,
+            'Règles de téléchargement non appliquées au titre n°$idTitre',
+            erreur: erreur,
+            pile: pile,
           );
         }
       }
@@ -461,6 +465,7 @@ class EtatTitre extends EtatNotifiant {
         return;
       }
       _appliquer(donnees);
+      _noterOuverture();
     } on _TitreIntrouvable {
       if (numero != _numeroLecture) {
         return;
@@ -658,7 +663,12 @@ class EtatTitre extends EtatNotifiant {
     } catch (erreur, pile) {
       // L'action du client est faite ; seule la puce « En attente » peut
       // rester en retard jusqu'au prochain chargement.
-      debugPrint('Listes du titre illisibles : $erreur\n$pile');
+      Journal.actuel.avertissement(
+        CategorieJournal.bibliotheque,
+        'Listes du titre n°$idTitre illisibles',
+        erreur: erreur,
+        pile: pile,
+      );
     }
   }
 
@@ -1147,7 +1157,12 @@ class EtatTitre extends EtatNotifiant {
     try {
       await service.appliquerRegles(idTitre);
     } catch (erreur, pile) {
-      debugPrint('Règles de téléchargement non appliquées : $erreur\n$pile');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Règles de téléchargement non appliquées au titre n°$idTitre',
+        erreur: erreur,
+        pile: pile,
+      );
     }
     await _relireTelechargements(relireChapitres: true);
   }
@@ -1228,7 +1243,12 @@ class EtatTitre extends EtatNotifiant {
         notifier();
       } catch (erreur, pile) {
         // Un échec de lecture de la file ne doit pas masquer la fiche.
-        debugPrint('File de téléchargement illisible : $erreur\n$pile');
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Fiche du titre n°$idTitre : file de téléchargement illisible',
+          erreur: erreur,
+          pile: pile,
+        );
       }
     } while (_relectureRedemandee);
   }
@@ -1364,10 +1384,34 @@ class EtatTitre extends EtatNotifiant {
 
   @override
   void dispose() {
+    if (_ouvertureNotee) {
+      Journal.actuel.debogage(
+        CategorieJournal.interface,
+        'Fiche du titre n°$idTitre fermée',
+      );
+    }
     _minuterieCompteARebours?.cancel();
     _minuterieCompteARebours = null;
     unawaited(_abonnement?.cancel());
     super.dispose();
+  }
+
+  /// `true` une fois l'ouverture de la fiche notée dans le journal.
+  bool _ouvertureNotee = false;
+
+  /// Note l'ouverture de la fiche au premier chargement réussi (le service
+  /// ne voit pas la navigation) ; « Réessayer » et les relectures ne la
+  /// notent pas une seconde fois.
+  void _noterOuverture() {
+    if (_ouvertureNotee) return;
+    _ouvertureNotee = true;
+    final titre = _titre;
+    Journal.actuel.info(
+      CategorieJournal.interface,
+      'Fiche ouverte : titre n°$idTitre'
+      '${titre == null ? '' : ' « ${titre.nom} »'} '
+      '(${_chapitres.length} chapitre(s))',
+    );
   }
 
   void _signalerIntrouvable() {
