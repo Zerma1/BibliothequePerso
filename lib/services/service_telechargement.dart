@@ -193,6 +193,14 @@ class ServiceTelechargement {
   // de la file à la prochaine application des règles de ce titre.
   final Set<int> _demandesManuelles = <int>{};
 
+  /// Valeur du réglage « Archive complète » lors du dernier
+  /// [appliquerReglesATous] de cette session (`null` avant le premier) :
+  /// sert à reconnaître une désactivation.
+  // LIMITE : en mémoire ; une désactivation suivie d'un arrêt de
+  // l'application avant l'application des règles n'est pas reconnue au
+  // démarrage suivant (les téléchargements en trop restent alors en file).
+  bool? _archiveCompleteAppliquee;
+
   /// Nombre d'échecs par chapitre pendant cette session.
   // LIMITE : en mémoire ; sur Android, chaque passage de la tâche de fond
   // repart de zéro, soit au plus une relance par passage (quelques par jour).
@@ -718,18 +726,31 @@ class ServiceTelechargement {
   /// À appeler après un changement du réglage « Archive complète » : à
   /// l'activation, tous les chapitres manquants sont mis en file et les
   /// suppressions prévues annulées ; à la désactivation, les archives que
-  /// les règles ordinaires ne veulent plus passent en suppression différée.
+  /// les règles ordinaires ne veulent plus passent en suppression différée,
+  /// et, une seule fois, toute la bibliothèque est recalculée pour retirer
+  /// de la file les téléchargements automatiques qui ne sont plus voulus
+  /// (titres sans liste ou des seules listes du client).
   Future<void> appliquerReglesATous() async {
     // Avant les règles : un chapitre gardé avec l'ancienne version ne doit
     // pas recevoir de suppression prévue.
     await _reprendreAnciensGardes();
     try {
       final ids = <int>{};
-      if (await _serviceParametres.chargerArchiveComplete()) {
+      final archiveComplete = await _serviceParametres.chargerArchiveComplete();
+      // Désactivation dans cette session : les titres ni favoris ni suivis
+      // gardaient en file tous leurs chapitres ; sans ce recalcul, la file
+      // les téléchargerait quand même (des centaines de requêtes non
+      // voulues, PLAYBOOK.md section 10). Les demandes manuelles de la
+      // session restent (`_demandesManuelles`).
+      final vientDEtreDesactivee =
+          _archiveCompleteAppliquee == true && !archiveComplete;
+      if (archiveComplete || vientDEtreDesactivee) {
         // Archive complète : toute la bibliothèque, y compris les titres
         // sans liste et ceux des listes du client. La file reste traitée
         // un chapitre à la fois, avec le délai par domaine de
         // `ClientHttpPoli` : le volume ne change rien au rythme des requêtes.
+        // Juste désactivée : même parcours, sans réseau (calcul en base),
+        // pour vider la file de ce qui n'est plus voulu.
         final titres = await _depotTitres.chargerTitres();
         ids.addAll(titres.map((titre) => titre.id).whereType<int>());
       }
@@ -739,6 +760,9 @@ class ServiceTelechargement {
         final titres = await _depotTitres.chargerTitres(idListe: liste!.id);
         ids.addAll(titres.map((titre) => titre.id).whereType<int>());
       }
+      // Retenu seulement une fois les titres lus : si la lecture a échoué,
+      // la désactivation sera encore reconnue à l'appel suivant.
+      _archiveCompleteAppliquee = archiveComplete;
       for (final idTitre in ids) {
         try {
           await _appliquerRegles(idTitre, supprimerEchues: false);

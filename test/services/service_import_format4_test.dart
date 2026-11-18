@@ -122,6 +122,56 @@ void main() {
     expect((await cible.titres.chargerTitre(importe.id!))!.nom, 'Mon nom');
     expect(await cible.parametres.chargerArchiveComplete(), isTrue);
     expect(resultat.reglagesGenerauxAppliques, isTrue);
+    expect(resultat.archiveCompleteActivee, isTrue);
+    expect(resultat.resume, contains('Archive complète » activée'));
+  });
+
+  test("un import ne coupe jamais l'archive complète de l'appareil", () async {
+    await remplirOrigine();
+    await origine.parametres.enregistrerArchiveComplete(false);
+    await DepotSources(cible.base).enregistrerSource(sourceMangaDex);
+    await cible.parametres.enregistrerArchiveComplete(true);
+    final resultat = await cible.import.importerTexte(
+      await origine.json(),
+      appliquerReglagesGeneraux: true,
+    );
+    expect(await cible.parametres.chargerArchiveComplete(), isTrue);
+    expect(resultat.archiveCompleteActivee, isFalse);
+    expect(resultat.resume, isNot(contains('Archive complète')));
+  });
+
+  test(
+    "l'archive complète déjà active n'est pas annoncée dans le bilan",
+    () async {
+      await remplirOrigine();
+      await DepotSources(cible.base).enregistrerSource(sourceMangaDex);
+      await cible.parametres.enregistrerArchiveComplete(true);
+      final resultat = await cible.import.importerTexte(
+        await origine.json(),
+        appliquerReglagesGeneraux: true,
+      );
+      expect(await cible.parametres.chargerArchiveComplete(), isTrue);
+      expect(resultat.archiveCompleteActivee, isFalse);
+    },
+  );
+
+  test("sans transaction, l'import active aussi l'archive complète", () async {
+    await remplirOrigine();
+    await DepotSources(cible.base).enregistrerSource(sourceMangaDex);
+    final sansTransaction = ServiceImport(
+      depotSources: DepotSources(cible.base),
+      depotTitres: cible.titres,
+      depotTitresSources: DepotTitresSources(cible.base),
+      depotListes: DepotListes(cible.base),
+      depotCategories: DepotCategories(cible.base),
+      serviceParametres: cible.parametres,
+    );
+    final resultat = await sansTransaction.importerTexte(
+      await origine.json(),
+      appliquerReglagesGeneraux: true,
+    );
+    expect(await cible.parametres.chargerArchiveComplete(), isTrue);
+    expect(resultat.archiveCompleteActivee, isTrue);
   });
 
   test(

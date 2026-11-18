@@ -335,7 +335,14 @@ class ResultatImport {
     this.reglagesGenerauxAppliques = false,
     this.erreurs = const <ErreurLigneImport>[],
     this.regroupementsAjoutes = 0,
+    this.archiveCompleteActivee = false,
   });
+
+  /// `true` si l'import a activé « Archive complète » (elle ne l'était pas
+  /// sur l'appareil). Un import ne la désactive jamais. L'interface lance
+  /// alors `ServiceTelechargement.appliquerReglesATous` pour mettre en file
+  /// les chapitres de toute la bibliothèque.
+  final bool archiveCompleteActivee;
 
   /// Regroupements de catégories (format 3) enregistrés par l'import.
   final int regroupementsAjoutes;
@@ -395,6 +402,12 @@ class ResultatImport {
     final tampon = StringBuffer('${parties.join(', ')}.');
     if (reglagesGenerauxAppliques) {
       tampon.write(' Langues et niveaux de contenu repris du fichier.');
+    }
+    if (archiveCompleteActivee) {
+      tampon.write(
+        ' « Archive complète » activée : tous les chapitres de la '
+        'bibliothèque seront téléchargés (désactivable dans Paramètres).',
+      );
     }
     if (chapitresALaProchaineVerification) {
       tampon.write(
@@ -1016,6 +1029,7 @@ class ServiceImport {
       sitesAjoutes: ecriture.sitesAjoutes,
       listesAjoutees: ecriture.listesAjoutees,
       reglagesGenerauxAppliques: reglagesAppliques,
+      archiveCompleteActivee: ecriture.archiveCompleteActivee,
       regroupementsAjoutes: ecriture.regroupementsAjoutes,
       erreurs: <ErreurLigneImport>[
         ...contenu.erreursLecture,
@@ -1057,6 +1071,9 @@ class _Ecriture {
   int sitesAjoutes = 0;
   int listesAjoutees = 0;
   int regroupementsAjoutes = 0;
+
+  /// `true` si l'import a activé « Archive complète » (elle ne l'était pas).
+  bool archiveCompleteActivee = false;
   final List<ErreurLigneImport> erreurs = <ErreurLigneImport>[];
 
   Future<void> chargerEtat() async {
@@ -1230,8 +1247,9 @@ class _Ecriture {
   // ------------------------------------------------------------- Réglages
 
   /// Enregistre les langues, les niveaux de contenu et (format 4) le réglage
-  /// « Archive complète » du fichier. Renvoie `true` si au moins l'un d'eux
-  /// a été écrit.
+  /// « Archive complète » du fichier (seulement pour l'activer, voir
+  /// [archiveCompleteActivee]). Renvoie `true` si les langues ou les
+  /// niveaux ont été écrits.
   Future<bool> importerReglages() async {
     final depot = _service._depotParametres;
     final parametres = _service._serviceParametres;
@@ -1270,20 +1288,31 @@ class _Ecriture {
       }
       // Format 4 : « Archive complète » suit les autres réglages généraux
       // (restauration sur un nouvel appareil, ou choix explicite du client).
-      // Les téléchargements correspondants commencent à la prochaine
-      // application des règles (démarrage, ou appel de l'interface).
-      final archiveComplete = _contenu.archiveComplete;
-      if (archiveComplete != null) {
-        if (depot != null) {
-          await depot.enregistrerEntier(
-            ServiceParametres.cleArchiveComplete,
-            archiveComplete ? 1 : 0,
-            executeur: _executeur,
-          );
-        } else {
-          await parametres!.enregistrerArchiveComplete(archiveComplete);
+      // Règle du client (relecture) : un import peut seulement l'ACTIVER,
+      // jamais la couper (rien n'est retiré par un import). Les
+      // téléchargements correspondants commencent à la prochaine application
+      // des règles (démarrage, ou appel de l'interface).
+      if (_contenu.archiveComplete == true) {
+        // Déjà activée : rien à écrire ni à annoncer dans le bilan.
+        final dejaActive = depot != null
+            ? await depot.chargerEntier(
+                    ServiceParametres.cleArchiveComplete,
+                    executeur: _executeur,
+                  ) ==
+                  1
+            : await parametres!.chargerArchiveComplete();
+        if (!dejaActive) {
+          if (depot != null) {
+            await depot.enregistrerEntier(
+              ServiceParametres.cleArchiveComplete,
+              1,
+              executeur: _executeur,
+            );
+          } else {
+            await parametres!.enregistrerArchiveComplete(true);
+          }
+          archiveCompleteActivee = true;
         }
-        applique = true;
       }
     } on Exception catch (erreur) {
       if (_toutOuRien) rethrow;

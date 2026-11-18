@@ -18,6 +18,7 @@ import 'package:bibliotheque_perso/services/extension_image.dart';
 import 'package:bibliotheque_perso/services/politique_telechargement.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
 import 'package:bibliotheque_perso/services/service_telechargement.dart';
+import 'package:bibliotheque_perso/services/verrou_telechargement.dart';
 import 'package:bibliotheque_perso/sources/fabrique_sources.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -308,6 +309,30 @@ void main() {
       final relu = await depotChapitres.chargerChapitre(chapitre.id!);
       expect(relu!.dateSuppressionPrevue, isNull);
       expect(relu.estTelecharge, isTrue);
+    });
+
+    test('juste désactivée : la file perd les téléchargements automatiques '
+        'qui ne sont plus voulus', () async {
+      // Verrou tenu par la tâche de fond : la file n'est pas traitée, les
+      // téléchargements restent « en attente » pendant tout le test.
+      await parametres.enregistrerVerrouTelechargement(
+        VerrouTelechargement(
+          proprietaire: 'tache-de-fond',
+          expiration: DateTime.now().toUtc().add(const Duration(hours: 1)),
+        ),
+      );
+      await parametres.enregistrerArchiveComplete(true);
+      await service.appliquerReglesATous();
+      expect(await chapitresEnFile(sansListe), hasLength(20));
+      // Demande manuelle de la session : elle doit rester en file.
+      final manuel = (await depotChapitres.chargerChapitres(sansListe.id!))
+          .first;
+      await service.telechargerChapitre(manuel.id!);
+
+      await parametres.enregistrerArchiveComplete(false);
+      await service.appliquerReglesATous();
+      expect(await chapitresEnFile(sansListe), <int>{manuel.id!});
+      expect(await chapitresEnFile(suivi), hasLength(10));
     });
 
     test(

@@ -1739,9 +1739,9 @@ class ServiceBibliotheque {
   /// renvoie à jour.
   ///
   /// Le nom est nettoyé ([nettoyerNomListe]). Lève une [ErreurService] pour
-  /// une liste système (Favoris, Suivis, Planifié, En attente), une liste
-  /// disparue, un nom vide, trop long ou déjà pris. Changer seulement la
-  /// casse du nom est accepté.
+  /// une liste système (Favoris, Suivis, Planifié, En attente, Terminés),
+  /// une liste disparue, un nom vide, trop long ou déjà pris. Changer
+  /// seulement la casse du nom est accepté.
   Future<ListeLecture> renommerListe(int idListe, String nom) async {
     final propre = _validerNomListe(nom);
     await _refuserNomListePris(propre, idListe: idListe);

@@ -9,6 +9,7 @@ import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/services/service_ajout_site.dart';
 import 'package:bibliotheque_perso/sources/detecteur_type_site.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
+import 'package:bibliotheque_perso/sources/lisibilite_site.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -97,10 +98,11 @@ void main() {
       expect(requetes, hasLength(2));
     });
 
-    test('la racine seule reste acceptée sans seconde requête', () async {
+    test('la racine seule reste acceptée sans chapitre', () async {
       final source = await service.ajouterSite('https://portail.test/');
       expect(source.typeSource, TypeSource.generique);
-      expect(requetes, hasLength(1));
+      // Accueil (détection) puis page collée, relue pour les refus sûrs.
+      expect(requetes, hasLength(2));
     });
 
     test('un type forcé n’est pas revérifié', () async {
@@ -132,23 +134,158 @@ void main() {
       expect(source.typeSource, TypeSource.generique);
     });
 
-    test('estRacineSeule distingue la racine d’une adresse précise', () {
-      expect(
-        ServiceAjoutSite.estRacineSeule(Uri.parse('https://a.test')),
-        isTrue,
+    test('estPageAccueil distingue un accueil d’une page précise', () {
+      for (final accueil in const <String>[
+        'https://a.test',
+        'https://a.test/',
+        'https://a.test/?p=1',
+        'https://a.test/fr/',
+        'https://a.test/index.php',
+        'https://a.test/home',
+        'https://a.test/manga/',
+        'https://a.test//fr//',
+      ]) {
+        expect(
+          ServiceAjoutSite.estPageAccueil(Uri.parse(accueil)),
+          isTrue,
+          reason: accueil,
+        );
+      }
+      for (final precise in const <String>[
+        'https://a.test/wiki/Ruri_Dragon',
+        'https://a.test/manga/titre/',
+        'https://a.test/fr/manga/titre?page=2',
+      ]) {
+        expect(
+          ServiceAjoutSite.estPageAccueil(Uri.parse(precise)),
+          isFalse,
+          reason: precise,
+        );
+      }
+    });
+  });
+
+  group('accueils et refus sûrs (relecture C2)', () {
+    late Database baseC2;
+    late DepotSources depotC2;
+    late ServiceAjoutSite serviceC2;
+
+    /// Page de connexion : un champ de mot de passe, aucun chapitre.
+    const connexion =
+        '<html><head><title>Connexion</title></head><body><form>'
+        '<input type="text" name="nom"><input type="password" name="mdp">'
+        '</form></body></html>';
+
+    /// Coquille JavaScript : presque rien dans le HTML reçu.
+    const coquille =
+        '<html><head><title>Appli</title></head><body><div id="app"></div>'
+        '<script src="/app.js"></script></body></html>';
+
+    /// Défi anti-robot servi en code 200.
+    const defi =
+        '<html><head><title>Just a moment...</title></head><body>'
+        '<script src="/cdn-cgi/challenge-platform/h/b/orchestrate.js">'
+        '</script></body></html>';
+
+    setUp(() async {
+      baseC2 = await ouvrirBaseDeTest();
+      depotC2 = DepotSources(baseC2);
+      final client = creerClientTest((http.Request requete) async {
+        final chemin = requete.url.path;
+        // Racine de chaque site : accueil générique ordinaire (détection).
+        if (chemin.isEmpty || chemin == '/') {
+          return _html(_accueil);
+        }
+        return switch (requete.url.host) {
+          'connexion.test' => _html(connexion),
+          'coquille.test' => _html(coquille),
+          'robot.test' => _html(defi),
+          // Accueils, pages de langue, catalogues : beaucoup de liens et
+          // de texte, aucun lien de chapitre.
+          _ => _html(_article),
+        };
+      }, HorlogeFactice());
+      serviceC2 = ServiceAjoutSite(
+        depotC2,
+        DetecteurTypeSite(client),
+        client: client,
       );
-      expect(
-        ServiceAjoutSite.estRacineSeule(Uri.parse('https://a.test/')),
-        isTrue,
+    });
+
+    tearDown(() => baseC2.close());
+
+    for (final accueil in const <String>[
+      'https://un.test/fr/',
+      'https://deux.test/index.php',
+      'https://trois.test/home',
+      'https://quatre.test/?lang=fr',
+      'https://cinq.test/manga/',
+    ]) {
+      test('l’accueil $accueil est accepté sans chapitre', () async {
+        final source = await serviceC2.ajouterSite(accueil);
+        expect(source.typeSource, TypeSource.generique);
+      });
+    }
+
+    test('une page Wikipédia reste refusée', () async {
+      await expectLater(
+        serviceC2.ajouterSite('https://fr.wikipedia.test/wiki/Ruri_Dragon'),
+        throwsA(isA<ErreurSource>()),
       );
-      expect(
-        ServiceAjoutSite.estRacineSeule(Uri.parse('https://a.test/?p=1')),
-        isFalse,
+      expect(await depotC2.chargerSources(), isEmpty);
+    });
+
+    test('un accueil qui demande une connexion est refusé', () async {
+      await expectLater(
+        serviceC2.ajouterSite('https://connexion.test/home'),
+        throwsA(
+          isA<ErreurSource>().having(
+            (e) => e.message,
+            'message',
+            contains('connexion'),
+          ),
+        ),
       );
-      expect(
-        ServiceAjoutSite.estRacineSeule(Uri.parse('https://a.test/titre')),
-        isFalse,
+      expect(await depotC2.chargerSources(), isEmpty);
+    });
+
+    test('un accueil construit en JavaScript est refusé', () async {
+      await expectLater(
+        serviceC2.ajouterSite('https://coquille.test/fr/'),
+        throwsA(
+          isA<ErreurSource>().having(
+            (e) => e.message,
+            'message',
+            contains('JavaScript'),
+          ),
+        ),
       );
+      expect(await depotC2.chargerSources(), isEmpty);
+    });
+
+    test('un accueil protégé par un défi anti-robot est refusé', () async {
+      await expectLater(
+        serviceC2.ajouterSite('https://robot.test/fr/'),
+        throwsA(
+          isA<ErreurSource>().having(
+            (e) => e.protectionAntiRobot,
+            'anti-robot',
+            isTrue,
+          ),
+        ),
+      );
+      expect(await depotC2.chargerSources(), isEmpty);
+    });
+
+    test('raisonRefusSur ignore la seule absence de chapitres', () {
+      final sansChapitre = verifierLisibilite(
+        _article,
+        Uri.parse('https://a.test/wiki/X'),
+      );
+      expect(sansChapitre.estLisible, isFalse);
+      expect(ServiceAjoutSite.raisonRefusSur(sansChapitre), isNull);
+      final page = verifierLisibilite(connexion, Uri.parse('https://a.test/'));
+      expect(ServiceAjoutSite.raisonRefusSur(page), contains('connexion'));
     });
   });
 

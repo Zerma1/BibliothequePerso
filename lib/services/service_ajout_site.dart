@@ -65,17 +65,22 @@ class ServiceAjoutSite {
   /// nouvelle détection. [nom] et [langueParDefaut] sont facultatifs ;
   /// [typeForce] permet au client de corriger un type mal détecté.
   ///
-  /// **Site générique et adresse précise** (retour C2 de la 0.2.1-test :
-  /// une page Wikipédia était acceptée) : quand le type détecté (non forcé)
-  /// est générique et que [url] a un chemin (pas seulement la racine du
-  /// site), la page collée est récupérée (une requête de plus, avec le délai
-  /// par domaine) et passée à `verifierLisibilite`, avec les réglages
-  /// [configurationSelecteurs] que le client s'apprête à enregistrer. Si
-  /// elle n'est pas lisible, **rien n'est enregistré** et une `ErreurSource`
-  /// porte la première raison (l'interface propose alors « Pourquoi ce site
-  /// n'est pas lisible ? »). Une racine seule reste acceptée : l'accueil
-  /// d'un site à plusieurs œuvres ne liste pas de chapitres. Vérification
-  /// faite seulement si le service a reçu le client HTTP.
+  /// **Site générique** (retour C2 de la 0.2.1-test : une page Wikipédia
+  /// était acceptée) : quand le type détecté (non forcé) est générique, la
+  /// page collée est récupérée (une requête de plus, avec le délai par
+  /// domaine) et passée à `verifierLisibilite`, avec les réglages
+  /// [configurationSelecteurs] que le client s'apprête à enregistrer.
+  /// - page précise (au moins deux segments de chemin, voir
+  ///   [estPageAccueil]) : refusée si elle n'est pas lisible ;
+  /// - accueil (racine, un seul segment, paramètres seuls) : refusé
+  ///   seulement pour un refus sûr ([raisonRefusSur] : anti-robot,
+  ///   connexion, page en JavaScript), car un accueil à plusieurs œuvres ne
+  ///   liste pas de chapitres.
+  ///
+  /// En cas de refus, **rien n'est enregistré** et une `ErreurSource` porte
+  /// la raison (l'interface propose alors « Pourquoi ce site n'est pas
+  /// lisible ? »). Vérification faite seulement si le service a reçu le
+  /// client HTTP.
   ///
   /// Lève une `ErreurSource` (URL invalide, site injoignable, page
   /// illisible), une [ErreurService] ([typeForce] incohérent avec le site,
@@ -125,21 +130,31 @@ class ServiceAjoutSite {
     );
   }
 
-  /// `true` si [uri] désigne seulement la racine d'un site (chemin vide ou
-  /// `/`, sans paramètres) : l'accueil d'un site à plusieurs œuvres, qui ne
-  /// liste pas lui-même de chapitres. Fonction pure.
-  static bool estRacineSeule(Uri uri) =>
-      (uri.path.isEmpty || uri.path == '/') && uri.query.isEmpty;
+  /// `true` si [uri] désigne une page d'accueil : chemin de moins de deux
+  /// segments non vides (`/`, `/fr/`, `/index.php`, `/home`, `/manga/`),
+  /// paramètres compris (`/?lang=fr`). Fonction pure.
+  ///
+  /// Règle du client (relecture C2) : seule une adresse d'au moins deux
+  /// segments (`/wiki/Ruri_Dragon`, `/manga/titre/`) désigne une page
+  /// précise dont on exige des chapitres ; un accueil, une page de langue ou
+  /// un catalogue ne listent pas eux-mêmes de chapitres et étaient refusés à
+  /// tort.
+  static bool estPageAccueil(Uri uri) =>
+      uri.pathSegments.where((segment) => segment.isNotEmpty).length < 2;
 
-  /// Vérification C2 de [ajouterSite] : la page collée [uri] (si ce n'est
-  /// pas une racine seule) doit être lisible par l'adaptateur générique.
-  /// Lève une `ErreurSource` sinon.
+  /// Vérification C2 de [ajouterSite] sur la page collée [uri].
+  ///
+  /// Toute page est récupérée (une requête) : un défi anti-robot, une page
+  /// de connexion ou une page construite en JavaScript sont refusés partout
+  /// (refus sûrs : l'application ne pourra jamais lire ce site). Une page
+  /// précise (voir [estPageAccueil]) doit en plus être lisible (liens de
+  /// chapitres ou images). Lève une `ErreurSource` sinon.
   Future<void> _verifierPageCollee(
     Uri uri,
     String? configurationSelecteurs,
   ) async {
     final client = _client;
-    if (client == null || estRacineSeule(uri)) return;
+    if (client == null) return;
     final String html;
     try {
       // Une seule requête : la page n'est lue qu'une fois, sans suivre ses
@@ -154,15 +169,47 @@ class ServiceAjoutSite {
       configurationSelecteurs: configurationSelecteurs,
     );
     if (diagnostic.estLisible) return;
+    final String raison;
+    if (estPageAccueil(uri)) {
+      // Accueil : seuls les refus sûrs comptent (l'absence de chapitres y est
+      // normale).
+      final sure = raisonRefusSur(diagnostic);
+      if (sure == null) return;
+      raison = sure;
+    } else {
+      raison = diagnostic.raisons.first;
+    }
     throw ErreurSource(
       uri.toString(),
-      diagnostic.raisons.first,
+      raison,
       typeDetecte: TypeSource.generique,
       protectionAntiRobot: diagnostic.protectionAntiRobot,
       // Début de la page (déjà nettoyé des données personnelles) pour le
       // rapport d'erreur exportable.
       extraitReponse: extraireDebutReponse(html),
     );
+  }
+
+  /// Raison d'un refus sûr du [diagnostic] (défi anti-robot, page de
+  /// connexion, page construite en JavaScript), ou `null` s'il n'y en a pas
+  /// (page lisible, ou seulement sans chapitre ni image). Fonction pure.
+  ///
+  /// LIMITE : `DiagnosticLisibilite` ne donne un indicateur que pour le défi
+  /// anti-robot ; la connexion et la page en JavaScript sont reconnues à
+  /// leur message (`verifierLisibilite`, lib/sources/lisibilite_site.dart).
+  /// Si ces messages changent, les tests de `service_ajout_site` échouent
+  /// (ils passent par le vrai diagnostic). Un indicateur par refus dans le
+  /// diagnostic serait plus solide (demande à `developpeur-sources`).
+  static String? raisonRefusSur(DiagnosticLisibilite diagnostic) {
+    if (diagnostic.estLisible) return null;
+    if (diagnostic.protectionAntiRobot) return diagnostic.raisons.first;
+    for (final raison in diagnostic.raisons) {
+      if (raison.contains('demande une connexion') ||
+          raison.contains('construite par des scripts')) {
+        return raison;
+      }
+    }
+    return null;
   }
 
   /// Motif du refus du type [type] pour le site d'adresse [urlBase], ou
