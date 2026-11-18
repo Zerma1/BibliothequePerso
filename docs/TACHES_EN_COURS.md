@@ -36,12 +36,12 @@ au fur et à mesure ; ne pas commiter ; `flutter analyze` à 0 sur son périmèt
 - [x] I5. Paramètres « Mes langues » (ajout depuis une liste de langues en français, retrait, ordre, « Choisir comme favorite » = première) ; réglage par site présenté comme avancé ; fiche du titre : langues de ce titre (réglage général / personnalisées / retour au général).
 
 ## Ensuite (orchestrateur)
-- [ ] Relecture complète, essai réel contre MangaDex, essai de l'application à l'écran, proposition de la version 0.1.0 au client.
-- [ ] Étapes 6 à 9 du PLAYBOOK.
+- [x] Relecture complète, essai réel contre MangaDex, essai de l'application à l'écran, proposition de la version 0.1.0 au client.
+- [x] Étapes 6 à 9 du PLAYBOOK.
 
 ## Plus tard (proposé par developpeur-services)
-- [ ] P1. Migration 5 : colonne `chapitres.est_garde` pour le bouton « Garder » (aujourd'hui mémorisé dans `parametres`, avec une petite course possible entre isolats) — developpeur-donnees puis developpeur-services.
-- [ ] P2. `ServiceTelechargement.chargerSuppressionsPrevues()` (tous titres) pour lister les chapitres en rouge dans l'onglet Téléchargements, et un repère visuel « gardé » — developpeur-services puis developpeur-interface.
+- [x] P1. Migration 5 : colonne `chapitres.est_garde` pour le bouton « Garder » (aujourd'hui mémorisé dans `parametres`, avec une petite course possible entre isolats) — developpeur-donnees puis developpeur-services.
+- [x] P2. `ServiceTelechargement.chargerSuppressionsPrevues()` (tous titres) pour lister les chapitres en rouge dans l'onglet Téléchargements, et un repère visuel « gardé » — developpeur-services puis developpeur-interface.
 - [ ] P3. Réglage avancé des langues d'un site : accepter les variantes régionales (`pt-br`).
 
 ## Étape 6 — retours du client après le premier test (2026-11-15)
@@ -87,7 +87,7 @@ Décisions de l'orchestrateur (autonomie accordée par le client jusqu'au vendre
 - [x] R2. BUG : chapitres non téléchargés automatiquement à l'ajout d'un titre ou d'un nouveau chapitre (diagnostic confié à analyste-erreurs, E11).
 - [x] R3. Filtre des catégories : « Toutes » + entonnoir ouvrant une fenêtre avec toutes les catégories, chacune incluse / exclue (transmis à developpeur-interface avec IN2).
 - [x] R4. **Chapitres hébergés sur un site externe** (ex. Ruri Dragon : MangaDex renvoie vers le site de l'éditeur) : les lister dans l'application avec un lien « Lire sur <site> », non téléchargeables. developpeur-sources (`includeExternalUrl=1`, champ `externalUrl` — vérifier la doc), developpeur-donnees (colonne `chapitres.url_externe`, migration 6), developpeur-services (exclus des règles de téléchargement), developpeur-interface (icône lien externe + légende).
-- [ ] R5. **Ajouter un autre site à un titre** (bouton sur la fiche) : priorité avancée — l'étape 8 (plusieurs sources par titre) passe juste après l'étape 6.
+- [x] R5. **Ajouter un autre site à un titre** (bouton sur la fiche) : priorité avancée — l'étape 8 (plusieurs sources par titre) passe juste après l'étape 6.
 - [x] R6. Listes obligatoires manquantes : déjà couvertes par l'étape 6 (« Planifié », « En attente »).
 - [x] R7. **Export des liens** (demande du client, 2026-11-16) : exporter dans un fichier les sites configurés et chaque titre (nom, lien du titre sur chaque site, listes, catégories, langues propres, couverture choisie, dernier chapitre lu). Deux formats : JSON (complet, réimportable plus tard) et Markdown lisible (titres groupés par liste, liens cliquables). Fichiers dans `<dossier racine>/exports/`, nom daté. developpeur-services (`ServiceExport`), puis bouton dans Paramètres et partage du fichier (developpeur-interface). L'import du JSON suivra (R8).
 - [x] R8. **Scan-Manga** (demande du client, 2026-11-16) : adaptateur `SourceScanManga` (type `scanManga`, reconnu par le domaine scan-manga.com). Les pages de titre sont du HTML lisible (titre, couverture, résumé, auteur, catégories, liste des chapitres) ; les pages de chapitre cachent leurs images derrière un script brouillé (atob + eval) : **aucun décodage** (PLAYBOOK §10), chaque chapitre est enregistré avec `urlExterne` = sa page de lecture (« Lire sur Scan-Manga »), jamais téléchargé. Recherche par le moteur du site si une page de résultats HTML existe.
@@ -116,7 +116,7 @@ Décisions de l'orchestrateur :
 
 - [x] W1. **webtoons.com** (signalé par le client : https://www.webtoons.com/fr/romance/the-gangster-daughter-of-the-henchman-dukes-family/list?title_no=11499) : diagnostic (HTML lisible ? pagination de la liste des épisodes ? images protégées ?), puis adaptateur `SourceWebtoons` sur le modèle de Scan-Manga : fiche + tous les épisodes, chaque épisode avec `urlExterne` = sa page (« Lire sur WEBTOON ») tant que la récupération des images n'est pas clairement autorisée sans contournement. Langue d'après l'adresse (/fr/, /en/…).
 - [x] W2. Adaptateurs Madara et MangaThemesia (thèmes WordPress courants).
-- [ ] W3. Adaptateur générique par sélecteurs CSS (formulaire de sélecteurs dans « Ajouter un site »).
+- [x] W3. Adaptateur générique par sélecteurs CSS (formulaire de sélecteurs dans « Ajouter un site »).
 
 ## Retours du client sur la 0.1.0-test.4 (2026-11-17) — `testUtilisateur/retour/v0.1.0-test.4/`
 
@@ -139,10 +139,10 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
   chapter/chapitre/episode + numéro), le titre, la couverture, et les images de la page de
   chapitre ; accepter qu'on colle l'adresse d'un chapitre (remonter à la page qui liste les
   chapitres) ; sinon sélecteurs CSS réglables. Détection automatique d'un site « œuvre unique ».
-- [ ] T3. **Critères de lecture des sites** (demande du client) : document clair
+- [x] T3. **Critères de lecture des sites** (demande du client) : document clair
   `docs/CRITERES_LECTURE_SITES.md` + aide dans l'écran d'ajout de site et dans les messages de
   refus (« pourquoi ce site n'est pas lisible »).
-- [ ] T4. **Ajouter quand même comme simple lien** : quand un site ne peut pas être lu
+- [x] T4. **Ajouter quand même comme simple lien** : quand un site ne peut pas être lu
   (protection, adaptateur absent), proposer d'enregistrer l'adresse comme site du titre en
   « lien seul » (ouverture dans la vue web / le navigateur, pas de lecture des chapitres).
 - [ ] T5. (Décision du client : sous **Windows, navigateur par défaut seulement**, pas de `webview_windows` ; `webview_flutter` pour Android uniquement, le jour où il pourra tester.) **Vue web intégrée** pour les liens externes et les « liens seuls » : `webview_flutter`
@@ -151,16 +151,38 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
   « Ouvrir dans le navigateur » toujours présent.
 - [x] T6. Plan de tests pour le client sur la branche `test` (fait par l'orchestrateur).
 
-- [ ] T7. Prochaine version de test : **0.2.0-test** (règle du client : X.Y.Z-test, Z+1 à chaque itération de corrections ; `version: 0.2.0+5`) avec son plan de tests `testUtilisateur/plan_de_tests_v0.2.0-test.md`, `versionApplication = '0.2.0'` (erreur de numérotation des test.2 à test.4, voir docs/VERSIONS.md).
+- [x] T7. Prochaine version de test : **0.2.0-test** (règle du client : X.Y.Z-test, Z+1 à chaque itération de corrections ; `version: 0.2.0+5`) avec son plan de tests `testUtilisateur/plan_de_tests_v0.2.0-test.md`, `versionApplication = '0.2.0'` (erreur de numérotation des test.2 à test.4, voir docs/VERSIONS.md).
 
 ## Retours 0.2.0-test (2026-11-17) → 0.2.1-test
 
-- [ ] U1. Réimporter les exports (JSON) : fusion sans doublon, sans réseau (services + bouton Paramètres)
-- [ ] U2. Numéro de version en bas de la colonne de navigation
-- [ ] U3. Paramètres en sections pliables
-- [ ] U4. Section « Sites » d'un titre pliable
-- [ ] U5. Badge « Nouveau » : titres marqués nouveaux depuis le 30/10/2023 (bug)
-- [ ] U6. Plan de tests 0.2.1-test : expliquer la section B (non comprise) et les tests A3–A7 (à faire avec un site illisible)
+- [x] U1. Réimporter les exports (JSON) : fusion sans doublon, sans réseau (services + bouton Paramètres)
+- [x] U2. Numéro de version en bas de la colonne de navigation
+- [x] U3. Paramètres en sections pliables
+- [x] U4. Section « Sites » d'un titre pliable
+- [x] U5. Badge « Nouveau » : titres marqués nouveaux depuis le 30/10/2023 (bug)
+- [x] U6. Plan de tests 0.2.1-test : expliquer la section B (non comprise) et les tests A3–A7 (à faire avec un site illisible)
 - Décidé : ouvrir un chapitre depuis la fiche ne marque pas les précédents comme lus (laisser ainsi).
-- [ ] U7. Première vérification d'un titre importé : le bilan compte tous ses chapitres comme nouveaux (nombreNouveauxChapitres, notifications) — à corriger dans la 0.2.2
+- [x] U7. Première vérification d'un titre importé : le bilan compte tous ses chapitres comme nouveaux (nombreNouveauxChapitres, notifications) — à corriger dans la 0.2.2
 - [x] U1–U6 faits (0.2.1-test)
+- Décisions du client (2026-11-17) : « Nouveau » 30 jours ; section Sites et Paramètres repliés : OK ; import sans avancement de lecture. Prochaine version : 0.2.2-test, après le rapport du client sur la 0.2.1-test.
+
+## Suite autonome (2026-11-17, pour la 0.2.2-test)
+
+- [x] V1. Données : `Source.copierAvec` peut vider `configurationSelecteurs` ; exécution en une transaction pour l'import (exécuteur facultatif dans les dépôts + `executerEnTransaction`)
+- [x] V2. Services : import tout-ou-rien (une transaction) ; validation des sélecteurs CSS avant enregistrement ; liste des clés de réglages génériques exposée
+- [x] V3. Interface : modifier les sélecteurs CSS dans « Modifier le site » (et pouvoir les vider) ; clés lues depuis les services
+- [x] V4. `docs/CRITERES_LECTURE_SITES.md` (critères de lecture expliqués au client)
+- Reste possible : `DepotTitres.compterTitres` (import : savoir si la bibliothèque est vide sans tout charger) ; validation CSS plus stricte que le parseur (décision client).
+
+## Retours 0.2.1-test (2026-11-18) → 0.2.2-test
+
+- [x] X1. Téléchargement : image WEBP sans Content-Type refusée, message avec octets illisibles (sources)
+- [x] X2. Wikipédia acceptée comme site générique lisible (heuristique trop large)
+- [x] X3. Case Favoris décochée par défaut à l'ajout d'un titre
+- [x] X4. Listes personnelles : créer, renommer, supprimer, réordonner (+ « En attente (perso) » gérable)
+- [x] X5. CRUD sources : modifier/supprimer depuis l'onglet Sources, type modifiable
+- [x] X6. CRUD titres : modifier nom, alternatifs, résumé, auteur, catégories, niveau de contenu (protégés de l'actualisation) ; ajout par recherche
+- [x] X7. Archive complète (NAS) : tout télécharger, ne jamais supprimer automatiquement
+- [x] X8. Plan de tests 0.2.2-test : reprendre D4 (import d'un titre retiré)
+- [x] X9. Liste système « Terminés » (titres terminés) : pas de notification ni de téléchargement automatique (sauf archive complète)
+- [x] X10. Marquer lus en lot : sélection de chapitres (appui long + glisser, ou cases) et « Marquer lus jusqu'ici » depuis un chapitre

@@ -74,9 +74,9 @@ limité à son scope :
 ## État actuel (2026-11-17)
 
 - `main` : version **0.1.0** (validée par le client).
-- `test` : **0.2.0-test** (sites en simple lien, diagnostic de lisibilité, User-Agent honnête,
-  générique à liens explicites), en attente des retours du client
-  (`testUtilisateur/retour/v0.2.0-test/`). La prochaine version de test sera la 0.2.1-test.
+- `test` : **0.2.1-test** (import des exports, sections pliables, « Nouveau » sur 7 jours,
+  lecteur sans sauts), en attente des retours du client
+  (`testUtilisateur/retour/v0.2.1-test/`). La prochaine version de test sera la 0.2.2-test.
 - Suivi des tâches dans `docs/TACHES_EN_COURS.md`.
 
 ## Pièges connus

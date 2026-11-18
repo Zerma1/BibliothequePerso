@@ -211,7 +211,7 @@ class _ListeCategories extends StatelessWidget {
   });
 
   final EtatBibliotheque etat;
-  final List<GroupeCategories> groupes;
+  final List<CategoriesParInitiale> groupes;
   final EtatFiltreCategorie Function(int idCategorie) etatDe;
   final void Function(int idCategorie) surAppui;
 
@@ -255,6 +255,10 @@ class _ListeCategories extends StatelessWidget {
                     if (categorie.id != null)
                       PuceCategorieTroisEtats(
                         nom: categorie.nom,
+                        // Un groupe de même sens n'a qu'une puce, au nom
+                        // de sa référence ; les autres noms sont rappelés
+                        // dessous.
+                        autresNoms: etat.autresNoms(categorie.id!),
                         etat: etatDe(categorie.id!),
                         surAppui: () => surAppui(categorie.id!),
                       ),
@@ -269,7 +273,8 @@ class _ListeCategories extends StatelessWidget {
 }
 
 /// Puce d'une catégorie à trois états : neutre (contour), incluse (pleine,
-/// « + ») ou exclue (rouge, « − », barrée).
+/// « + ») ou exclue (rouge, « − », barrée). Pour un groupe de catégories
+/// de même sens, les [autresNoms] sont écrits en petit sous le nom.
 class PuceCategorieTroisEtats extends StatelessWidget {
   /// Crée la puce de la catégorie [nom] dans l'[etat] donné.
   const PuceCategorieTroisEtats({
@@ -277,10 +282,14 @@ class PuceCategorieTroisEtats extends StatelessWidget {
     required this.nom,
     required this.etat,
     required this.surAppui,
+    this.autresNoms = const <String>[],
   });
 
   /// Nom de la catégorie, tel qu'enregistré (minuscules).
   final String nom;
+
+  /// Autres noms du groupe dont la catégorie est la référence (vide sinon).
+  final List<String> autresNoms;
 
   /// État dans le filtre.
   final EtatFiltreCategorie etat;
@@ -291,10 +300,21 @@ class PuceCategorieTroisEtats extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final couleurs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
     final libelle = PastilleCategorie.afficher(nom);
     final estExclue = etat == EtatFiltreCategorie.exclue;
+    final autres = autresNoms.map(PastilleCategorie.afficher).join(', ');
+    final styleNom = estExclue
+        ? TextStyle(
+            color: couleurs.error,
+            decoration: TextDecoration.lineThrough,
+          )
+        : null;
     return Tooltip(
-      message: Textes.etatFiltreCategorie(etat),
+      message: autresNoms.isEmpty
+          ? Textes.etatFiltreCategorie(etat)
+          : '${Textes.etatFiltreCategorie(etat)}\n'
+                '${Textes.aussiAppelee(autres)}',
       child: FilterChip(
         // L'état est aussi dit par l'icône et la couleur, pas seulement par
         // la couleur (lisible pour un daltonien).
@@ -309,15 +329,23 @@ class PuceCategorieTroisEtats extends StatelessWidget {
             color: couleurs.error,
           ),
         },
-        label: Text(
-          libelle,
-          style: estExclue
-              ? TextStyle(
-                  color: couleurs.error,
-                  decoration: TextDecoration.lineThrough,
-                )
-              : null,
-        ),
+        label: autresNoms.isEmpty
+            ? Text(libelle, style: styleNom)
+            // Deux lignes dans la puce : le nom retenu, puis les noms
+            // regroupés en petit (le client reconnaît ses tags d'origine).
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(libelle, style: styleNom),
+                  Text(
+                    autres,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: couleurs.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
         selected: etat == EtatFiltreCategorie.incluse,
         showCheckmark: false,
         side: estExclue ? BorderSide(color: couleurs.error) : null,

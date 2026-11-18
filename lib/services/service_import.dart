@@ -14,11 +14,18 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+// Seul le type de l'exécuteur (la transaction de GestionnaireTransactions)
+// est utilisé : aucune requête SQL n'est écrite dans ce service.
+import 'package:sqflite/sqflite.dart' show DatabaseExecutor;
+
 import '../donnees/depot_categories.dart';
+import '../donnees/depot_equivalences_categories.dart';
 import '../donnees/depot_listes.dart';
+import '../donnees/depot_parametres.dart';
 import '../donnees/depot_sources.dart';
 import '../donnees/depot_titres.dart';
 import '../donnees/depot_titres_sources.dart';
+import '../donnees/gestionnaire_transactions.dart';
 import '../modeles/categorie.dart';
 import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/lien_titre_source.dart';
@@ -122,7 +129,18 @@ class TitreImporte {
     this.resume,
     this.auteur,
     this.statut,
+    this.champsManuels = const <ChampTitre>{},
+    this.descriptionPerso,
   });
+
+  /// Description personnelle du client (format 5 ; `null` pour les formats
+  /// 1 à 4 ou si aucune), sans espaces autour et bornée à
+  /// `longueurMaxDescriptionPerso` caractères.
+  final String? descriptionPerso;
+
+  /// Champs modifiés à la main sur l'appareil d'origine (format 4 ; vide
+  /// pour les formats 1 à 3). Noms inconnus de cette version ignorés.
+  final Set<ChampTitre> champsManuels;
 
   /// Position du titre dans le fichier (1 pour le premier).
   final int numero;
@@ -181,6 +199,26 @@ class ListeImportee {
   final bool estSysteme;
 }
 
+/// Un regroupement de catégories tel qu'il est décrit dans le fichier
+/// d'import (format 3), noms déjà normalisés (`Categorie.normaliserNom`).
+class EquivalenceImportee {
+  /// Crée la ligne.
+  const EquivalenceImportee({
+    required this.numero,
+    required this.categorie,
+    required this.reference,
+  });
+
+  /// Position du regroupement dans le fichier (1 pour le premier).
+  final int numero;
+
+  /// Nom de la catégorie à rattacher.
+  final String categorie;
+
+  /// Nom de sa catégorie de référence.
+  final String reference;
+}
+
 /// Tout ce qu'un fichier d'import contient, déjà vérifié. Produit par
 /// [ServiceImport.lireJson] (fonction pure, testable sans base).
 class ContenuImport {
@@ -193,11 +231,20 @@ class ContenuImport {
     this.listes = const <ListeImportee>[],
     this.sources = const <SourceImportee>[],
     this.titres = const <TitreImporte>[],
+    this.equivalences = const <EquivalenceImportee>[],
     this.erreursLecture = const <ErreurLigneImport>[],
+    this.archiveComplete,
   });
 
-  /// Version du format du fichier (1 ou 2).
+  /// Version du format du fichier (1 à 4).
   final int versionFormat;
+
+  /// Réglage « Archive complète » (format 4), ou `null` s'il est absent du
+  /// fichier.
+  final bool? archiveComplete;
+
+  /// Regroupements de catégories (format 3 ; vide pour les formats 1 et 2).
+  final List<EquivalenceImportee> equivalences;
 
   /// Version de l'application qui a produit le fichier, si connue.
   final String? versionApplication;
@@ -236,6 +283,9 @@ enum PartieImport {
 
   /// Les réglages généraux.
   reglages,
+
+  /// Un regroupement de catégories de la section `equivalences` (format 3).
+  equivalence,
 }
 
 /// Une ligne du fichier qui n'a pas pu être importée (en tout ou partie).
@@ -267,6 +317,7 @@ class ErreurLigneImport {
       PartieImport.liste => 'Liste',
       PartieImport.titre => 'Titre',
       PartieImport.reglages => 'Réglages',
+      PartieImport.equivalence => 'Regroupement de catégories',
     };
     final position = numero == null ? '' : ' n°$numero';
     final nomLisible = nom == null ? '' : ' « $nom »';
@@ -289,7 +340,18 @@ class ResultatImport {
     this.listesAjoutees = 0,
     this.reglagesGenerauxAppliques = false,
     this.erreurs = const <ErreurLigneImport>[],
+    this.regroupementsAjoutes = 0,
+    this.archiveCompleteActivee = false,
   });
+
+  /// `true` si l'import a activé « Archive complète » (elle ne l'était pas
+  /// sur l'appareil). Un import ne la désactive jamais. L'interface lance
+  /// alors `ServiceTelechargement.appliquerReglesATous` pour mettre en file
+  /// les chapitres de toute la bibliothèque.
+  final bool archiveCompleteActivee;
+
+  /// Regroupements de catégories (format 3) enregistrés par l'import.
+  final int regroupementsAjoutes;
 
   /// Version du format du fichier importé.
   final int versionFormat;
@@ -335,11 +397,23 @@ class ResultatImport {
         pluriel(sitesAjoutes, 'site ajouté', 'sites ajoutés'),
       if (listesAjoutees > 0)
         pluriel(listesAjoutees, 'liste créée', 'listes créées'),
+      if (regroupementsAjoutes > 0)
+        pluriel(
+          regroupementsAjoutes,
+          'catégorie regroupée',
+          'catégories regroupées',
+        ),
       if (erreurs.isNotEmpty) pluriel(erreurs.length, 'erreur', 'erreurs'),
     ];
     final tampon = StringBuffer('${parties.join(', ')}.');
     if (reglagesGenerauxAppliques) {
       tampon.write(' Langues et niveaux de contenu repris du fichier.');
+    }
+    if (archiveCompleteActivee) {
+      tampon.write(
+        ' « Archive complète » activée : tous les chapitres de la '
+        'bibliothèque seront téléchargés (désactivable dans Paramètres).',
+      );
     }
     if (chapitresALaProchaineVerification) {
       tampon.write(
@@ -365,22 +439,38 @@ class ResultatImport {
 ///   manquants ;
 /// - aucune requête réseau ; les chapitres arrivent à la prochaine
 ///   vérification ;
-/// - une ligne illisible ou impossible à importer est notée dans le
+/// - une ligne illisible ou impossible à importer (site non configuré,
+///   adresse déjà prise par un autre titre…) est notée dans le
 ///   [ResultatImport] sans arrêter les autres ; seul un fichier qui n'est
 ///   pas un export lève une [ErreurService], **avant** toute écriture.
 ///
-/// LIMITE : l'import n'est pas une seule transaction SQLite. Les dépôts
-/// ouvrent chacun leur propre transaction sur la base et n'acceptent pas
-/// une transaction extérieure (en ouvrir une ici les bloquerait). Pour
-/// limiter le risque d'import à moitié fait : tout le fichier est vérifié
-/// avant la première écriture, chaque écriture est elle-même atomique, et
-/// l'import est **idempotent** : relancer le même fichier après une panne
-/// termine le travail sans rien dupliquer. Une vraie transaction demande
-/// des dépôts capables d'écrire dans une transaction donnée (besoin signalé
-/// à l'orchestrateur).
+/// **Tout ou rien (V2)** : avec un [GestionnaireTransactions], tout l'import
+/// (sites, listes, réglages, titres, lectures comprises) se fait dans une
+/// seule transaction SQLite. Une erreur de base inattendue (écriture
+/// refusée, disque plein…) annule **tout** et lève une [ErreurService] :
+/// rien n'est importé. Les erreurs « par ligne » ci-dessus sont des refus
+/// décidés avant l'écriture concernée : elles n'annulent rien.
+///
+/// LIMITE : sans [GestionnaireTransactions] (anciens appelants, tests),
+/// chaque écriture garde sa propre transaction et une erreur de base est
+/// notée sur sa ligne ; un import interrompu peut alors être à moitié fait,
+/// mais il est **idempotent** : le relancer termine le travail sans rien
+/// dupliquer.
 class ServiceImport {
-  /// Crée le service. Sans [serviceParametres], les réglages généraux du
-  /// fichier ne sont jamais appliqués.
+  /// Crée le service.
+  ///
+  /// - [gestionnaireTransactions] rend l'import « tout ou rien » (à fournir
+  ///   dans l'application).
+  /// - Réglages généraux du fichier (langues, niveaux de contenu) : écrits
+  ///   par [depotParametres] (dans la transaction de l'import), sinon par
+  ///   [serviceParametres] (sans transaction seulement) ; sans l'un ni
+  ///   l'autre, ils ne sont jamais appliqués. Les noms des clés et le
+  ///   nettoyage des valeurs restent ceux de [ServiceParametres].
+  ///
+  /// Lève une [ArgumentError] si [gestionnaireTransactions] et
+  /// [serviceParametres] sont fournis sans [depotParametres] :
+  /// `ServiceParametres` écrit hors de la transaction, ce qui bloquerait
+  /// l'import (verrou de sqflite).
   ServiceImport({
     required DepotSources depotSources,
     required DepotTitres depotTitres,
@@ -388,12 +478,27 @@ class ServiceImport {
     required DepotListes depotListes,
     required DepotCategories depotCategories,
     ServiceParametres? serviceParametres,
-  }) : _depotSources = depotSources,
+    DepotParametres? depotParametres,
+    GestionnaireTransactions? gestionnaireTransactions,
+    DepotEquivalencesCategories? depotEquivalences,
+  }) : _depotEquivalences = depotEquivalences,
+       _depotSources = depotSources,
        _depotTitres = depotTitres,
        _depotTitresSources = depotTitresSources,
        _depotListes = depotListes,
        _depotCategories = depotCategories,
-       _serviceParametres = serviceParametres;
+       _serviceParametres = serviceParametres,
+       _depotParametres = depotParametres,
+       _gestionnaireTransactions = gestionnaireTransactions {
+    if (gestionnaireTransactions != null &&
+        serviceParametres != null &&
+        depotParametres == null) {
+      throw ArgumentError(
+        "Import « tout ou rien » : passer depotParametres pour écrire les "
+        'réglages dans la transaction.',
+      );
+    }
+  }
 
   final DepotSources _depotSources;
   final DepotTitres _depotTitres;
@@ -401,6 +506,12 @@ class ServiceImport {
   final DepotListes _depotListes;
   final DepotCategories _depotCategories;
   final ServiceParametres? _serviceParametres;
+  final DepotParametres? _depotParametres;
+  final GestionnaireTransactions? _gestionnaireTransactions;
+
+  /// Regroupements de catégories (format 3) ; sans lui, les regroupements
+  /// du fichier ne sont pas importés (une erreur le signale).
+  final DepotEquivalencesCategories? _depotEquivalences;
 
   /// Import en cours : un second appel (double clic) reçoit le même
   /// résultat au lieu de lancer un second import en parallèle, dont les
@@ -562,10 +673,34 @@ class ServiceImport {
       }
     }
 
+    // Format 3 : absents des formats 1 et 2 (liste vide).
+    final equivalencesBrutes = _liste(donnees, 'equivalences');
+    if (equivalencesBrutes.length > nombreMaximalEquivalencesImport) {
+      throw ErreurService(
+        'Cet export contient trop de regroupements de catégories '
+        '(${equivalencesBrutes.length}, au plus '
+        '$nombreMaximalEquivalencesImport).',
+      );
+    }
+    final equivalences = <EquivalenceImportee>[];
+    for (var i = 0; i < equivalencesBrutes.length; i++) {
+      final ligne = _lireEquivalence(equivalencesBrutes[i], i + 1);
+      switch (ligne) {
+        case final EquivalenceImportee equivalence:
+          equivalences.add(equivalence);
+        case final ErreurLigneImport erreur:
+          erreurs.add(erreur);
+      }
+    }
+
     final reglages = donnees['reglages'];
     final reglagesLus = reglages is Map<String, Object?> ? reglages : null;
     final niveaux = reglagesLus?['niveauxContenu'];
+    final archiveComplete = reglagesLus?['archiveComplete'];
     return ContenuImport(
+      // Absent (formats 1 à 3) ou d'un autre type : réglage de l'appareil
+      // laissé tel quel.
+      archiveComplete: archiveComplete is bool ? archiveComplete : null,
       versionFormat: version,
       versionApplication: _texte(donnees, 'versionApplication'),
       languesGenerales: reglagesLus == null
@@ -581,7 +716,43 @@ class ServiceImport {
       listes: listes,
       sources: sources,
       titres: titres,
+      equivalences: equivalences,
       erreursLecture: erreurs,
+    );
+  }
+
+  /// Regroupement lu dans [brut], ou l'erreur qui l'écarte (ligne
+  /// illisible, nom absent, catégorie identique à sa référence).
+  static Object _lireEquivalence(Object? brut, int numero) {
+    if (brut is! Map<String, Object?>) {
+      return ErreurLigneImport(
+        partie: PartieImport.equivalence,
+        numero: numero,
+        message: 'ligne illisible.',
+      );
+    }
+    final categorie = Categorie.normaliserNom(_texte(brut, 'categorie') ?? '');
+    final reference = Categorie.normaliserNom(_texte(brut, 'reference') ?? '');
+    if (categorie.isEmpty || reference.isEmpty) {
+      return ErreurLigneImport(
+        partie: PartieImport.equivalence,
+        numero: numero,
+        nom: categorie.isEmpty ? null : categorie,
+        message: 'catégorie ou catégorie de référence absente.',
+      );
+    }
+    if (categorie == reference) {
+      return ErreurLigneImport(
+        partie: PartieImport.equivalence,
+        numero: numero,
+        nom: categorie,
+        message: 'une catégorie ne peut pas être sa propre référence.',
+      );
+    }
+    return EquivalenceImportee(
+      numero: numero,
+      categorie: categorie,
+      reference: reference,
     );
   }
 
@@ -708,7 +879,27 @@ class ServiceImport {
       resume: _texte(brut, 'resume'),
       auteur: _texte(brut, 'auteur'),
       statut: _texte(brut, 'statut'),
+      // Format 4 : même décodage que la base (noms inconnus ignorés).
+      champsManuels: <ChampTitre>{
+        for (final nomChamp in _textes(brut, 'champsManuels'))
+          for (final champ in ChampTitre.values)
+            if (champ.name == nomChamp) champ,
+      },
+      descriptionPerso: _descriptionPerso(brut),
     );
+  }
+
+  /// Description personnelle (format 5) d'un titre du fichier : sans espaces
+  /// autour, `null` si absente ou vide. Un texte plus long que
+  /// [longueurMaxDescriptionPerso] (fichier modifié à la main : l'application
+  /// n'en écrit jamais) est coupé plutôt que refusé, pour ne pas perdre tout
+  /// le texte du client.
+  static String? _descriptionPerso(Map<String, Object?> brut) {
+    final texte = _texte(brut, 'descriptionPerso');
+    if (texte == null || texte.length <= longueurMaxDescriptionPerso) {
+      return texte;
+    }
+    return texte.substring(0, longueurMaxDescriptionPerso).trimRight();
   }
 
   /// Liste [cle] de [objet] ; vide si absente. Lève une [ErreurService] si
@@ -777,10 +968,68 @@ class ServiceImport {
     ContenuImport contenu, {
     bool? appliquerReglagesGeneraux,
   }) async {
-    final ecriture = _Ecriture(this, contenu);
+    final gestionnaire = _gestionnaireTransactions;
+    if (gestionnaire == null) {
+      return _importerAvec(
+        contenu,
+        null,
+        appliquerReglagesGeneraux: appliquerReglagesGeneraux,
+      );
+    }
+    try {
+      return await gestionnaire.executerEnTransaction(
+        (transaction) => _importerAvec(
+          contenu,
+          transaction,
+          appliquerReglagesGeneraux: appliquerReglagesGeneraux,
+        ),
+      );
+    } on ErreurService {
+      rethrow;
+    } on Exception catch (erreur) {
+      throw _importAnnule(erreur);
+    } on ArgumentError catch (erreur) {
+      // Valeur refusée par un dépôt (relancée en mode tout ou rien) : même
+      // annulation qu'une erreur de base, jamais une erreur brute à
+      // l'interface.
+      throw _importAnnule(erreur);
+    }
+  }
+
+  /// Erreur rendue quand l'import « tout ou rien » a été annulé par
+  /// [erreur] (la transaction est déjà annulée : rien n'a été écrit).
+  static ErreurService _importAnnule(Object erreur) {
+    final detail = switch (erreur) {
+      ErreurBaseDeDonnees(:final message) => ' ($message)',
+      ArgumentError(:final message) => ' ($message)',
+      _ => '',
+    };
+    return ErreurService(
+      "L'import a échoué et a été entièrement annulé : rien n'a été "
+      'ajouté à la bibliothèque$detail.',
+      cause: erreur,
+    );
+  }
+
+  /// Import proprement dit. [executeur] : transaction de l'import « tout ou
+  /// rien », passée à **chaque** appel des dépôts (lectures comprises : un
+  /// appel sans elle attendrait la fin de la transaction et bloquerait
+  /// l'import) ; `null` sans gestionnaire de transactions.
+  Future<ResultatImport> _importerAvec(
+    ContenuImport contenu,
+    DatabaseExecutor? executeur, {
+    bool? appliquerReglagesGeneraux,
+  }) async {
+    // LIMITE : pendant l'import « tout ou rien », la transaction tient la
+    // base : les autres lectures de l'application (bibliothèque, mises à
+    // jour, téléchargements) attendent sa fin. Un import de quelques
+    // centaines de titres ne dure que quelques secondes (aucun réseau).
+    final ecriture = _Ecriture(this, contenu, executeur);
     // Lu avant toute écriture : « bibliothèque vide » décrit l'appareil tel
-    // que le client l'avait avant l'import.
-    final bibliothequeVide = (await _depotTitres.chargerTitres()).isEmpty;
+    // que le client l'avait avant l'import. Simple comptage (aucun titre
+    // chargé).
+    final bibliothequeVide =
+        await _depotTitres.compterTitres(executeur: executeur) == 0;
     await ecriture.chargerEtat();
     await ecriture.importerSources();
     await ecriture.importerListes();
@@ -789,6 +1038,9 @@ class ServiceImport {
     for (final titre in contenu.titres) {
       await ecriture.importerTitre(titre);
     }
+    // Après les titres : leurs catégories existent alors en base, et seules
+    // les catégories d'un regroupement sans aucun titre restent à créer.
+    await ecriture.importerEquivalences();
     return ResultatImport(
       versionFormat: contenu.versionFormat,
       titresAjoutes: ecriture.titresAjoutes,
@@ -797,6 +1049,8 @@ class ServiceImport {
       sitesAjoutes: ecriture.sitesAjoutes,
       listesAjoutees: ecriture.listesAjoutees,
       reglagesGenerauxAppliques: reglagesAppliques,
+      archiveCompleteActivee: ecriture.archiveCompleteActivee,
+      regroupementsAjoutes: ecriture.regroupementsAjoutes,
       erreurs: <ErreurLigneImport>[
         ...contenu.erreursLecture,
         ...ecriture.erreurs,
@@ -808,10 +1062,19 @@ class ServiceImport {
 /// État d'un import en cours d'écriture : sites et listes connus, compteurs
 /// et erreurs. Une instance par import.
 class _Ecriture {
-  _Ecriture(this._service, this._contenu);
+  _Ecriture(this._service, this._contenu, this._executeur);
 
   final ServiceImport _service;
   final ContenuImport _contenu;
+
+  /// Transaction de l'import « tout ou rien », ou `null`. Passée à tous les
+  /// appels des dépôts.
+  final DatabaseExecutor? _executeur;
+
+  /// `true` dans une transaction : une erreur de base n'est plus notée sur
+  /// sa ligne mais relancée, pour que toute la transaction soit annulée
+  /// (une écriture rattrapée resterait sinon à moitié faite).
+  bool get _toutOuRien => _executeur != null;
 
   /// Sites connus par adresse de base exacte, puis par hôte (sans `www.` ni
   /// `m.`) : un site `https://www.exemple.com` de la base reconnaît
@@ -827,13 +1090,21 @@ class _Ecriture {
   int titresIgnores = 0;
   int sitesAjoutes = 0;
   int listesAjoutees = 0;
+  int regroupementsAjoutes = 0;
+
+  /// `true` si l'import a activé « Archive complète » (elle ne l'était pas).
+  bool archiveCompleteActivee = false;
   final List<ErreurLigneImport> erreurs = <ErreurLigneImport>[];
 
   Future<void> chargerEtat() async {
-    for (final source in await _service._depotSources.chargerSources()) {
+    for (final source in await _service._depotSources.chargerSources(
+      executeur: _executeur,
+    )) {
       _retenirSource(source);
     }
-    for (final liste in await _service._depotListes.chargerListes()) {
+    for (final liste in await _service._depotListes.chargerListes(
+      executeur: _executeur,
+    )) {
       _listesParNom[liste.nom.toLowerCase()] = liste;
     }
   }
@@ -897,6 +1168,7 @@ class _Ecriture {
         );
         continue;
       }
+      final reglages = _reglagesVerifies(importee, type);
       try {
         final source = await _service._depotSources.enregistrerSource(
           Source(
@@ -904,13 +1176,15 @@ class _Ecriture {
             urlBase: importee.urlBase,
             typeSource: type,
             langueParDefaut: importee.langues.join(','),
-            configurationSelecteurs: importee.configurationSelecteurs,
+            configurationSelecteurs: reglages,
             estActive: importee.estActive,
           ),
+          executeur: _executeur,
         );
         _retenirSource(source);
         sitesAjoutes++;
       } on ErreurBaseDeDonnees catch (erreur) {
+        if (_toutOuRien) rethrow;
         erreurs.add(
           ErreurLigneImport(
             partie: PartieImport.site,
@@ -920,6 +1194,34 @@ class _Ecriture {
           ),
         );
       }
+    }
+  }
+
+  /// Réglages du site [importee] à enregistrer, vérifiés comme dans
+  /// « Sources » (`ServiceAjoutSite.normaliserReglagesGeneriques`) :
+  /// seulement pour un site générique (les autres types n'en lisent pas),
+  /// sinon `null`. Des réglages refusés ne bloquent pas le site : il est
+  /// importé **sans réglages** (l'adaptateur devine alors), et le refus est
+  /// noté sur sa ligne pour que le client les corrige dans « Sources ». Ce
+  /// refus est décidé avant l'écriture : il n'annule rien.
+  String? _reglagesVerifies(SourceImportee importee, TypeSource type) {
+    if (type != TypeSource.generique) return null;
+    try {
+      return ServiceAjoutSite.normaliserReglagesGeneriques(
+        importee.configurationSelecteurs,
+      );
+    } on ErreurService catch (erreur) {
+      erreurs.add(
+        ErreurLigneImport(
+          partie: PartieImport.site,
+          numero: importee.numero,
+          nom: importee.nom,
+          message:
+              'importé sans ses réglages avancés, refusés : '
+              '${erreur.message}',
+        ),
+      );
+      return null;
     }
   }
 
@@ -942,11 +1244,15 @@ class _Ecriture {
       // Les listes système (Favoris…) sont créées par les migrations : elles
       // sont toujours déjà connues ici. Seules les listes du client peuvent
       // manquer.
-      final creee = await _service._depotListes.creerListe(nom);
+      final creee = await _service._depotListes.creerListe(
+        nom,
+        executeur: _executeur,
+      );
       _listesParNom[creee.nom.toLowerCase()] = creee;
       listesAjoutees++;
       return creee;
     } on ErreurBaseDeDonnees catch (erreur) {
+      if (_toutOuRien) rethrow;
       erreurs.add(
         ErreurLigneImport(
           partie: PartieImport.liste,
@@ -960,23 +1266,76 @@ class _Ecriture {
 
   // ------------------------------------------------------------- Réglages
 
-  /// Enregistre les langues et niveaux de contenu du fichier. Renvoie
-  /// `true` si au moins l'un des deux a été écrit.
+  /// Enregistre les langues, les niveaux de contenu et (format 4) le réglage
+  /// « Archive complète » du fichier (seulement pour l'activer, voir
+  /// [archiveCompleteActivee]). Renvoie `true` si les langues ou les
+  /// niveaux ont été écrits.
   Future<bool> importerReglages() async {
+    final depot = _service._depotParametres;
     final parametres = _service._serviceParametres;
-    if (parametres == null) return false;
+    // ServiceParametres écrit sans exécuteur : interdit dans la transaction
+    // (le constructeur l'empêche déjà, ceci est un filet de sécurité).
+    if (depot == null && (parametres == null || _toutOuRien)) return false;
+    // Valeurs déjà nettoyées à la lecture par ServiceParametres.nettoyer… :
+    // mêmes règles que l'écran Paramètres.
+    final langues = _contenu.languesGenerales;
+    final niveaux = _contenu.niveauxContenu;
     var applique = false;
     try {
-      if (_contenu.languesGenerales.isNotEmpty) {
-        await parametres.enregistrerLangues(_contenu.languesGenerales);
+      if (langues.isNotEmpty) {
+        if (depot != null) {
+          await depot.enregistrerTexte(
+            ServiceParametres.cleLangues,
+            langues.join(','),
+            executeur: _executeur,
+          );
+        } else {
+          await parametres!.enregistrerLangues(langues);
+        }
         applique = true;
       }
-      final niveaux = _contenu.niveauxContenu;
       if (niveaux != null) {
-        await parametres.enregistrerNiveauxContenu(niveaux);
+        if (depot != null) {
+          await depot.enregistrerTexte(
+            ServiceParametres.cleNiveauxContenu,
+            niveaux.join(','),
+            executeur: _executeur,
+          );
+        } else {
+          await parametres!.enregistrerNiveauxContenu(niveaux);
+        }
         applique = true;
+      }
+      // Format 4 : « Archive complète » suit les autres réglages généraux
+      // (restauration sur un nouvel appareil, ou choix explicite du client).
+      // Règle du client (relecture) : un import peut seulement l'ACTIVER,
+      // jamais la couper (rien n'est retiré par un import). Les
+      // téléchargements correspondants commencent à la prochaine application
+      // des règles (démarrage, ou appel de l'interface).
+      if (_contenu.archiveComplete == true) {
+        // Déjà activée : rien à écrire ni à annoncer dans le bilan.
+        final dejaActive = depot != null
+            ? await depot.chargerEntier(
+                    ServiceParametres.cleArchiveComplete,
+                    executeur: _executeur,
+                  ) ==
+                  1
+            : await parametres!.chargerArchiveComplete();
+        if (!dejaActive) {
+          if (depot != null) {
+            await depot.enregistrerEntier(
+              ServiceParametres.cleArchiveComplete,
+              1,
+              executeur: _executeur,
+            );
+          } else {
+            await parametres!.enregistrerArchiveComplete(true);
+          }
+          archiveCompleteActivee = true;
+        }
       }
     } on Exception catch (erreur) {
+      if (_toutOuRien) rethrow;
       erreurs.add(
         ErreurLigneImport(
           partie: PartieImport.reglages,
@@ -992,8 +1351,9 @@ class _Ecriture {
   /// Ajoute ou complète un titre. Une erreur est notée sans arrêter les
   /// titres suivants.
   ///
-  /// LIMITE : le titre, puis ses sites, puis ses listes sont écrits l'un
-  /// après l'autre (chaque dépôt ouvre sa propre transaction). Un échec au
+  /// Dans une transaction ([_toutOuRien]), une erreur de base est relancée :
+  /// tout l'import est annulé. Sans transaction (LIMITE), le titre, puis
+  /// ses sites, puis ses listes sont écrits l'un après l'autre ; un échec au
   /// milieu laisse un titre incomplet, que le même import relancé complète.
   Future<void> importerTitre(TitreImporte importe) async {
     try {
@@ -1006,8 +1366,10 @@ class _Ecriture {
         titresIgnores++;
       }
     } on Exception catch (erreur) {
+      if (_toutOuRien) rethrow;
       _noterErreurTitre(importe, _messageDe(erreur));
     } on ArgumentError catch (erreur) {
+      if (_toutOuRien) rethrow;
       // Valeur refusée par un dépôt (code de langue…) : propre à cette
       // ligne, elle ne doit pas arrêter l'import des suivantes.
       _noterErreurTitre(importe, '${erreur.message}');
@@ -1032,6 +1394,7 @@ class _Ecriture {
     for (final site in importe.sites) {
       final titre = await _service._depotTitresSources.chargerTitreParUrl(
         site.url,
+        executeur: _executeur,
       );
       if (titre != null) return titre;
     }
@@ -1080,14 +1443,23 @@ class _Ecriture {
             : importe.langues.join(','),
         niveauContenu: importe.niveauContenu,
         couvertureChoisie: importe.couvertureChoisie,
+        // Format 4 : les champs modifiés à la main restent protégés sur ce
+        // nouvel appareil (sinon la première actualisation les écraserait).
+        champsManuels: importe.champsManuels,
+        // Format 5 : la description personnelle suit le titre ajouté.
+        descriptionPerso: importe.descriptionPerso,
         // Date de vérification laissée vide : la prochaine vérification
         // traite ce titre comme jamais vérifié et récupère ses chapitres.
       ),
       categories: importe.categories,
+      executeur: _executeur,
     );
     titresAjoutes++;
     final idTitre = enregistre.id!;
-    final liens = await _service._depotTitresSources.chargerLiensTitre(idTitre);
+    final liens = await _service._depotTitresSources.chargerLiensTitre(
+      idTitre,
+      executeur: _executeur,
+    );
     await _ajouterSitesManquants(importe, idTitre, liens);
     await _ajouterListesManquantes(importe, idTitre);
   }
@@ -1099,32 +1471,47 @@ class _Ecriture {
     final idTitre = existant.id!;
     var complete = false;
 
-    final liens = await _service._depotTitresSources.chargerLiensTitre(idTitre);
+    final liens = await _service._depotTitresSources.chargerLiensTitre(
+      idTitre,
+      executeur: _executeur,
+    );
     if (await _ajouterSitesManquants(importe, idTitre, liens)) complete = true;
     if (await _ajouterListesManquantes(importe, idTitre)) complete = true;
 
     // Catégories et noms : union de l'existant et du fichier.
     final categoriesActuelles = <String>[
       for (final categorie
-          in await _service._depotCategories.chargerCategoriesDuTitre(idTitre))
+          in await _service._depotCategories.chargerCategoriesDuTitre(
+            idTitre,
+            executeur: _executeur,
+          ))
         categorie.nom,
     ];
+    // Champs modifiés à la main sur cet appareil (migration 10) : choix du
+    // client, jamais complétés par l'import (`enregistrerTitre` les
+    // ignorerait de toute façon ; les écarter ici garde le bilan juste).
+    // Les champs protégés du fichier ne sont repris que pour un titre
+    // ajouté : rien n'est remplacé sur un titre existant.
     final categoriesManquantes = <String>{
-      for (final brute in importe.categories)
-        if (Categorie.normaliserNom(brute) case final nom
-            when nom.isNotEmpty && !categoriesActuelles.contains(nom))
-          nom,
+      if (!existant.estManuel(ChampTitre.categories))
+        for (final brute in importe.categories)
+          if (Categorie.normaliserNom(brute) case final nom
+              when nom.isNotEmpty && !categoriesActuelles.contains(nom))
+            nom,
     };
     final nomsActuels = <String>{
       existant.nom,
       for (final alternatif in existant.titresAlternatifs) alternatif.nom,
     };
     final alternatifsManquants = <TitreAlternatif>[
-      for (final alternatif in importe.titresAlternatifs)
-        if (!nomsActuels.contains(alternatif.nom)) alternatif,
+      if (!existant.estManuel(ChampTitre.titresAlternatifs))
+        for (final alternatif in importe.titresAlternatifs)
+          if (!nomsActuels.contains(alternatif.nom)) alternatif,
     ];
     final niveauManquant =
-        existant.niveauContenu == null && importe.niveauContenu != null;
+        !existant.estManuel(ChampTitre.niveauContenu) &&
+        existant.niveauContenu == null &&
+        importe.niveauContenu != null;
     if (categoriesManquantes.isNotEmpty ||
         alternatifsManquants.isNotEmpty ||
         niveauManquant) {
@@ -1141,6 +1528,7 @@ class _Ecriture {
         categories: categoriesManquantes.isEmpty
             ? null
             : <String>[...categoriesActuelles, ...categoriesManquantes],
+        executeur: _executeur,
       );
       complete = true;
     }
@@ -1151,6 +1539,7 @@ class _Ecriture {
       await _service._depotTitres.enregistrerLanguesPreferees(
         idTitre,
         importe.langues.join(','),
+        executeur: _executeur,
       );
       complete = true;
     }
@@ -1159,6 +1548,18 @@ class _Ecriture {
       await _service._depotTitres.enregistrerCouvertureChoisie(
         idTitre,
         couverture,
+        executeur: _executeur,
+      );
+      complete = true;
+    }
+    // Description personnelle (format 5) : écrite seulement si ce titre n'en
+    // a pas encore sur cet appareil ; celle du client n'est jamais remplacée.
+    final description = importe.descriptionPerso;
+    if (existant.descriptionPerso == null && description != null) {
+      await _service._depotTitres.enregistrerDescriptionPerso(
+        idTitre,
+        description,
+        executeur: _executeur,
       );
       complete = true;
     }
@@ -1201,6 +1602,7 @@ class _Ecriture {
       }
       final autre = await _service._depotTitresSources.chargerTitreParUrl(
         site.url,
+        executeur: _executeur,
       );
       if (autre != null) {
         _noterErreurTitre(
@@ -1215,11 +1617,13 @@ class _Ecriture {
           idSource,
           site.url,
           lienSeul: site.estLienSeul,
+          executeur: _executeur,
         );
         adresses.add(site.url);
         sourcesLiees.add(idSource);
         ajoute = true;
       } on ErreurBaseDeDonnees catch (erreur) {
+        if (_toutOuRien) rethrow;
         _noterErreurTitre(importe, erreur.message);
       }
     }
@@ -1240,6 +1644,7 @@ class _Ecriture {
     final actuelles = <int>{
       for (final liste in await _service._depotListes.chargerListesDuTitre(
         idTitre,
+        executeur: _executeur,
       ))
         ?liste.id,
     };
@@ -1248,11 +1653,131 @@ class _Ecriture {
       final liste = await _liste(nom);
       final idListe = liste?.id;
       if (idListe == null || actuelles.contains(idListe)) continue;
-      await _service._depotListes.ajouterTitre(idListe, idTitre);
+      await _service._depotListes.ajouterTitre(
+        idListe,
+        idTitre,
+        executeur: _executeur,
+      );
       actuelles.add(idListe);
       ajoute = true;
     }
     return ajoute;
+  }
+
+  // ------------------------------------------------------ Regroupements
+
+  /// Enregistre les regroupements de catégories du fichier (format 3).
+  ///
+  /// Mêmes règles que le reste de l'import : rien n'est remplacé. Chaque
+  /// ligne est vérifiée **avant** d'écrire, contre l'état de la base et les
+  /// lignes déjà importées ; une ligne incohérente est refusée et notée
+  /// sans arrêter les autres :
+  /// - catégorie déjà rattachée à une autre référence sur cet appareil
+  ///   (choix du client gardé) ;
+  /// - référence elle-même rattachée à une autre catégorie (un seul
+  ///   niveau) ;
+  /// - catégorie qui est déjà la référence d'un autre groupe.
+  /// Un regroupement déjà présent est ignoré sans erreur. Une catégorie
+  /// absente de la base (regroupement sans titre) est créée.
+  Future<void> importerEquivalences() async {
+    final lignes = _contenu.equivalences;
+    if (lignes.isEmpty) return;
+    final depot = _service._depotEquivalences;
+    if (depot == null) {
+      erreurs.add(
+        const ErreurLigneImport(
+          partie: PartieImport.equivalence,
+          message:
+              "regroupements de catégories non importés (fonction absente de "
+              'cet assemblage).',
+        ),
+      );
+      return;
+    }
+    // État courant, tenu à jour ligne après ligne : par nom de catégorie,
+    // son identifiant ; par identifiant, sa référence éventuelle.
+    final idsParNom = <String, int>{
+      for (final categorie in await _service._depotCategories.chargerCategories(
+        executeur: _executeur,
+      ))
+        if (categorie.id != null) categorie.nom: categorie.id!,
+    };
+    final nomsParId = <int, String>{
+      for (final MapEntry(key: nom, value: id) in idsParNom.entries) id: nom,
+    };
+    final referenceDe = <int, int>{
+      for (final equivalence in await depot.chargerEquivalences(
+        executeur: _executeur,
+      ))
+        equivalence.idCategorie: equivalence.idReference,
+    };
+
+    for (final ligne in lignes) {
+      void refuser(String message) => erreurs.add(
+        ErreurLigneImport(
+          partie: PartieImport.equivalence,
+          numero: ligne.numero,
+          nom: ligne.categorie,
+          message: message,
+        ),
+      );
+
+      final idCategorie = idsParNom[ligne.categorie];
+      final idReference = idsParNom[ligne.reference];
+      final referenceActuelle = idCategorie == null
+          ? null
+          : referenceDe[idCategorie];
+      if (referenceActuelle != null) {
+        if (referenceActuelle != idReference) {
+          refuser(
+            'déjà regroupée avec « ${nomsParId[referenceActuelle]} » sur cet '
+            'appareil : ce regroupement est gardé.',
+          );
+        }
+        // Sinon : regroupement déjà présent, rien à faire.
+        continue;
+      }
+      final referenceDeLaReference = idReference == null
+          ? null
+          : referenceDe[idReference];
+      if (referenceDeLaReference != null) {
+        refuser(
+          '« ${ligne.reference} » est déjà regroupée avec '
+          '« ${nomsParId[referenceDeLaReference]} » sur cet appareil : elle ne '
+          'peut pas servir de référence.',
+        );
+        continue;
+      }
+      if (idCategorie != null && referenceDe.containsValue(idCategorie)) {
+        refuser(
+          'elle est déjà la référence d\'un autre groupe sur cet appareil.',
+        );
+        continue;
+      }
+
+      try {
+        for (final nom in <String>[ligne.categorie, ligne.reference]) {
+          if (idsParNom.containsKey(nom)) continue;
+          final creee = await _service._depotCategories.enregistrerCategorie(
+            nom,
+            executeur: _executeur,
+          );
+          idsParNom[creee.nom] = creee.id!;
+          nomsParId[creee.id!] = creee.nom;
+        }
+        final idC = idsParNom[ligne.categorie]!;
+        final idR = idsParNom[ligne.reference]!;
+        await depot.rattacherCategorie(idC, idR, executeur: _executeur);
+        referenceDe[idC] = idR;
+        regroupementsAjoutes++;
+      } on ErreurBaseDeDonnees catch (erreur) {
+        // Les refus prévisibles sont décidés ci-dessus : une erreur ici est
+        // une vraie erreur de base, qui annule tout l'import « tout ou
+        // rien ».
+        if (_toutOuRien) rethrow;
+        refuser(erreur.message);
+      }
+    }
   }
 
   /// Message lisible d'une erreur attrapée pendant l'import.

@@ -16,6 +16,7 @@ import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
 import 'package:bibliotheque_perso/modeles/titre_alternatif.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
+import 'package:bibliotheque_perso/services/constantes_services.dart';
 import 'package:bibliotheque_perso/services/service_export.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -225,8 +226,10 @@ void main() {
       await remplir();
       final json = lireJson((await service.exporter()).cheminJson);
       expect(json['format'], 'bibliotheque_perso-export');
-      // Format 2 : sélecteurs CSS des sites et résumé des titres (import).
-      expect(json['version'], 2);
+      // Format 4 : champs protégés et archive complète (après le format 3,
+      // regroupements de catégories, et le format 2, sélecteurs CSS des
+      // sites et résumé des titres).
+      expect(json['version'], versionFormatExport);
       expect(json['dateExport'], dateExport.toUtc().toIso8601String());
       expect(json['versionApplication'], '0.1.0');
       final reglages = json['reglages']! as Map<String, Object?>;
@@ -238,6 +241,7 @@ void main() {
         nomListeSuivis,
         nomListePlanifie,
         nomListeEnAttente,
+        nomListeTermines,
         'À relire [été]',
       ]);
       expect(listes.first['systeme'], isTrue);
@@ -413,7 +417,7 @@ void main() {
       final json = lireJson(resultat.cheminJson);
       expect(json['titres'], isEmpty);
       expect(json['sources'], isEmpty);
-      expect(json['listes'], hasLength(4));
+      expect(json['listes'], hasLength(nomsListesSysteme.length));
       expect(
         (json['reglages']! as Map<String, Object?>)['langues'],
         ServiceParametres.languesParDefaut,
@@ -443,6 +447,7 @@ void main() {
           'Suivis',
           'Planifié',
           'En attente',
+          'Terminés',
           r'À relire \[été\]',
           'Sans liste',
           'Sites',

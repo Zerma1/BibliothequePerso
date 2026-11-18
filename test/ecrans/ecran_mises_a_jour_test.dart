@@ -261,10 +261,10 @@ void main() {
     });
 
     test(
-      'un chapitre non lu paru depuis moins d\'une semaine est « Nouveau »',
+      'un chapitre non lu paru depuis moins de 30 jours est « Nouveau »',
       () {
         final ligne = ligneDatee(
-          publication: _maintenant.subtract(const Duration(days: 6)).toUtc(),
+          publication: _maintenant.subtract(const Duration(days: 29)).toUtc(),
           detection: _maintenant.toUtc(),
         );
         expect(EtatParutions.estNouveaute(ligne, _maintenant), isTrue);
@@ -272,7 +272,7 @@ void main() {
           EtatParutions.estNouveaute(
             ligneDatee(
               publication: _maintenant
-                  .subtract(const Duration(days: 8))
+                  .subtract(const Duration(days: 31))
                   .toUtc(),
             ),
             _maintenant,
@@ -295,7 +295,7 @@ void main() {
       expect(
         EtatParutions.estNouveaute(
           ligneDatee(
-            detection: _maintenant.subtract(const Duration(days: 30)).toUtc(),
+            detection: _maintenant.subtract(const Duration(days: 31)).toUtc(),
           ),
           _maintenant,
         ),

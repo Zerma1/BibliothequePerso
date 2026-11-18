@@ -41,6 +41,34 @@ const int ordreListePlanifie = 2;
 /// Position d'affichage de la liste « En attente » (après « Planifié »).
 const int ordreListeEnAttente = 3;
 
+/// Nom de la liste système « Terminés » (titres que le client a fini de
+/// lire), créée par la migration 11.
+///
+/// Même contrainte que [nomListeFavoris] : la migration 11 écrit cette
+/// valeur en dur.
+const String nomListeTermines = 'Terminés';
+
+/// Position d'affichage de la liste « Terminés » (après « En attente »),
+/// donnée par la migration 11.
+const int ordreListeTermines = 4;
+
+/// Position d'affichage de la dernière liste système créée par une
+/// migration : une liste du client est créée au moins juste après.
+const int ordreDerniereListeSysteme = ordreListeTermines;
+
+/// Noms de toutes les listes système, dans leur ordre d'affichage initial.
+///
+/// Sert à reconnaître une liste système par son nom (export, import) ; en
+/// base, c'est la colonne `listes.est_systeme` qui fait foi pour les
+/// protections (renommage et suppression refusés).
+const List<String> nomsListesSysteme = <String>[
+  nomListeFavoris,
+  nomListeSuivis,
+  nomListePlanifie,
+  nomListeEnAttente,
+  nomListeTermines,
+];
+
 /// Niveau de contenu MangaDex « safe » (tous publics).
 ///
 /// Les niveaux sont stockés tels que MangaDex les nomme (`contentRating`,

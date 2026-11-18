@@ -75,6 +75,22 @@ const Duration margeNouvelEssaiVerrou = Duration(seconds: 1);
 /// base en boucle si le verrou de l'autre isolat expire tout de suite.
 const Duration attenteMinimaleNouvelEssai = Duration(seconds: 5);
 
+/// Attente avant de réessayer la file quand le dossier des chapitres est
+/// inaccessible (NAS éteint, lecteur réseau déconnecté) : un seul essai
+/// prévu à la fois, qui ne fait qu'un contrôle sur le disque (aucune
+/// requête vers les sites). Assez court pour reprendre vite quand le NAS
+/// revient, assez long pour ne pas attendre sans cesse un partage réseau
+/// qui met plusieurs secondes à répondre.
+const Duration attenteNouvelEssaiDossierInaccessible = Duration(minutes: 2);
+
+/// Contrôle des archives manquantes sur un dossier choisi par le client
+/// (lecteur réseau, NAS) : au-delà de ce nombre d'archives manquantes
+/// d'affilée, le contrôle s'arrête sans rien remettre à « non téléchargé ».
+/// Un partage instable (qui répond « fichier absent » par moments) ferait
+/// sinon retélécharger toute la bibliothèque ; une vraie suppression de plus
+/// de 20 chapitres de suite est rare et reste visible (lecture impossible).
+const int nombreMaximalArchivesManquantesDAffilee = 20;
+
 /// Titres « En attente » : vérifiés toutes les N heures pleines, par défaut
 /// à chaque heure (décision de l'étape 6 : surveillance accrue des titres
 /// qui n'ont encore aucun chapitre dans les langues du client).
@@ -115,13 +131,32 @@ const String identifiantFormatExport = 'bibliotheque_perso-export';
 ///   fiche complète sans requête réseau. Augmentée malgré la compatibilité
 ///   pour que l'import sache si un champ absent est vide ou seulement
 ///   inconnu de l'ancien format.
-const int versionFormatExport = 2;
+/// - 3 : ajout compatible de `equivalences` (regroupements de catégories de
+///   même sens, migration 9 : `categorie` et `reference`, par nom). Les
+///   formats 1 et 2 restent lisibles (aucun regroupement importé).
+/// - 4 : ajouts compatibles de `titres[].champsManuels` (champs modifiés à
+///   la main, migration 10 : noms de `ChampTitre`) et de
+///   `reglages.archiveComplete` (booléen). Les formats 1 à 3 restent
+///   lisibles (aucun champ verrouillé, réglage absent).
+/// - 5 : ajout compatible de `titres[].descriptionPerso` (description
+///   personnelle du client, migration 12). Les formats 1 à 4 restent
+///   lisibles (aucune description importée).
+const int versionFormatExport = 5;
+
+/// Longueur maximale (en caractères) du nom d'une liste du client : assez
+/// pour un nom parlant, assez court pour tenir dans un onglet ou un menu.
+const int longueurMaxNomListe = 60;
+
+/// Longueur maximale (en caractères) de la description personnelle d'un
+/// titre : quelques paragraphes d'avis ou de notes tiennent largement ; la
+/// borne protège d'un collage accidentel d'un texte entier.
+const int longueurMaxDescriptionPerso = 5000;
 
 /// Durée pendant laquelle un chapitre non lu porte le badge « Nouveau »
-/// dans l'onglet Mises à jour (retour du client sur la 0.2.0-test), comptée
-/// depuis sa publication, sinon depuis sa découverte (voir
-/// `ParutionTitre.estNouveaute`).
-const Duration dureeNouveaute = Duration(days: 7);
+/// dans l'onglet Mises à jour, comptée depuis sa publication, sinon depuis
+/// sa découverte (voir `ParutionTitre.estNouveaute`). 30 jours : décision du
+/// client après la 0.2.1-test (7 jours auparavant).
+const Duration dureeNouveaute = Duration(days: 30);
 
 /// Marge après l'ajout d'un site à un titre pendant laquelle les chapitres
 /// découverts sont ceux reçus **lors de l'ajout** (lecture du site, puis
@@ -137,6 +172,11 @@ const int versionFormatImportMinimale = 1;
 /// l'import (une bibliothèque personnelle compte quelques centaines de
 /// titres) et protège d'un fichier corrompu démesuré.
 const int nombreMaximalTitresImport = 20000;
+
+/// Nombre maximal de regroupements de catégories lus dans un fichier
+/// d'import (format 3) : une bibliothèque en compte quelques dizaines ; la
+/// borne protège d'un fichier corrompu démesuré.
+const int nombreMaximalEquivalencesImport = 5000;
 
 /// Taille maximale (en octets) d'un fichier d'import : bien au-delà d'un
 /// export réel (quelques centaines de Ko), pour refuser clairement un

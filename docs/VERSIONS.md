@@ -6,6 +6,50 @@
 > restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
 > chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
 
+## 0.2.2-test — version de test (2026-11-18)
+
+Suite aux retours sur la 0.2.1-test :
+- **Listes personnelles** : « + » et « Gérer les listes » au bout des puces de listes ; appui long
+  ou clic droit sur une liste pour la renommer ou la supprimer ; glisser-déposer pour réordonner.
+  Nouvelle liste système **« Terminés »** (vérifiée sans notification, pas de téléchargement
+  automatique sauf archive complète).
+- **Sites** : dans l'onglet Sources, toucher un site pour le modifier (nom, langues, **type**,
+  réglages) ou le supprimer.
+- **Titres** : la fiche reste celle du site (décision du client) ; bloc **« Ma description »**
+  pour ajouter vos notes, jamais remplacées par le site (exportées et réimportées). Ajout d'un
+  titre par **recherche sur MangaDex**.
+- **Chapitres lus en lot** : appui long sur un chapitre puis glisser pour sélectionner ; « Marquer
+  lus / non lus » ; « Marquer lus jusqu'ici » (menu ⋮ d'un chapitre ou barre de sélection).
+- **Archive complète** (Paramètres → Téléchargements) : tous les chapitres de tous les titres,
+  jamais supprimés automatiquement (conseillé avec un NAS).
+- Case **Favoris décochée** par défaut à l'ajout d'un titre.
+- Corrigé : images **WEBP** sans type (échec de Ruri Dragon ch. 47) ; plus jamais d'octets
+  illisibles dans un message ; une page **Wikipédia** n'est plus acceptée comme site lisible.
+
+Nouveau :
+- **Catégories regroupées** (Paramètres → « Catégories regroupées ») : « Survival » et
+  « Survie » ne font plus qu'une catégorie dans les filtres et sur la fiche ; suggestions
+  automatiques (dictionnaire anglais → français) à valider une par une. Exportées et importées.
+- **Dossier des chapitres au choix** (Paramètres → « Dossier des chapitres ») : disque local,
+  lecteur réseau ou NAS (`\\nas\partage\…`). Déplacement des chapitres déjà téléchargés avec
+  barre de progression ; aucun fichier existant n'est jamais écrasé (conflits signalés et
+  chapitres retéléchargés sous un autre nom). Pris en compte au redémarrage. Si le NAS ne
+  répond pas : bandeau en haut, téléchargements en attente, aucun chapitre perdu. Rapports
+  d'erreur et exports restent sur l'appareil.
+- **Réglages avancés (sélecteurs CSS)** modifiables et effaçables dans « Modifier le site »,
+  vérifiés avant l'enregistrement.
+- Document `docs/CRITERES_LECTURE_SITES.md` : quand un site est lisible, et pourquoi pas.
+
+Changé :
+- Badge « Nouveau » pendant **30 jours** (décision du client).
+- Import d'un export **tout ou rien** (rien n'est écrit s'il échoue) ; les chapitres d'un titre
+  importé ne sont plus annoncés comme nouveaux.
+- Langues : variantes régionales acceptées (`pt-br`…), la langue exacte passe avant la variante.
+- Messages d'erreur affichés 10 s, avec une croix pour les fermer.
+
+Corrigé :
+- Une section pliable des Paramètres en erreur pouvait faire planter l'écran.
+
 ## 0.2.1-test — version de test (2026-11-17)
 
 Suite aux retours sur la 0.2.0-test.

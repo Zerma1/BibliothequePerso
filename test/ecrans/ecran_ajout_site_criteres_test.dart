@@ -4,10 +4,11 @@
 import 'dart:convert';
 
 import 'package:bibliotheque_perso/ecrans/ecran_sources.dart';
+import 'package:bibliotheque_perso/etat/description_erreur.dart';
 import 'package:bibliotheque_perso/etat/etat_sources.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
+import 'package:bibliotheque_perso/services/service_ajout_site.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
-import 'package:bibliotheque_perso/sources/source_generique.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -24,35 +25,88 @@ void main() {
   });
 
   group('EtatSources (réglages avancés)', () {
-    test('les clés recopiées sont celles du site générique', () {
-      expect(EtatSources.clesReglagesGeneriques, ConfigurationGenerique.cles);
+    test('clés et libellés : ceux du service', () {
+      expect(
+        EtatSources.clesReglagesGeneriques,
+        ServiceAjoutSite.clesReglagesGeneriques,
+      );
+      expect(
+        EtatSources.libelleReglageGenerique('selecteurTitre'),
+        ServiceAjoutSite.libelleReglageGenerique('selecteurTitre'),
+      );
     });
 
-    test('JSON : valeurs vides retirées, null si rien de rempli', () {
-      expect(EtatSources.reglagesVersJson(const <String, String>{}), isNull);
+    test('un champ : vide ou valide sans message, motif invalide refusé', () {
       expect(
-        EtatSources.reglagesVersJson(const <String, String>{
-          'selecteurTitre': '  ',
+        EtatSources.erreurReglageGenerique('motifNumeroChapitre', '  '),
+        isNull,
+      );
+      expect(
+        EtatSources.erreurReglageGenerique(
+          'motifNumeroChapitre',
+          r'chapitre-(\d+)',
+        ),
+        isNull,
+      );
+      final message = EtatSources.erreurReglageGenerique(
+        'motifNumeroChapitre',
+        '(non fermé',
+      );
+      expect(message, isNotNull);
+      expect(
+        message,
+        ServiceAjoutSite.erreurReglageGenerique(
+          'motifNumeroChapitre',
+          '(non fermé',
+        ),
+      );
+      // Libellé retiré : il est déjà affiché au-dessus du champ.
+      expect(
+        message,
+        isNot(
+          startsWith(
+            ServiceAjoutSite.libelleReglageGenerique('motifNumeroChapitre'),
+          ),
+        ),
+      );
+    });
+
+    test('ensemble : le message nomme le champ fautif', () {
+      expect(
+        EtatSources.erreurReglagesGeneriques(const <String, String>{
+          'selecteurTitre': 'h1',
         }),
         isNull,
       );
-      final json = EtatSources.reglagesVersJson(const <String, String>{
-        'selecteurTitre': ' h1.titre ',
-        'selecteurResume': '',
-        'cleInconnue': 'x',
-      });
-      expect(jsonDecode(json!), <String, Object?>{
-        'selecteurTitre': 'h1.titre',
-      });
-      // Lu sans erreur par le site générique.
-      final configuration = ConfigurationGenerique.depuisJson(json);
-      expect(configuration.selecteurTitre, 'h1.titre');
+      expect(
+        EtatSources.erreurReglagesGeneriques(const <String, String>{
+          'motifNumeroChapitre': '(',
+        }),
+        startsWith(
+          ServiceAjoutSite.libelleReglageGenerique('motifNumeroChapitre'),
+        ),
+      );
     });
 
-    test('motif : expression régulière vérifiée', () {
-      expect(EtatSources.motifValide(''), isTrue);
-      expect(EtatSources.motifValide(r'chapitre-(\d+)'), isTrue);
-      expect(EtatSources.motifValide('(non fermé'), isFalse);
+    test('réglage invalide : refusé avant l\'ajout, site non ajouté', () async {
+      final etat = EtatSources(bibliotheque, ajoutSite);
+      addTearDown(etat.dispose);
+      final resultat = await etat.ajouterSite(
+        'https://ruri-dragon.online',
+        reglagesGeneriques: const <String, String>{
+          'motifNumeroChapitre': '(non fermé',
+        },
+      );
+      expect(resultat.estReussi, isFalse);
+      expect(resultat.erreur!.nature, NatureErreur.refus);
+      expect(
+        resultat.erreur!.detail,
+        startsWith(
+          ServiceAjoutSite.libelleReglageGenerique('motifNumeroChapitre'),
+        ),
+      );
+      expect(ajoutSite.dernierAppel, isNull);
+      expect(bibliotheque.sources, isEmpty);
     });
 
     test('site générique : réglages enregistrés par modifierSource', () async {
@@ -164,7 +218,25 @@ void main() {
       );
       await tester.tap(find.widgetWithText(FilledButton, Textes.ajouter));
       await tester.pumpAndSettle();
-      expect(find.text(Textes.erreurMotifInvalide), findsOneWidget);
+      // Sous le champ (sans le libellé) et sous le formulaire (avec).
+      expect(
+        find.text(
+          EtatSources.erreurReglageGenerique(
+            'motifNumeroChapitre',
+            '(non fermé',
+          )!,
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          EtatSources.erreurReglagesGeneriques(const <String, String>{
+            'motifNumeroChapitre': '(non fermé',
+          })!,
+        ),
+        findsOneWidget,
+      );
+      expect(ajoutSite.dernierAppel, isNull);
       expect(bibliotheque.sources, isEmpty);
     });
 

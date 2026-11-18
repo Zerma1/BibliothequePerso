@@ -14,6 +14,7 @@ import '../donnees/depot_sources.dart';
 import '../donnees/depot_titres.dart';
 import '../modeles/constantes.dart';
 import '../modeles/titre.dart';
+import 'classement_listes.dart';
 import 'planification_mises_a_jour.dart';
 import 'service_bibliotheque.dart';
 import 'service_parametres.dart';
@@ -27,14 +28,21 @@ class ResultatVerificationTitre {
     this.erreur,
     this.estAnnonce = true,
     this.erreursParSite = const <int, Object>{},
+    this.nombreChapitresPremiereLecture = 0,
   });
 
   /// Titre vérifié.
   final Titre titre;
 
   /// Chapitres trouvés qui n'étaient pas encore connus (tous sites
-  /// confondus).
+  /// confondus), **sans** ceux de [nombreChapitresPremiereLecture] : ce sont
+  /// les parutions annoncées dans le bilan et les notifications.
   final int nombreNouveauxChapitres;
+
+  /// Chapitres enregistrés lors de la première lecture d'un site (titre
+  /// importé jamais vérifié, site ajouté depuis la dernière vérification) :
+  /// déjà parus quand le site a été lié, ils ne sont pas annoncés (U7).
+  final int nombreChapitresPremiereLecture;
 
   /// Erreur rencontrée (site injoignable…), `null` si tout s'est bien passé.
   ///
@@ -48,8 +56,9 @@ class ResultatVerificationTitre {
   /// tous les sites ont répondu).
   final Map<int, Object> erreursParSite;
 
-  /// `false` pour un titre vérifié en silence : seulement planifié (liste
-  /// « Planifié », éventuellement « En attente »), ni favori ni suivi. Ses
+  /// `false` pour un titre vérifié en silence : ni favori ni suivi (liste
+  /// « Planifié », « En attente » ou « Terminés », ou titre vérifié
+  /// seulement parce que « Archive complète » est activée). Ses
   /// nouveautés n'apparaissent jamais dans les bilans ni les notifications
   /// (décision de l'étape 6).
   final bool estAnnonce;
@@ -106,8 +115,9 @@ class RapportMisesAJour {
       resultatsAnnonces.where((resultat) => resultat.aEchoue).toList();
 }
 
-/// Vérifie les titres des listes « Suivis », « Planifié » et « En attente »
-/// et enregistre leurs nouveaux chapitres.
+/// Vérifie les titres des listes « Favoris », « Suivis », « Planifié »,
+/// « En attente » et « Terminés » (toute la bibliothèque si « Archive
+/// complète » est activée) et enregistre leurs nouveaux chapitres.
 ///
 /// Règles du PLAYBOOK : au plus [maximumSourcesEnParallele] sources vérifiées
 /// en même temps, et un seul titre à la fois par source (les délais par
@@ -146,17 +156,12 @@ class ServiceMisesAJour {
   /// Nombre maximal de sources vérifiées en même temps (PLAYBOOK.md section 7).
   static const int maximumSourcesEnParallele = 3;
 
-  /// Listes dont les titres sont vérifiés par la vérification complète.
-  /// « Planifié » est vérifié (en silence) ; « En attente » regroupe des
-  /// favoris, suivis et planifiés sans chapitre dans les langues du client.
-  // « Favoris » est indispensable : un titre peut n'être que favori (sans
-  // être aussi suivi) et doit quand même recevoir ses nouveaux chapitres.
-  static const List<String> listesVerifiees = <String>[
-    nomListeFavoris,
-    nomListeSuivis,
-    nomListePlanifie,
-    nomListeEnAttente,
-  ];
+  /// Listes dont les titres sont vérifiés par la vérification complète
+  /// (voir `ClassementListes.listesVerifiees`). « Planifié » et « Terminés »
+  /// sont vérifiées en silence ; « En attente » regroupe des favoris, suivis
+  /// et planifiés sans chapitre dans les langues du client. Avec « Archive
+  /// complète », toute la bibliothèque est vérifiée.
+  static const List<String> listesVerifiees = ClassementListes.listesVerifiees;
 
   /// Vérification en cours, partagée si on la redemande avant la fin.
   Future<RapportMisesAJour>? _enCours;
@@ -351,8 +356,9 @@ class ServiceMisesAJour {
     return (await _depotTitres.chargerTitres(idListe: liste!.id)).isNotEmpty;
   }
 
-  /// Titres à vérifier (listes [listesVerifiees], ou « En attente »
-  /// seulement), identifiants des titres annoncés (favoris ou suivis) et
+  /// Titres à vérifier (listes [listesVerifiees], toute la bibliothèque en
+  /// archive complète, ou « En attente » seulement), identifiants des
+  /// titres annoncés (favoris ou suivis) et
   /// identifiants des sources actives (seuls leurs sites sont interrogés).
   Future<(List<Titre>, Set<int>, Set<int>)> _chargerTitresAVerifier({
     required bool complete,
@@ -364,14 +370,38 @@ class ServiceMisesAJour {
     }
 
     final parId = <int, Titre>{};
-    for (final nom
-        in complete ? listesVerifiees : <String>[nomListeEnAttente]) {
-      for (final titre in await titresDe(nom)) {
-        if (titre.id != null) parId[titre.id!] = titre;
+    // Archive complète (décision de l'orchestrateur du 2026-11-18, dans le
+    // sens du client : tout archiver) : les titres sans liste ou des seules
+    // listes du client sont vérifiés aussi, sinon leurs nouveaux chapitres
+    // ne seraient jamais connus, donc jamais téléchargés. Le rythme ne
+    // change pas : mêmes horaires, un titre à la fois par source et délai
+    // par domaine de `ClientHttpPoli` (PLAYBOOK.md section 10). Un réglage
+    // illisible ne doit pas empêcher la vérification ordinaire.
+    var toutVerifier = false;
+    if (complete) {
+      try {
+        toutVerifier =
+            await _serviceParametres?.chargerArchiveComplete() ?? false;
+      } catch (erreur) {
+        debugPrint('Réglage « Archive complète » illisible : $erreur');
       }
     }
+    if (toutVerifier) {
+      for (final titre in await _depotTitres.chargerTitres()) {
+        if (titre.id != null) parId[titre.id!] = titre;
+      }
+    } else {
+      for (final nom
+          in complete ? listesVerifiees : <String>[nomListeEnAttente]) {
+        for (final titre in await titresDe(nom)) {
+          if (titre.id != null) parId[titre.id!] = titre;
+        }
+      }
+    }
+    // Seuls les titres d'une liste annoncée le sont, archive complète ou
+    // non : les autres sont vérifiés en silence.
     final idsAnnonces = <int>{
-      for (final nom in <String>[nomListeFavoris, nomListeSuivis])
+      for (final nom in ClassementListes.listesAnnoncees)
         ...(await titresDe(nom)).map((titre) => titre.id).whereType<int>(),
     };
     final sources = await _depotSources.chargerSources();
@@ -392,7 +422,13 @@ class ServiceMisesAJour {
         cumul.titre,
         idSource,
       );
-      cumul.nombreNouveaux += resultat.nombreNouveauxChapitres;
+      // U7 : les chapitres de la première lecture d'un site (titre importé,
+      // site ajouté depuis la dernière vérification) étaient déjà parus à
+      // l'ajout ; ils ne sont ni dans le bilan ni dans les notifications.
+      // Les règles de téléchargement n'en dépendent pas : elles sont
+      // réappliquées après chaque vérification, quel que soit ce nombre.
+      cumul.nombreNouveaux += resultat.nombreNouveautesAAnnoncer;
+      cumul.nombrePremiereLecture += resultat.nombreChapitresPremiereLecture;
       // Le titre relu après le site principal porte la fiche à jour ; sinon
       // le dernier relu.
       if (idSource == cumul.idSourcePrincipale || cumul.titreRelu == null) {
@@ -420,8 +456,11 @@ class _CumulTitre {
   /// Nombre de sites interrogés.
   int nombreSites = 0;
 
-  /// Nouveaux chapitres, tous sites confondus.
+  /// Nouveaux chapitres à annoncer, tous sites confondus.
   int nombreNouveaux = 0;
+
+  /// Chapitres reçus à la première lecture d'un site (non annoncés).
+  int nombrePremiereLecture = 0;
 
   /// Titre relu après une actualisation réussie.
   Titre? titreRelu;
@@ -434,6 +473,7 @@ class _CumulTitre {
     return ResultatVerificationTitre(
       titre: titreRelu ?? titre,
       nombreNouveauxChapitres: nombreNouveaux,
+      nombreChapitresPremiereLecture: nombrePremiereLecture,
       erreur: erreurPrincipale ?? erreurs.values.firstOrNull,
       erreursParSite: Map<int, Object>.unmodifiable(erreurs),
       estAnnonce: estAnnonce,

@@ -42,6 +42,8 @@ import '../sources/source_webtoons.dart';
 import 'classement_listes.dart';
 import 'constantes_services.dart';
 import 'erreur_service.dart';
+import 'extension_image.dart';
+import 'politique_telechargement.dart';
 import 'service_ajout_site.dart';
 import 'service_parametres.dart';
 import 'service_sources_par_defaut.dart';
@@ -59,14 +61,28 @@ class ResultatAjoutTitre {
     this.estEnAttente = false,
     this.estDejaPresent = false,
     this.erreursParSite = const <int, Object>{},
+    this.nombreChapitresPremiereLecture = 0,
   });
 
   /// Titre tel qu'enregistré en base.
   final Titre titre;
 
   /// Nombre de chapitres qui n'étaient pas encore connus (tous sites
-  /// confondus).
+  /// confondus), y compris ceux de [nombreChapitresPremiereLecture].
   final int nombreNouveauxChapitres;
+
+  /// Parmi [nombreNouveauxChapitres], chapitres reçus lors de la
+  /// **première lecture** d'un site (titre importé jamais vérifié, site
+  /// ajouté depuis la dernière vérification : voir
+  /// `ServiceBibliotheque._detectionPremiereLecture`). Ce sont les chapitres
+  /// déjà parus quand le site a été lié, pas des parutions : U7, ils ne sont
+  /// ni dans le bilan ni dans les notifications des mises à jour.
+  final int nombreChapitresPremiereLecture;
+
+  /// Nouveaux chapitres à annoncer au client (bilan, notifications) :
+  /// [nombreNouveauxChapitres] sans ceux de la première lecture d'un site.
+  int get nombreNouveautesAAnnoncer =>
+      nombreNouveauxChapitres - nombreChapitresPremiereLecture;
 
   /// `true` si le titre a été placé (ou laissé) dans « En attente » : il
   /// n'a encore aucun chapitre dans les langues du client. L'interface peut
@@ -186,7 +202,7 @@ class ParutionTitre {
   /// - sans date de publication (sites sans date) : découvert après l'ajout
   ///   de son site ([estDecouvertApresAjout]) et depuis moins de
   ///   [dureeNouveaute] ; sinon tous les chapitres reçus à l'ajout
-  ///   paraîtraient nouveaux pendant une semaine.
+  ///   paraîtraient nouveaux pendant [dureeNouveaute].
   bool estNouveaute(DateTime maintenant) {
     final chapitre = dernierChapitre;
     if (chapitre == null || chapitre.estLu) return false;
@@ -303,6 +319,12 @@ class ServiceBibliotheque {
   /// `ServiceParametres.chargerNiveauxContenu`) ; `null` = pas de filtre. Les
   /// titres sans niveau connu (sites autres que MangaDex) restent affichés si
   /// [inclureNiveauInconnu] vaut `true`.
+  ///
+  /// Un filtre sur [idCategorie] porte sur le **groupe** de la catégorie
+  /// (regroupements de `ServiceCategories`). Pour plusieurs catégories
+  /// incluses ou exclues : `ServiceCategories.chargerTitresFiltres` (une
+  /// nouvelle méthode ici casserait `FauxServiceBibliotheque`, qui
+  /// implémente toute cette classe dans les tests de l'interface).
   Future<List<Titre>> chargerTitres({
     String? recherche,
     int? idListe,
@@ -321,7 +343,8 @@ class ServiceBibliotheque {
   Future<Titre?> chargerTitre(int idTitre) =>
       _depotTitres.chargerTitre(idTitre);
 
-  /// Toutes les listes, système d'abord (ordre de la base).
+  /// Toutes les listes, dans l'ordre d'affichage choisi par le client
+  /// ([reordonnerListes] ; système d'abord tant qu'il ne l'a pas changé).
   Future<List<ListeLecture>> chargerListes() => _depotListes.chargerListes();
 
   /// Listes qui contiennent le titre.
@@ -387,6 +410,36 @@ class ServiceBibliotheque {
     return propres.isNotEmpty
         ? propres
         : List<String>.of(languesParDefautClient);
+  }
+
+  /// Codes de langue à chercher en base pour les [langues] du client (tâche
+  /// P3) : chaque langue, puis sa langue de base si c'est une variante
+  /// régionale (`pt-br` → `pt`), puis ses variantes régionales connues
+  /// (`pt` → `pt-br`, celles que demande MangaDex). Sans doublon, dans
+  /// l'ordre. Fonction pure.
+  ///
+  /// Sert aux requêtes de l'onglet « Mises à jour », qui comparent les
+  /// codes exactement : sans cela, un chapitre `pt-br` accepté par les
+  /// règles (`PolitiqueTelechargement.rangLangue`) n'y apparaîtrait pas.
+  ///
+  /// LIMITE : une variante absente de la liste de MangaDex (`fr-ca`, par
+  /// exemple) n'est trouvée que si le client l'a choisie exactement ; la
+  /// comparaison par préfixe demanderait une évolution de
+  /// `DepotChapitres.chargerDernieresParutions`.
+  static List<String> languesEtVariantes(List<String> langues) {
+    final codes = <String>[];
+    void ajouter(String code) {
+      final propre = code.trim().toLowerCase();
+      if (propre.isNotEmpty && !codes.contains(propre)) codes.add(propre);
+    }
+
+    for (final langue in langues) {
+      ajouter(langue);
+      final base = PolitiqueTelechargement.langueDeBase(langue);
+      ajouter(base);
+      SourceMangaDex.languesApiDepuisIso(base).forEach(ajouter);
+    }
+    return codes;
   }
 
   /// Langues du réglage général du client.
@@ -539,6 +592,7 @@ class ServiceBibliotheque {
     Object? premiereErreur;
     StackTrace? pileErreur;
     var nouveaux = 0;
+    var premiereLecture = 0;
     var reussis = 0;
     for (final lien in liens) {
       // Lien seul : le client l'a enregistré parce que l'application ne sait
@@ -560,6 +614,7 @@ class ServiceBibliotheque {
           classer: false,
         );
         nouveaux += resultat.nombreNouveauxChapitres;
+        premiereLecture += resultat.nombreChapitresPremiereLecture;
         reussis++;
       } catch (erreur, pile) {
         // Une erreur de programmation ne doit pas passer pour un site en
@@ -581,6 +636,7 @@ class ServiceBibliotheque {
       nouveaux,
       estEnAttente: estEnAttente,
       erreursParSite: erreurs,
+      nombreChapitresPremiereLecture: premiereLecture,
     );
   }
 
@@ -623,21 +679,31 @@ class ServiceBibliotheque {
     // Lu avant la requête réseau : « aucun chapitre connu » décrit la base
     // telle qu'elle était avant cette lecture du site.
     final detection = await _detectionPremiereLecture(titre, lien);
-    if (lien.estPrincipale) {
-      return _enregistrerDepuisSource(
-        source,
-        lien.urlTitre,
-        titre: titre,
-        classer: classer,
-        dateDetection: detection,
-      );
-    }
-    return _enregistrerChapitresDuSite(
-      titre,
-      source,
-      lien.urlTitre,
-      classer: classer,
-      dateDetection: detection,
+    final resultat = lien.estPrincipale
+        ? await _enregistrerDepuisSource(
+            source,
+            lien.urlTitre,
+            titre: titre,
+            classer: classer,
+            dateDetection: detection,
+          )
+        : await _enregistrerChapitresDuSite(
+            titre,
+            source,
+            lien.urlTitre,
+            classer: classer,
+            dateDetection: detection,
+          );
+    if (detection == null) return resultat;
+    // Première lecture du site (U7) : tous ses chapitres reçus sont ceux
+    // déjà parus à l'ajout, à ne pas annoncer comme des parutions.
+    return ResultatAjoutTitre(
+      resultat.titre,
+      resultat.nombreNouveauxChapitres,
+      estEnAttente: resultat.estEnAttente,
+      estDejaPresent: resultat.estDejaPresent,
+      erreursParSite: resultat.erreursParSite,
+      nombreChapitresPremiereLecture: resultat.nombreNouveauxChapitres,
     );
   }
 
@@ -650,7 +716,7 @@ class ServiceBibliotheque {
   /// vérification a souvent lieu plus d'une heure après l'import. Sans
   /// cette règle, tous ses chapitres seraient « découverts après l'ajout »
   /// (`ParutionTitre.estDecouvertApresAjout`) et, sur un site sans date de
-  /// publication, tous « Nouveau » pendant une semaine. Ils sont donc datés
+  /// publication, tous « Nouveau » pendant [dureeNouveaute]. Ils sont donc datés
   /// de l'ajout du site : ce sont les chapitres déjà parus à ce moment-là.
   ///
   /// Première lecture = le site a été lié après la dernière vérification
@@ -1212,11 +1278,15 @@ class ServiceBibliotheque {
 
   /// Programme dans [delaiSuppressionDifferee] la suppression des archives
   /// du site [idSource] du titre (site retiré ou devenu lien seul), sauf
-  /// chapitre gardé par le client ou suppression déjà prévue.
+  /// chapitre gardé par le client, suppression déjà prévue ou « Archive
+  /// complète » activée.
   Future<void> _planifierSuppressionArchivesDuSite(
     int idTitre,
     int idSource,
   ) async {
+    // « Archive complète » (X7) : aucune suppression automatique, même pour
+    // les archives d'un site retiré ; seul le client les supprime.
+    if (await _serviceParametres?.chargerArchiveComplete() ?? false) return;
     // LIMITE : hors de la transaction du dépôt ; si ces écritures échouent,
     // la prochaine application des règles de téléchargement les programme
     // (les chapitres d'un site retiré ou d'un lien seul y sont à supprimer).
@@ -1614,12 +1684,144 @@ class ServiceBibliotheque {
     }
   }
 
-  /// Crée une liste personnelle.
-  Future<ListeLecture> creerListe(String nom) => _depotListes.creerListe(nom);
+  /// Nom de liste nettoyé : espaces autour retirés, suites d'espaces
+  /// (tabulations, retours à la ligne collés) ramenées à une espace.
+  /// Fonction pure.
+  static String nettoyerNomListe(String nom) =>
+      nom.trim().replaceAll(RegExp(r'\s+'), ' ');
 
-  /// Supprime une liste personnelle (refusé pour les listes système).
-  Future<void> supprimerListe(int idListe) =>
-      _depotListes.supprimerListe(idListe);
+  /// Nettoie [nom] ([nettoyerNomListe]) et lève une [ErreurService] s'il
+  /// est vide ou plus long que [longueurMaxNomListe].
+  static String _validerNomListe(String nom) {
+    final propre = nettoyerNomListe(nom);
+    if (propre.isEmpty) {
+      throw const ErreurService('Donnez un nom à la liste.');
+    }
+    if (propre.length > longueurMaxNomListe) {
+      throw const ErreurService(
+        'Le nom de la liste est trop long ($longueurMaxNomListe caractères '
+        'au plus).',
+      );
+    }
+    return propre;
+  }
+
+  /// Lève une [ErreurService] si une autre liste que [idListe] porte déjà
+  /// [nom], sans tenir compte de la casse, accents compris (« À relire » et
+  /// « à relire ») : la base ne compare sans casse que les lettres ASCII.
+  Future<void> _refuserNomListePris(String nom, {int? idListe}) async {
+    final cherche = nom.toLowerCase();
+    for (final liste in await _depotListes.chargerListes()) {
+      if (liste.id != idListe && liste.nom.toLowerCase() == cherche) {
+        throw ErreurService('Une liste nommée « ${liste.nom} » existe déjà.');
+      }
+    }
+  }
+
+  /// Crée une liste personnelle (placée après les autres) et la renvoie.
+  ///
+  /// Le nom est nettoyé ([nettoyerNomListe]). Lève une [ErreurService] si
+  /// le nom est vide, trop long ou déjà pris (sans tenir compte de la
+  /// casse : « favoris » est refusé).
+  Future<ListeLecture> creerListe(String nom) async {
+    final propre = _validerNomListe(nom);
+    await _refuserNomListePris(propre);
+    try {
+      return await _depotListes.creerListe(propre);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      // Messages du dépôt déjà clairs (« Une liste nommée … existe déjà »).
+      throw ErreurService(erreur.message, cause: erreur);
+    }
+  }
+
+  /// Renomme une liste personnelle (dont « En attente (perso) ») et la
+  /// renvoie à jour.
+  ///
+  /// Le nom est nettoyé ([nettoyerNomListe]). Lève une [ErreurService] pour
+  /// une liste système (Favoris, Suivis, Planifié, En attente, Terminés),
+  /// une liste disparue, un nom vide, trop long ou déjà pris. Changer
+  /// seulement la casse du nom est accepté.
+  Future<ListeLecture> renommerListe(int idListe, String nom) async {
+    final propre = _validerNomListe(nom);
+    await _refuserNomListePris(propre, idListe: idListe);
+    try {
+      return await _depotListes.renommerListe(idListe, propre);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      throw ErreurService(erreur.message, cause: erreur);
+    }
+  }
+
+  /// Supprime une liste personnelle. Ses titres restent dans la
+  /// bibliothèque (seule leur appartenance à la liste disparaît) ; les
+  /// règles de téléchargement ne dépendent que de Favoris et Suivis, elles
+  /// ne changent donc pas.
+  ///
+  /// Lève une [ErreurService] pour une liste système ou une liste disparue.
+  Future<void> supprimerListe(int idListe) async {
+    try {
+      await _depotListes.supprimerListe(idListe);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      throw ErreurService(erreur.message, cause: erreur);
+    }
+  }
+
+  /// Enregistre l'ordre d'affichage des listes ([idsDansLOrdre] : de la
+  /// première à la dernière) et renvoie toutes les listes dans ce nouvel
+  /// ordre. Les listes système peuvent être déplacées comme les autres ;
+  /// une liste absente de [idsDansLOrdre] (créée entre-temps) est placée
+  /// après, sans rien perdre.
+  ///
+  /// Lève une [ErreurService], sans rien écrire, si une liste apparaît deux
+  /// fois ou n'existe plus.
+  Future<List<ListeLecture>> reordonnerListes(List<int> idsDansLOrdre) async {
+    try {
+      return await _depotListes.enregistrerOrdre(idsDansLOrdre);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      throw ErreurService(
+        "L'ordre des listes n'a pas pu être enregistré : ${erreur.message}",
+        cause: erreur,
+      );
+    }
+  }
+
+  // ------------------------------------------ Description personnelle
+
+  /// Enregistre la description personnelle du client pour le titre
+  /// [idTitre] et renvoie le titre relu.
+  ///
+  /// Décision du client : la fiche venant du site (nom, résumé, auteur…)
+  /// n'est pas modifiable ; seule cette description, distincte du résumé du
+  /// site, lui appartient. Elle n'est jamais remplacée par l'actualisation
+  /// depuis le site.
+  ///
+  /// Les espaces et retours à la ligne au début et à la fin sont retirés
+  /// (ceux de l'intérieur sont gardés : paragraphes) ; `null` ou un texte
+  /// vide efface la description. Aucune requête réseau.
+  ///
+  /// Lève une [ErreurService], sans rien écrire, si le titre n'existe plus
+  /// ou si le texte dépasse [longueurMaxDescriptionPerso] caractères.
+  Future<Titre> enregistrerDescriptionPerso(int idTitre, String? texte) async {
+    final propre = DepotTitres.normaliserDescriptionPerso(texte);
+    if (propre != null && propre.length > longueurMaxDescriptionPerso) {
+      throw const ErreurService(
+        'La description est trop longue '
+        '($longueurMaxDescriptionPerso caractères au plus).',
+      );
+    }
+    try {
+      return await _depotTitres.enregistrerDescriptionPerso(idTitre, propre);
+    } on ErreurBaseDeDonnees catch (erreur) {
+      // Le dépôt ne lève ici que pour un titre absent ou une base en échec :
+      // le message du client reste simple dans le premier cas.
+      final existe = await _depotTitres.chargerTitre(idTitre) != null;
+      throw ErreurService(
+        existe
+            ? "La description n'a pas pu être enregistrée : ${erreur.message}"
+            : "Ce titre n'existe plus.",
+        cause: erreur,
+      );
+    }
+  }
 
   /// Supprime un titre, ses chapitres et sa couverture enregistrée.
   ///
@@ -1646,6 +1848,59 @@ class ServiceBibliotheque {
   /// Marque tous les chapitres d'un titre lus ou non lus.
   Future<void> marquerTousLus(int idTitre, {bool estLu = true}) =>
       _depotChapitres.marquerTousLus(idTitre, estLu: estLu);
+
+  /// Marque lus (ou non lus si [lu] vaut `false`) les chapitres
+  /// [idsChapitres] du titre [idTitre], en une transaction, et renvoie le
+  /// nombre de chapitres dont l'état a changé (ceux déjà dans l'état
+  /// demandé ne comptent pas).
+  ///
+  /// Les identifiants qui n'appartiennent pas à [idTitre] (sélection
+  /// périmée, autre titre) sont ignorés : une sélection ne doit jamais
+  /// toucher un autre titre. Base seulement (aucun réseau).
+  ///
+  /// L'état de lecture ne change pas le classement « En attente » (qui ne
+  /// dépend que des chapitres parus dans les langues du client) : il n'est
+  /// pas recalculé. Il change en revanche le plan de téléchargement :
+  /// l'interface appelle ensuite `ServiceTelechargement.appliquerRegles`
+  /// (comme après [marquerLu]). Lève une `ErreurBaseDeDonnees` si
+  /// l'écriture échoue (rien n'est alors écrit).
+  Future<int> marquerChapitresLus(
+    int idTitre,
+    Iterable<int> idsChapitres, {
+    bool lu = true,
+  }) async {
+    final demandes = idsChapitres.toSet();
+    if (demandes.isEmpty) return 0;
+    final duTitre = <int>{
+      for (final chapitre in await _depotChapitres.chargerChapitres(idTitre))
+        ?chapitre.id,
+    };
+    return _depotChapitres.marquerLus(demandes.intersection(duTitre), lu: lu);
+  }
+
+  /// Marque lus (ou non lus si [lu] vaut `false`) tous les chapitres du
+  /// titre [idTitre] de numéro inférieur ou égal à [numero], toutes langues
+  /// et tous sites confondus, et renvoie le nombre de chapitres dont l'état
+  /// a changé.
+  ///
+  /// Sert à « lu jusqu'ici » : le client qui reprend un titre au chapitre
+  /// 40 n'a pas à cocher les 39 premiers. Mêmes suites que
+  /// [marquerChapitresLus] (« En attente » inchangé, l'interface appelle
+  /// ensuite `ServiceTelechargement.appliquerRegles`). Lève une
+  /// [ErreurService] si [numero] n'est pas un nombre fini, une
+  /// `ErreurBaseDeDonnees` si l'écriture échoue.
+  Future<int> marquerLusJusqua(
+    int idTitre,
+    double numero, {
+    bool lu = true,
+  }) async {
+    // Vérifié ici pour donner au client un message plutôt que
+    // l'`ArgumentError` du dépôt (erreur de programmation).
+    if (!numero.isFinite) {
+      throw const ErreurService('Numéro de chapitre invalide.');
+    }
+    return _depotChapitres.marquerLusJusqua(idTitre, numero, lu: lu);
+  }
 
   // -------------------------------------------------- Liste « En attente »
 
@@ -1775,7 +2030,7 @@ class ServiceBibliotheque {
     }
     for (final MapEntry(key: jeu, value: ids) in parJeu.entries) {
       final parutions = await _depotChapitres.chargerDernieresParutions(
-        jeu.split(','),
+        languesEtVariantes(jeu.split(',')),
       );
       for (final id in ids) {
         final date = parutions[id];
@@ -1789,7 +2044,10 @@ class ServiceBibliotheque {
       final date = dates[id];
       final dernier = date == null
           ? null
-          : await _depotChapitres.chargerDernierChapitreParu(id, langues);
+          : await _depotChapitres.chargerDernierChapitreParu(
+              id,
+              languesEtVariantes(langues),
+            );
       lignes.add(
         ParutionTitre(
           titre: titre,
@@ -2316,7 +2574,8 @@ class ServiceBibliotheque {
   }
 
   /// Écrit la couverture dans le dossier du titre (sans stockage : rien).
-  /// L'extension vient de [origine] (adresse ou chemin), `jpg` à défaut.
+  /// L'extension vient des octets (format reconnu), sinon de [origine]
+  /// (adresse ou chemin), `jpg` à défaut : voir [extensionImage].
   Future<void> _enregistrerCouvertureSurAppareil(
     Titre titre,
     Uint8List octets,
@@ -2324,17 +2583,12 @@ class ServiceBibliotheque {
   ) async {
     final stockage = _stockage;
     if (stockage == null) return;
-    final extension = estCouvertureLocale(origine)
-        ? StockageTelechargements.extensionDepuisUrl(
-            Uri.file(origine).toString(),
-          )
-        : StockageTelechargements.extensionDepuisUrl(origine);
+    final extension = extensionImage(
+      octets,
+      estCouvertureLocale(origine) ? Uri.file(origine).toString() : origine,
+    );
     try {
-      await stockage.enregistrerCouverture(
-        titre,
-        octets,
-        extension ?? extensionImageParDefaut,
-      );
+      await stockage.enregistrerCouverture(titre, octets, extension);
     } on ErreurStockage catch (erreur) {
       throw ErreurService(
         "La couverture n'a pas pu être enregistrée sur l'appareil.",

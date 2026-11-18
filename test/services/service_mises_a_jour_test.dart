@@ -421,4 +421,114 @@ void main() {
       );
     });
   });
+
+  group('liste Terminés et archive complète', () {
+    late ServiceParametres parametres;
+    late ServiceMisesAJour avecReglages;
+
+    setUp(() {
+      parametres = ServiceParametres(DepotParametres(base));
+      avecReglages = ServiceMisesAJour(
+        depotTitres: depotTitres,
+        depotListes: depotListes,
+        depotSources: depotSources,
+        serviceBibliotheque: bibliotheque,
+        serviceParametres: parametres,
+        maintenant: () => DateTime.utc(2026, 11, 18, 12, 5),
+      );
+    });
+
+    Future<void> ranger(Titre titre, String nomListe) async {
+      final liste = await depotListes.chargerListeParNom(nomListe);
+      await depotListes.ajouterTitre(liste!.id!, titre.id!);
+    }
+
+    test('un titre seulement terminé est vérifié en silence et ne passe pas '
+        'dans « En attente »', () async {
+      final source = await creerSource('a.test');
+      final termine = await creerTitre(source, 'terminé', suivi: false);
+      await ranger(termine, nomListeTermines);
+      bibliotheque.nouveauxParTitre['terminé'] = 2;
+
+      final rapport = await service.verifierTitresSuivis();
+
+      expect(bibliotheque.ordreAppels, <String>['terminé']);
+      expect(rapport.resultats.single.estAnnonce, isFalse);
+      expect(rapport.nombreNouveauxChapitres, 0);
+      // Aucun chapitre dans les langues du client, mais rien à attendre.
+      final noms = (await depotListes.chargerListesDuTitre(termine.id!))
+          .map((liste) => liste.nom);
+      expect(noms, isNot(contains(nomListeEnAttente)));
+    });
+
+    test('un titre suivi et terminé reste annoncé (le client choisit ses '
+        'listes)', () async {
+      final source = await creerSource('a.test');
+      final titre = await creerTitre(source, 'suivi fini');
+      await ranger(titre, nomListeTermines);
+      bibliotheque.nouveauxParTitre['suivi fini'] = 1;
+
+      final rapport = await service.verifierTitresSuivis();
+
+      expect(rapport.titresAvecNouveautes.single.titre.nom, 'suivi fini');
+    });
+
+    test("sans archive complète, un titre sans liste ou d'une liste du "
+        "client n'est pas vérifié", () async {
+      final source = await creerSource('a.test');
+      await creerTitre(source, 'sans liste', suivi: false);
+      final perso = await depotListes.creerListe('À relire');
+      final relire = await creerTitre(source, 'à relire', suivi: false);
+      await depotListes.ajouterTitre(perso.id!, relire.id!);
+
+      final rapport = await avecReglages.verifierTitresSuivis();
+
+      expect(rapport.resultats, isEmpty);
+      expect(bibliotheque.ordreAppels, isEmpty);
+    });
+
+    test('avec archive complète, toute la bibliothèque est vérifiée et seuls '
+        'favoris et suivis sont annoncés', () async {
+      await parametres.enregistrerArchiveComplete(true);
+      final source = await creerSource('a.test');
+      final inactive = await creerSource('b.test', estActive: false);
+      await creerTitre(source, 'sans liste', suivi: false);
+      final perso = await depotListes.creerListe('À relire');
+      final relire = await creerTitre(source, 'à relire', suivi: false);
+      await depotListes.ajouterTitre(perso.id!, relire.id!);
+      await creerTitre(source, 'suivi');
+      await creerTitre(inactive, 'site désactivé', suivi: false);
+      bibliotheque.nouveauxParTitre.addAll(<String, int>{
+        'sans liste': 3,
+        'à relire': 2,
+        'suivi': 1,
+      });
+
+      final rapport = await avecReglages.verifierTitresSuivis();
+
+      // Un site désactivé reste ignoré, même en archive complète.
+      expect(
+        bibliotheque.ordreAppels,
+        unorderedEquals(<String>['sans liste', 'à relire', 'suivi']),
+      );
+      expect(rapport.resultats, hasLength(3));
+      expect(rapport.nombreNouveauxChapitres, 1);
+      expect(rapport.titresAvecNouveautes.single.titre.nom, 'suivi');
+      // Toujours un seul titre à la fois par source.
+      expect(bibliotheque.maximumObserveParSource, 1);
+    });
+
+    test('avec archive complète, la vérification « En attente » reste '
+        'limitée à sa liste', () async {
+      await parametres.enregistrerArchiveComplete(true);
+      final source = await creerSource('a.test');
+      await creerTitre(source, 'sans liste', suivi: false);
+      await creerTitre(source, 'en attente');
+
+      final rapport = await avecReglages.verifierTitresEnAttente();
+
+      expect(rapport.estEnAttenteSeulement, isTrue);
+      expect(bibliotheque.ordreAppels, <String>['en attente']);
+    });
+  });
 }

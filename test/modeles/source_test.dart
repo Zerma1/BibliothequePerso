@@ -47,6 +47,41 @@ void main() {
     expect(source.copierAvec().hashCode, source.hashCode);
   });
 
+  group('copierAvec et configurationSelecteurs', () {
+    final generique = source.copierAvec(
+      typeSource: TypeSource.generique,
+      configurationSelecteurs: '{"titre":"h1"}',
+    );
+
+    test('un argument null garde la configuration', () {
+      expect(generique.copierAvec().configurationSelecteurs, '{"titre":"h1"}');
+    });
+
+    test('effacerConfigurationSelecteurs la remet à null', () {
+      final videe = generique.copierAvec(effacerConfigurationSelecteurs: true);
+      expect(videe.configurationSelecteurs, isNull);
+      expect(videe.versMap()['configuration_selecteurs'], isNull);
+      // Les autres champs ne bougent pas.
+      expect(videe.typeSource, TypeSource.generique);
+      expect(videe.nom, generique.nom);
+    });
+
+    test("l'indicateur l'emporte sur une valeur donnée", () {
+      final videe = generique.copierAvec(
+        configurationSelecteurs: '{"titre":"h2"}',
+        effacerConfigurationSelecteurs: true,
+      );
+      expect(videe.configurationSelecteurs, isNull);
+    });
+
+    test('une nouvelle valeur remplace la configuration', () {
+      final remplacee = generique.copierAvec(
+        configurationSelecteurs: '{"titre":"h2"}',
+      );
+      expect(remplacee.configurationSelecteurs, '{"titre":"h2"}');
+    });
+  });
+
   test('un type de source inconnu lève une ErreurBaseDeDonnees', () {
     final map = source.versMap()..['type_source'] = 'wordpress';
     expect(() => Source.depuisMap(map), throwsA(isA<ErreurBaseDeDonnees>()));

@@ -20,8 +20,8 @@ void main() {
     await base.close();
   });
 
-  test('la version du schéma est 8 et correspond à la base ouverte', () async {
-    expect(versionSchema, 8);
+  test('la version du schéma est 12 et correspond à la base ouverte', () async {
+    expect(versionSchema, 12);
     expect(await base.getVersion(), versionSchema);
   });
 
@@ -53,8 +53,8 @@ void main() {
 
   test('la migration 1 crée Favoris et Suivis en listes système', () async {
     final lignes = await base.query('listes', orderBy: 'ordre');
-    // + Planifié et En attente (migration 5).
-    expect(lignes, hasLength(4));
+    // + Planifié et En attente (migration 5), Terminés (migration 11).
+    expect(lignes, hasLength(5));
     // La migration écrit ces valeurs en dur : ce test garantit qu'elles
     // restent alignées avec les constantes utilisées par le reste du code.
     expect(lignes[0]['nom'], nomListeFavoris);
@@ -134,7 +134,7 @@ void main() {
             (await version2.query('titres')).single['nom'],
             'Titre existant',
           );
-          expect(await version2.query('listes'), hasLength(4));
+          expect(await version2.query('listes'), hasLength(5));
           expect(await version2.query('telechargements'), isEmpty);
 
           // La nouvelle table est utilisable avec les données existantes.
@@ -213,7 +213,7 @@ void main() {
               .single;
           expect(telechargement['statut'], 'echec');
           expect(telechargement['message_erreur'], 'Erreur 403');
-          expect(await version3.query('listes'), hasLength(4));
+          expect(await version3.query('listes'), hasLength(5));
           // La nouvelle table est vide (pas de valeur par défaut en base) et
           // utilisable.
           expect(await version3.query('parametres'), isEmpty);
@@ -301,7 +301,7 @@ void main() {
             'termine',
           );
           expect((await version4.query('parametres')).single['valeur'], 'fr');
-          expect(await version4.query('listes'), hasLength(4));
+          expect(await version4.query('listes'), hasLength(5));
 
           final index = await version4.rawQuery(
             "SELECT name FROM sqlite_master WHERE type = 'index' "
@@ -425,16 +425,18 @@ void main() {
             (nomListeSuivis, 1),
             (nomListePlanifie, 1),
             (nomListeEnAttente, 1),
+            (nomListeTermines, 1),
             ('Lus en 2026', 0),
           ],
         );
         // La liste du client devenue « Planifié » garde son identifiant et
         // ses titres ; l'autre liste du client passe après les listes
-        // système.
+        // système (position 4 après la migration 5, 5 après la migration
+        // 11).
         final planifie = listes[2];
         expect(planifie['id'], idPlanifieClient);
         expect(planifie['ordre'], ordreListePlanifie);
-        expect(listes[4]['ordre'], 4);
+        expect(listes[5]['ordre'], 5);
         expect(
           await version5.query(
             'titres_listes',
@@ -548,7 +550,7 @@ void main() {
         ),
         hasLength(1),
       );
-      expect(await version5.query('listes'), hasLength(5));
+      expect(await version5.query('listes'), hasLength(6));
     } finally {
       await version5.close();
       await dossier.delete(recursive: true);
@@ -667,7 +669,7 @@ void main() {
           (await version6.query('telechargements')).single['statut'],
           'termine',
         );
-        expect(await version6.query('listes'), hasLength(5));
+        expect(await version6.query('listes'), hasLength(6));
 
         // La colonne est utilisable et accepte NULL.
         await version6.update(
@@ -833,13 +835,16 @@ void main() {
         // Rien de perdu : chaque ligne de chaque table est identique, à la
         // nouvelle colonne chapitres.id_source près.
         for (final table in tables) {
-          final apres = await version7.query(table, orderBy: 'rowid');
-          final comparables = table == 'chapitres'
-              ? <Map<String, Object?>>[
-                  for (final ligne in apres)
-                    Map<String, Object?>.of(ligne)..remove('id_source'),
-                ]
-              : apres;
+          final apres = sansMigrationsRecentes(
+            table,
+            await version7.query(table, orderBy: 'rowid'),
+          );
+          // + titres.champs_manuels, ajoutée plus tard par la migration 10.
+          final comparables = sansColonnes(apres, switch (table) {
+            'chapitres' => const <String>{'id_source'},
+            'titres' => const <String>{'champs_manuels'},
+            _ => const <String>{},
+          });
           expect(comparables, avant[table], reason: 'table $table');
         }
 
@@ -1144,13 +1149,16 @@ void main() {
         // Rien de perdu, à la nouvelle colonne lien_seul près, qui vaut 0
         // pour tous les liens existants.
         for (final table in tables) {
-          final apres = await version8.query(table, orderBy: 'rowid');
-          final comparables = table == 'titres_sources'
-              ? <Map<String, Object?>>[
-                  for (final ligne in apres)
-                    Map<String, Object?>.of(ligne)..remove('lien_seul'),
-                ]
-              : apres;
+          final apres = sansMigrationsRecentes(
+            table,
+            await version8.query(table, orderBy: 'rowid'),
+          );
+          // + titres.champs_manuels, ajoutée plus tard par la migration 10.
+          final comparables = sansColonnes(apres, switch (table) {
+            'titres_sources' => const <String>{'lien_seul'},
+            'titres' => const <String>{'champs_manuels'},
+            _ => const <String>{},
+          });
           expect(comparables, avant[table], reason: 'table $table');
         }
         final liens = await version8.query('titres_sources', orderBy: 'id');
@@ -1283,6 +1291,202 @@ void main() {
     });
   });
 
+  test('la migration 8 → 9 ne perd rien et ajoute les équivalences', () async {
+    final dossier = await Directory.systemTemp.createTemp('migration9_test_');
+    final chemin = p.join(dossier.path, 'version8.db');
+    try {
+      final version8 = await databaseFactoryFfi.openDatabase(
+        chemin,
+        options: OpenDatabaseOptions(
+          version: 8,
+          onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+          onCreate: (db, version) => appliquerMigrations(db, 0, 8),
+        ),
+      );
+      final idSource = await version8.insert('sources', <String, Object?>{
+        'nom': 'MangaDex',
+        'url_base': 'https://mangadex.org',
+        'type_source': 'mangaDex',
+      });
+      final idTitre = await version8.insert('titres', <String, Object?>{
+        'id_source': idSource,
+        'url_titre': 'https://mangadex.org/title/ruri',
+        'nom': 'Ruri Dragon',
+        'type_titre': 'manga',
+      });
+      final idSurvival = await version8.insert('categories', <String, Object?>{
+        'nom': 'survival',
+      });
+      final idSurvie = await version8.insert('categories', <String, Object?>{
+        'nom': 'survie',
+      });
+      await version8.insert('titres_categories', <String, Object?>{
+        'id_titre': idTitre,
+        'id_categorie': idSurvival,
+      });
+      await version8.insert('chapitres', <String, Object?>{
+        'id_titre': idTitre,
+        'url_chapitre': 'https://mangadex.org/chapter/1',
+        'nom': 'Chapitre 1',
+        'numero': 1.0,
+      });
+
+      const tables = <String>[
+        'sources',
+        'titres',
+        'titres_sources',
+        'chapitres',
+        'listes',
+        'categories',
+        'titres_categories',
+      ];
+      final avant = <String, List<Map<String, Object?>>>{
+        for (final table in tables)
+          table: await version8.query(table, orderBy: 'rowid'),
+      };
+      expect(await version8.getVersion(), 8);
+      await version8.close();
+
+      final version9 = await ouvrirBaseDeDonnees(
+        chemin: chemin,
+        fabrique: databaseFactoryFfi,
+      );
+      try {
+        expect(await version9.getVersion(), versionSchema);
+        for (final table in tables) {
+          // titres.champs_manuels : ajoutée plus tard par la migration 10.
+          expect(
+            sansColonnes(
+              sansMigrationsRecentes(
+                table,
+                await version9.query(table, orderBy: 'rowid'),
+              ),
+              const <String>{'champs_manuels'},
+            ),
+            avant[table],
+            reason: 'table $table',
+          );
+        }
+        // Table vide, index et déclencheurs créés.
+        expect(await version9.query('categories_equivalences'), isEmpty);
+        final objets = await version9.rawQuery(
+          'SELECT name FROM sqlite_master WHERE name IN (?, ?, ?)',
+          <Object?>[
+            'index_categories_equivalences_id_reference',
+            'declencheur_categories_equivalences_insertion',
+            'declencheur_categories_equivalences_modification',
+          ],
+        );
+        expect(objets, hasLength(3));
+
+        // La table est utilisable sur les catégories existantes.
+        await version9.insert('categories_equivalences', <String, Object?>{
+          'id_categorie': idSurvival,
+          'id_reference': idSurvie,
+        });
+        expect(await version9.rawQuery('PRAGMA foreign_key_check'), isEmpty);
+      } finally {
+        await version9.close();
+      }
+    } finally {
+      await dossier.delete(recursive: true);
+    }
+  });
+
+  group('migration 9 : équivalences de catégories', () {
+    late int idSurvie;
+    late int idSurvival;
+    late int idSupervivencia;
+
+    Future<int> categorie(String nom) =>
+        base.insert('categories', <String, Object?>{'nom': nom});
+    Future<int> rattacher(int idCategorie, int idReference) =>
+        base.insert('categories_equivalences', <String, Object?>{
+          'id_categorie': idCategorie,
+          'id_reference': idReference,
+        });
+
+    setUp(() async {
+      idSurvie = await categorie('survie');
+      idSurvival = await categorie('survival');
+      idSupervivencia = await categorie('supervivencia');
+    });
+
+    test('une catégorie ne peut pas être sa propre référence', () async {
+      await expectLater(
+        rattacher(idSurvie, idSurvie),
+        throwsA(isA<DatabaseException>()),
+      );
+    });
+
+    test('une catégorie n\'a qu\'une seule référence', () async {
+      await rattacher(idSurvival, idSurvie);
+      await expectLater(
+        rattacher(idSurvival, idSupervivencia),
+        throwsA(isA<DatabaseException>()),
+      );
+    });
+
+    test(
+      'les chaînes et les cycles sont refusés par les déclencheurs',
+      () async {
+        await rattacher(idSurvival, idSurvie);
+        // Référence elle-même rattachée : survival → survie déjà présent.
+        await expectLater(
+          rattacher(idSupervivencia, idSurvival),
+          throwsA(isA<DatabaseException>()),
+        );
+        // Une référence ne peut pas être rattachée (cycle survie → survival).
+        await expectLater(
+          rattacher(idSurvie, idSurvival),
+          throwsA(isA<DatabaseException>()),
+        );
+        await expectLater(
+          rattacher(idSurvie, idSupervivencia),
+          throwsA(isA<DatabaseException>()),
+        );
+        // Même contrôle par une mise à jour.
+        await rattacher(idSupervivencia, idSurvie);
+        await expectLater(
+          base.update(
+            'categories_equivalences',
+            <String, Object?>{'id_reference': idSurvival},
+            where: 'id_categorie = ?',
+            whereArgs: <Object?>[idSupervivencia],
+          ),
+          throwsA(isA<DatabaseException>()),
+        );
+        expect(await base.query('categories_equivalences'), hasLength(2));
+      },
+    );
+
+    test('supprimer une catégorie retire ses rattachements', () async {
+      await rattacher(idSurvival, idSurvie);
+      await rattacher(idSupervivencia, idSurvie);
+      await base.delete(
+        'categories',
+        where: 'id = ?',
+        whereArgs: <Object?>[idSurvival],
+      );
+      expect(await base.query('categories_equivalences'), hasLength(1));
+      await base.delete(
+        'categories',
+        where: 'id = ?',
+        whereArgs: <Object?>[idSurvie],
+      );
+      expect(await base.query('categories_equivalences'), isEmpty);
+      // La catégorie rattachée reste, indépendante.
+      expect(
+        await base.query(
+          'categories',
+          where: 'id = ?',
+          whereArgs: <Object?>[idSupervivencia],
+        ),
+        hasLength(1),
+      );
+    });
+  });
+
   test('nom_archive est unique, mais plusieurs NULL sont permis', () async {
     final idSource = await base.insert('sources', <String, Object?>{
       'nom': 'MangaDex',
@@ -1338,4 +1542,491 @@ void main() {
       throwsA(isA<DatabaseException>()),
     );
   });
+
+  test(
+    'la migration 9 → 10 ne perd rien et ajoute champs_manuels vide',
+    () async {
+      final dossier = await Directory.systemTemp.createTemp(
+        'migration10_test_',
+      );
+      final chemin = p.join(dossier.path, 'version9.db');
+      try {
+        final version9 = await databaseFactoryFfi.openDatabase(
+          chemin,
+          options: OpenDatabaseOptions(
+            version: 9,
+            onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+            onCreate: (db, version) => appliquerMigrations(db, 0, 9),
+          ),
+        );
+        final idSource = await version9.insert('sources', <String, Object?>{
+          'nom': 'MangaDex',
+          'url_base': 'https://mangadex.org',
+          'type_source': 'mangaDex',
+        });
+        final idTitre = await version9.insert('titres', <String, Object?>{
+          'id_source': idSource,
+          'url_titre': 'https://mangadex.org/title/ruri',
+          'nom': 'Ruri Dragon',
+          'type_titre': 'manga',
+          'resume': 'Une lycéenne à cornes.',
+        });
+        await version9.insert('titres_alternatifs', <String, Object?>{
+          'id_titre': idTitre,
+          'nom': 'ルリドラゴン',
+          'langue': 'ja',
+        });
+        final idCategorie = await version9.insert(
+          'categories',
+          <String, Object?>{'nom': 'comedy'},
+        );
+        await version9.insert('titres_categories', <String, Object?>{
+          'id_titre': idTitre,
+          'id_categorie': idCategorie,
+        });
+        await version9.insert('chapitres', <String, Object?>{
+          'id_titre': idTitre,
+          'url_chapitre': 'https://mangadex.org/chapter/1',
+          'nom': 'Chapitre 1',
+          'numero': 1.0,
+        });
+
+        const tables = <String>[
+          'sources',
+          'titres',
+          'titres_sources',
+          'titres_alternatifs',
+          'chapitres',
+          'listes',
+          'categories',
+          'titres_categories',
+        ];
+        final avant = <String, List<Map<String, Object?>>>{
+          for (final table in tables)
+            table: await version9.query(table, orderBy: 'rowid'),
+        };
+        expect(await version9.getVersion(), 9);
+        await version9.close();
+
+        final version10 = await ouvrirBaseDeDonnees(
+          chemin: chemin,
+          fabrique: databaseFactoryFfi,
+        );
+        try {
+          expect(await version10.getVersion(), versionSchema);
+          for (final table in tables) {
+            final apres = sansMigrationsRecentes(
+              table,
+              await version10.query(table, orderBy: 'rowid'),
+            );
+            expect(
+              table == 'titres'
+                  ? sansColonnes(apres, const <String>{'champs_manuels'})
+                  : apres,
+              avant[table],
+              reason: 'table $table',
+            );
+          }
+          // Les titres existants n'ont aucun champ manuel.
+          final titres = await version10.query('titres');
+          expect(titres.single['champs_manuels'], '[]');
+          // Colonne NOT NULL : un NULL explicite est refusé.
+          await expectLater(
+            version10.update('titres', <String, Object?>{
+              'champs_manuels': null,
+            }),
+            throwsA(isA<DatabaseException>()),
+          );
+        } finally {
+          await version10.close();
+        }
+      } finally {
+        await dossier.delete(recursive: true);
+      }
+    },
+  );
+
+  test('la migration 11 crée Terminés en liste système, après En '
+      'attente', () async {
+    final lignes = await base.query('listes', orderBy: 'ordre');
+    // Valeurs écrites en dur dans la migration : alignées sur les constantes.
+    expect(lignes[4]['nom'], nomListeTermines);
+    expect(lignes[4]['est_systeme'], 1);
+    expect(lignes[4]['ordre'], ordreListeTermines);
+    expect(lignes.map((ligne) => ligne['nom']), nomsListesSysteme);
+    expect(ordreDerniereListeSysteme, ordreListeTermines);
+  });
+
+  group('migration 10 → 11', () {
+    /// Crée une base fichier en schéma v10 avec un titre, appelle
+    /// [preparer] pour y ajouter des listes, l'ouvre avec le code actuel et
+    /// passe la base mise à niveau à [verifier].
+    Future<void> monterDepuisV10(
+      Future<void> Function(Database base, int idTitre) preparer,
+      Future<void> Function(Database base, int idTitre) verifier,
+    ) async {
+      final dossier = await Directory.systemTemp.createTemp(
+        'migration11_test_',
+      );
+      final chemin = p.join(dossier.path, 'version10.db');
+      try {
+        final version10 = await databaseFactoryFfi.openDatabase(
+          chemin,
+          options: OpenDatabaseOptions(
+            version: 10,
+            onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+            onCreate: (db, version) => appliquerMigrations(db, 0, 10),
+          ),
+        );
+        final idSource = await version10.insert('sources', <String, Object?>{
+          'nom': 'MangaDex',
+          'url_base': 'https://mangadex.org',
+          'type_source': 'mangaDex',
+        });
+        final idTitre = await version10.insert('titres', <String, Object?>{
+          'id_source': idSource,
+          'url_titre': 'https://mangadex.org/title/ruri',
+          'nom': 'Ruri Dragon',
+          'type_titre': 'manga',
+        });
+        await version10.insert('chapitres', <String, Object?>{
+          'id_titre': idTitre,
+          'url_chapitre': 'https://mangadex.org/chapter/1',
+          'nom': 'Chapitre 1',
+          'numero': 1.0,
+          'est_lu': 1,
+        });
+        await preparer(version10, idTitre);
+        expect(await version10.getVersion(), 10);
+        await version10.close();
+
+        final version11 = await ouvrirBaseDeDonnees(
+          chemin: chemin,
+          fabrique: databaseFactoryFfi,
+        );
+        try {
+          expect(await version11.getVersion(), versionSchema);
+          await verifier(version11, idTitre);
+          expect(await version11.rawQuery('PRAGMA foreign_key_check'), isEmpty);
+        } finally {
+          await version11.close();
+        }
+      } finally {
+        await dossier.delete(recursive: true);
+      }
+    }
+
+    Future<Map<String, Object?>> listeParId(Database base, int id) async =>
+        (await base.query(
+          'listes',
+          where: 'id = ?',
+          whereArgs: <Object?>[id],
+        )).single;
+
+    Future<int> nombreTitres(Database base, Object? idListe) async =>
+        (await base.query(
+          'titres_listes',
+          where: 'id_liste = ?',
+          whereArgs: <Object?>[idListe],
+        )).length;
+
+    test('sans liste « Terminés » : ajoutée en position 4, les listes du '
+        'client décalées, rien d\'autre ne change', () async {
+      late int idLus;
+      late int idPlusTard;
+      late Map<String, List<Map<String, Object?>>> avant;
+      const tables = <String>[
+        'sources',
+        'titres',
+        'titres_sources',
+        'chapitres',
+        'titres_listes',
+      ];
+      await monterDepuisV10(
+        (base, idTitre) async {
+          idLus = await base.insert('listes', <String, Object?>{
+            'nom': 'Lus en 2026',
+            'ordre': 4,
+          });
+          idPlusTard = await base.insert('listes', <String, Object?>{
+            'nom': 'Plus tard',
+            'ordre': 5,
+          });
+          await base.insert('titres_listes', <String, Object?>{
+            'id_titre': idTitre,
+            'id_liste': idLus,
+          });
+          avant = <String, List<Map<String, Object?>>>{
+            for (final table in <String>[...tables, 'listes'])
+              table: await base.query(table, orderBy: 'rowid'),
+          };
+        },
+        (base, idTitre) async {
+          for (final table in tables) {
+            expect(
+              sansMigrationsRecentes(
+                table,
+                await base.query(table, orderBy: 'rowid'),
+              ),
+              avant[table],
+              reason: 'table $table',
+            );
+          }
+          expect(
+            sansMigrationsRecentes(
+              'listes',
+              await base.query('listes', orderBy: 'rowid'),
+            ),
+            avant['listes'],
+          );
+          final listes = await base.query('listes', orderBy: 'ordre');
+          expect(
+            listes.map((l) => (l['nom'], l['est_systeme'], l['ordre'])),
+            <(Object?, Object?, Object?)>[
+              (nomListeFavoris, 1, 0),
+              (nomListeSuivis, 1, 1),
+              (nomListePlanifie, 1, 2),
+              (nomListeEnAttente, 1, 3),
+              (nomListeTermines, 1, ordreListeTermines),
+              ('Lus en 2026', 0, 5),
+              ('Plus tard', 0, 6),
+            ],
+          );
+          expect(await nombreTitres(base, listes[4]['id']), 0);
+          expect(await nombreTitres(base, idLus), 1);
+          expect((await listeParId(base, idPlusTard))['ordre'], 6);
+        },
+      );
+    });
+
+    test('un ordre choisi par le client est conservé', () async {
+      // Ordre personnalisé (DepotListes.enregistrerOrdre) : « En attente »
+      // déplacée tout à la fin, après une liste du client.
+      await monterDepuisV10(
+        (base, idTitre) async {
+          await base.update(
+            'listes',
+            <String, Object?>{'ordre': 5},
+            where: 'nom = ?',
+            whereArgs: <Object?>[nomListeEnAttente],
+          );
+          await base.insert('listes', <String, Object?>{
+            'nom': 'Lus en 2026',
+            'ordre': 3,
+          });
+          await base.insert('listes', <String, Object?>{
+            'nom': 'Plus tard',
+            'ordre': 4,
+          });
+        },
+        (base, idTitre) async {
+          final listes = await base.query('listes', orderBy: 'ordre');
+          expect(
+            listes.map((l) => (l['nom'], l['ordre'])),
+            <(Object?, Object?)>[
+              (nomListeFavoris, 0),
+              (nomListeSuivis, 1),
+              (nomListePlanifie, 2),
+              ('Lus en 2026', 3),
+              (nomListeTermines, 4),
+              ('Plus tard', 5),
+              (nomListeEnAttente, 6),
+            ],
+          );
+        },
+      );
+    });
+
+    test('une liste « terminés » du client est renommée « Terminés (perso) » '
+        'avec ses titres', () async {
+      late int idClient;
+      await monterDepuisV10(
+        (base, idTitre) async {
+          idClient = await base.insert('listes', <String, Object?>{
+            'nom': 'terminés',
+            'ordre': 4,
+          });
+          await base.insert('titres_listes', <String, Object?>{
+            'id_titre': idTitre,
+            'id_liste': idClient,
+          });
+        },
+        (base, idTitre) async {
+          final perso = await listeParId(base, idClient);
+          expect(perso['nom'], 'Terminés (perso)');
+          expect(perso['est_systeme'], 0);
+          expect(perso['ordre'], 5);
+          expect(await nombreTitres(base, idClient), 1);
+          // La liste système est créée à côté, vide.
+          final systeme = (await base.query(
+            'listes',
+            where: 'nom = ?',
+            whereArgs: <Object?>[nomListeTermines],
+          )).single;
+          expect(systeme['id'], isNot(idClient));
+          expect(systeme['est_systeme'], 1);
+          expect(systeme['ordre'], ordreListeTermines);
+          expect(await nombreTitres(base, systeme['id']), 0);
+          expect(await base.query('listes'), hasLength(6));
+        },
+      );
+    });
+
+    test('le nouveau nom est numéroté si « Terminés (perso) » existe '
+        'déjà', () async {
+      late int idClient;
+      await monterDepuisV10(
+        (base, idTitre) async {
+          idClient = await base.insert('listes', <String, Object?>{
+            'nom': 'TERMINéS',
+            'ordre': 4,
+          });
+          await base.insert('listes', <String, Object?>{
+            'nom': 'terminés (perso)',
+            'ordre': 5,
+          });
+        },
+        (base, idTitre) async {
+          expect(
+            (await listeParId(base, idClient))['nom'],
+            'Terminés (perso 2)',
+          );
+          final noms = (await base.query('listes'))
+              .map((liste) => liste['nom'])
+              .toSet();
+          expect(
+            noms,
+            containsAll(<String>[
+              nomListeTermines,
+              'terminés (perso)',
+              'Terminés (perso 2)',
+            ]),
+          );
+        },
+      );
+    });
+  });
+
+  test('la migration 11 → 12 ne perd rien et ajoute description_perso '
+      'à NULL', () async {
+    final dossier = await Directory.systemTemp.createTemp('migration12_test_');
+    final chemin = p.join(dossier.path, 'version11.db');
+    try {
+      final version11 = await databaseFactoryFfi.openDatabase(
+        chemin,
+        options: OpenDatabaseOptions(
+          version: 11,
+          onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+          onCreate: (db, version) => appliquerMigrations(db, 0, 11),
+        ),
+      );
+      final idSource = await version11.insert('sources', <String, Object?>{
+        'nom': 'MangaDex',
+        'url_base': 'https://mangadex.org',
+        'type_source': 'mangaDex',
+      });
+      final idTitre = await version11.insert('titres', <String, Object?>{
+        'id_source': idSource,
+        'url_titre': 'https://mangadex.org/title/ruri',
+        'nom': 'Ruri Dragon',
+        'type_titre': 'manga',
+        'resume': 'Une lycéenne à cornes.',
+        'champs_manuels': '["nom"]',
+      });
+      await version11.insert('chapitres', <String, Object?>{
+        'id_titre': idTitre,
+        'url_chapitre': 'https://mangadex.org/chapter/1',
+        'nom': 'Chapitre 1',
+        'numero': 1.0,
+        'est_lu': 1,
+      });
+      const tables = <String>[
+        'sources',
+        'titres',
+        'titres_sources',
+        'chapitres',
+        'listes',
+      ];
+      final avant = <String, List<Map<String, Object?>>>{
+        for (final table in tables)
+          table: await version11.query(table, orderBy: 'rowid'),
+      };
+      expect(
+        (await version11.rawQuery('PRAGMA table_info(titres)'))
+            .map((colonne) => colonne['name']),
+        isNot(contains('description_perso')),
+      );
+      await version11.close();
+
+      final version12 = await ouvrirBaseDeDonnees(
+        chemin: chemin,
+        fabrique: databaseFactoryFfi,
+      );
+      try {
+        expect(await version12.getVersion(), versionSchema);
+        for (final table in tables) {
+          final apres = await version12.query(table, orderBy: 'rowid');
+          expect(
+            table == 'titres'
+                ? sansColonnes(apres, const <String>{'description_perso'})
+                : apres,
+            avant[table],
+            reason: 'table $table',
+          );
+        }
+        // Les titres existants n'ont pas de description personnelle.
+        final titre = (await version12.query('titres')).single;
+        expect(titre.containsKey('description_perso'), isTrue);
+        expect(titre['description_perso'], isNull);
+        expect(await version12.rawQuery('PRAGMA foreign_key_check'), isEmpty);
+      } finally {
+        await version12.close();
+      }
+    } finally {
+      await dossier.delete(recursive: true);
+    }
+  });
+}
+
+/// Annule, dans les [lignes] de [table] lues après toutes les migrations,
+/// l'effet des migrations 11 et 12 : sert à comparer une table avant et
+/// après une migration plus ancienne.
+///
+/// - Migration 11 sur `listes` : ligne « Terminés » ajoutée en position 4,
+///   lignes suivantes décalées d'un cran.
+/// - Migration 12 sur `titres` : colonne `description_perso` retirée.
+///
+/// Les autres tables sont renvoyées telles quelles.
+List<Map<String, Object?>> sansMigrationsRecentes(
+  String table,
+  List<Map<String, Object?>> lignes,
+) {
+  if (table == 'titres') {
+    return sansColonnes(lignes, const <String>{'description_perso'});
+  }
+  if (table != 'listes') {
+    return lignes;
+  }
+  return <Map<String, Object?>>[
+    for (final ligne in lignes)
+      if (!(ligne['nom'] == nomListeTermines && ligne['est_systeme'] == 1))
+        <String, Object?>{
+          ...ligne,
+          if ((ligne['ordre']! as int) > ordreListeTermines)
+            'ordre': (ligne['ordre']! as int) - 1,
+        },
+  ];
+}
+
+/// Copie de [lignes] sans les [colonnes] données : sert à comparer une
+/// table avant et après une migration qui lui a ajouté des colonnes.
+List<Map<String, Object?>> sansColonnes(
+  List<Map<String, Object?>> lignes,
+  Set<String> colonnes,
+) {
+  return <Map<String, Object?>>[
+    for (final ligne in lignes)
+      Map<String, Object?>.of(ligne)
+        ..removeWhere((cle, _) => colonnes.contains(cle)),
+  ];
 }

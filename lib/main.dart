@@ -20,16 +20,19 @@ import 'donnees/base_de_donnees.dart';
 import 'donnees/depot_categories.dart';
 import 'donnees/depot_chapitres.dart';
 import 'donnees/depot_listes.dart';
+import 'donnees/depot_equivalences_categories.dart';
 import 'donnees/depot_parametres.dart';
 import 'donnees/depot_sources.dart';
 import 'donnees/depot_telechargements.dart';
 import 'donnees/depot_titres.dart';
 import 'donnees/depot_titres_sources.dart';
+import 'donnees/gestionnaire_transactions.dart';
 import 'donnees/stockage_telechargements.dart';
 import 'ecrans/ecran_accueil.dart';
 import 'ecrans/ecran_erreur_demarrage.dart';
 import 'etat/etat_bibliotheque.dart';
 import 'etat/etat_export.dart';
+import 'etat/etat_dossier_chapitres.dart';
 import 'etat/etat_couvertures.dart';
 import 'etat/etat_mises_a_jour.dart';
 import 'etat/etat_parametres.dart';
@@ -40,6 +43,7 @@ import 'etat/etat_telechargements.dart';
 import 'services/constantes_services.dart' show nomDossierRapports;
 import 'services/service_ajout_site.dart';
 import 'services/service_bibliotheque.dart';
+import 'services/service_categories.dart';
 import 'services/service_export.dart';
 import 'services/service_import.dart';
 import 'services/planification_mises_a_jour.dart';
@@ -95,7 +99,15 @@ class ServicesApplication {
     required this.serviceRapportsErreur,
     required this.serviceExport,
     required this.serviceImport,
+    required this.serviceCategories,
+    required this.serviceDossierChapitres,
   });
+
+  /// Dossier des chapitres (choix, déplacement, accès au NAS).
+  final ServiceDossierChapitres serviceDossierChapitres;
+
+  /// Catégories regroupées (groupes, suggestions, filtres).
+  final ServiceCategories serviceCategories;
 
   /// Export des titres et des sites (section « Sauvegarde et export »).
   final ServiceExport serviceExport;
@@ -148,7 +160,10 @@ ServicesApplication assemblerServices(
   Database base, {
   ClientHttpPoli? client,
   required StockageTelechargements stockage,
+  String? dossierApplication,
 }) {
+  // Rapports et exports : dossier de l'application, jamais le NAS.
+  final racineApplication = dossierApplication ?? stockage.dossierRacine;
   // Un seul client HTTP par isolat : le délai minimal entre deux requêtes
   // vers un même domaine est ainsi partagé par tous les services
   // (PLAYBOOK.md section 6).
@@ -164,6 +179,8 @@ ServicesApplication assemblerServices(
   final serviceAjoutSite = ServiceAjoutSite(
     depotSources,
     DetecteurTypeSite(clientUtilise),
+    // Vérifie qu'une page générique collée est lisible avant d'ajouter le site.
+    client: clientUtilise,
   );
   final serviceParametres = ServiceParametres(DepotParametres(base));
   final serviceBibliotheque = ServiceBibliotheque(
@@ -202,6 +219,8 @@ ServicesApplication assemblerServices(
     client: clientUtilise,
     serviceParametres: serviceParametres,
     depotTitresSources: depotTitresSources,
+    // Repère « déplacement des archives inachevé », contrôlé au démarrage.
+    depotParametres: DepotParametres(base),
   );
   return ServicesApplication(
     base: base,
@@ -211,26 +230,24 @@ ServicesApplication assemblerServices(
     serviceMisesAJour: serviceMisesAJour,
     serviceParametres: serviceParametres,
     serviceTelechargement: serviceTelechargement,
-    // Rapports d'erreur à côté des archives :
-    // `<dossier racine>/rapports/` (par défaut
+    // Rapports d'erreur : `<dossier de l'application>/rapports/` (par défaut
     // `Documents/bibliotheque_perso/rapports/`).
     serviceRapportsErreur: ServiceRapportsErreur(
-      chemins.join(stockage.dossierRacine, nomDossierRapports),
+      chemins.join(racineApplication, nomDossierRapports),
       versionApplication: versionApplication,
     ),
-    // Exports à côté des rapports : `<dossier racine>/exports/`.
+    // Exports à côté des rapports : `<dossier de l'application>/exports/`.
     serviceExport: ServiceExport(
       depotSources: depotSources,
       depotTitres: depotTitres,
       depotChapitres: depotChapitres,
       depotListes: depotListes,
       depotCategories: DepotCategories(base),
-      dossierExports: ServiceExport.cheminDossierExports(
-        stockage.dossierRacine,
-      ),
+      dossierExports: ServiceExport.cheminDossierExports(racineApplication),
       serviceParametres: serviceParametres,
       versionApplication: versionApplication,
       depotTitresSources: depotTitresSources,
+      depotEquivalences: DepotEquivalencesCategories(base),
     ),
     // Réimport d'un export JSON (Paramètres → Sauvegarde et export).
     serviceImport: ServiceImport(
@@ -240,6 +257,17 @@ ServicesApplication assemblerServices(
       depotListes: depotListes,
       depotCategories: DepotCategories(base),
       serviceParametres: serviceParametres,
+      // Tout ou rien : l'import entier passe par une seule transaction.
+      depotParametres: DepotParametres(base),
+      gestionnaireTransactions: GestionnaireTransactions(base),
+      depotEquivalences: DepotEquivalencesCategories(base),
+    ),
+    // Catégories regroupées et filtres de la bibliothèque.
+    serviceCategories: ServiceCategories.surBase(base),
+    // Dossier des chapitres (Paramètres) et bandeau « dossier inaccessible ».
+    serviceDossierChapitres: ServiceDossierChapitres(
+      serviceTelechargement: serviceTelechargement,
+      depotParametres: DepotParametres(base),
     ),
   );
 }
@@ -263,10 +291,16 @@ Future<ServicesApplication> construireServices({
     fabrique: fabrique,
     annulerTransactionOuverte: annulerTransactionOuverte,
   );
+  // Dossier de l'application (rapports, exports) : toujours le dossier par
+  // défaut, même quand les chapitres sont sur un NAS (accessibles NAS éteint).
+  final String dossierApplication;
   final StockageTelechargements stockage;
   try {
+    dossierApplication =
+        dossierTelechargements ?? await cheminParDefautDossierTelechargements();
+    // Chapitres : dossier choisi par le client (Paramètres), sinon défaut.
     stockage = dossierTelechargements == null
-        ? await StockageTelechargements.parDefaut()
+        ? await ServiceDossierChapitres.creerStockage(DepotParametres(base))
         : StockageTelechargements(dossierTelechargements);
   } catch (_) {
     // Sans dossier de téléchargement, l'application ne démarre pas : on ne
@@ -284,7 +318,12 @@ Future<ServicesApplication> construireServices({
     depotSources: DepotSources(base),
     serviceParametres: ServiceParametres(DepotParametres(base)),
   ).assurerSourcesParDefaut();
-  return assemblerServices(base, client: client, stockage: stockage);
+  return assemblerServices(
+    base,
+    client: client,
+    stockage: stockage,
+    dossierApplication: dossierApplication,
+  );
 }
 
 /// Point d'entrée de la tâche de fond Android, appelé par `workmanager`.
@@ -498,6 +537,8 @@ Future<void> demarrer() async {
       serviceRapportsErreur: services.serviceRapportsErreur,
       serviceExport: services.serviceExport,
       serviceImport: services.serviceImport,
+      serviceCategories: services.serviceCategories,
+      serviceDossierChapitres: services.serviceDossierChapitres,
     );
   } catch (erreur, pile) {
     debugPrint('Démarrage impossible : $erreur\n$pile');
@@ -524,6 +565,8 @@ Widget construireApplication({
   ServiceRapportsErreur? serviceRapportsErreur,
   ServiceExport? serviceExport,
   ServiceImport? serviceImport,
+  ServiceCategories? serviceCategories,
+  ServiceDossierChapitres? serviceDossierChapitres,
 }) {
   // Les états sont fournis au-dessus de MaterialApp : les écrans ouverts par
   // Navigator et les boîtes de dialogue y ont accès.
@@ -553,6 +596,7 @@ Widget construireApplication({
           serviceBibliotheque,
           serviceTelechargement: serviceTelechargement,
           serviceParametres: serviceParametres,
+          serviceCategories: serviceCategories,
         )..charger(),
       ),
       ChangeNotifierProvider<EtatParutions>(
@@ -570,6 +614,13 @@ Widget construireApplication({
             EtatTelechargements(serviceTelechargement, serviceBibliotheque)
               ..charger(),
       ),
+      // Sans service (tests), la section « Dossier des chapitres » et les
+      // bandeaux de l'accueil sont masqués.
+      if (serviceDossierChapitres != null)
+        ChangeNotifierProvider<EtatDossierChapitres>(
+          create: (_) =>
+              EtatDossierChapitres(serviceDossierChapitres)..charger(),
+        ),
       ChangeNotifierProvider<EtatParametres>(
         create: (_) => EtatParametres(
           serviceParametres,

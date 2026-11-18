@@ -6,16 +6,19 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
-import '../modeles/categorie.dart';
 import '../modeles/constantes.dart';
 import '../modeles/liste_lecture.dart';
+import '../modeles/source.dart';
 import '../modeles/titre.dart';
 import '../services/classement_listes.dart';
 import '../services/service_bibliotheque.dart';
+import '../services/service_categories.dart';
 import '../services/service_parametres.dart';
+import '../services/service_sources_par_defaut.dart';
 import '../services/service_telechargement.dart';
 import 'constantes_etat.dart';
 import 'description_erreur.dart';
+import 'etat_categories.dart';
 import 'etat_titre.dart';
 
 /// État d'une catégorie dans le filtre de la bibliothèque (trois états,
@@ -33,7 +36,7 @@ enum EtatFiltreCategorie {
 
 /// Catégories qui commencent par la même [initiale] (panneau des
 /// catégories).
-typedef GroupeCategories = ({String initiale, List<Categorie> categories});
+typedef CategoriesParInitiale = ({String initiale, List<Categorie> categories});
 
 /// Titres de la bibliothèque, filtrés par liste, par catégories, par niveau
 /// de contenu et par recherche.
@@ -44,19 +47,35 @@ class EtatBibliotheque extends EtatNotifiant {
   /// hors-ligne des chapitres, lecteur). [serviceParametres] fournit le
   /// filtre de niveau de contenu choisi par le client ; sans lui, tous les
   /// titres sont affichés.
+  ///
+  /// [serviceCategories] apporte les catégories regroupées : un groupe de
+  /// même sens (« survie », « survival ») n'est qu'une entrée du panneau des
+  /// filtres, le filtre se fait en une seule lecture, et la fiche d'un titre
+  /// n'affiche pas de doublon. Sans lui (anciens tests), chaque catégorie
+  /// est une entrée et le filtre lit la base une fois par catégorie.
   EtatBibliotheque(
     this._service, {
     this._serviceTelechargement,
     this._serviceParametres,
+    this._serviceCategories,
   });
 
   final ServiceBibliotheque _service;
   final ServiceTelechargement? _serviceTelechargement;
   final ServiceParametres? _serviceParametres;
+  final ServiceCategories? _serviceCategories;
+
+  /// État de la gestion des groupes (Paramètres), créé à la demande et
+  /// gardé pour la session (suggestions ignorées).
+  EtatCategories? _etatCategories;
 
   List<Titre> _titres = const <Titre>[];
   List<ListeLecture> _listes = const <ListeLecture>[];
   List<Categorie> _categories = const <Categorie>[];
+
+  /// Autres noms des groupes, par identifiant de référence (« survival »
+  /// sous « survie »).
+  Map<int, List<String>> _autresNoms = const <int, List<String>>{};
   int? _idListe;
   Set<int> _idsCategories = const <int>{};
   Set<int> _idsExclues = const <int>{};
@@ -80,12 +99,35 @@ class EtatBibliotheque extends EtatNotifiant {
   /// Titres qui correspondent aux filtres.
   List<Titre> get titres => _titres;
 
-  /// Toutes les listes (système d'abord : Favoris, Suivis, Planifié, En
-  /// attente).
+  /// Toutes les listes, dans l'ordre choisi par le client (système d'abord
+  /// tant qu'il ne l'a pas changé : Favoris, Suivis, Planifié, En attente,
+  /// Terminés).
   List<ListeLecture> get listes => _listes;
 
-  /// Toutes les catégories connues.
+  /// Catégories proposées dans le filtre : avec les catégories regroupées,
+  /// une seule entrée par groupe (sa référence) ; sinon toutes.
   List<Categorie> get categories => _categories;
+
+  /// `true` si les catégories regroupées sont disponibles (section des
+  /// Paramètres, filtres par groupe).
+  bool get gereCategoriesRegroupees => _serviceCategories != null;
+
+  /// Autres noms du groupe dont [idCategorie] est la référence (vide si ce
+  /// n'est pas une référence), triés.
+  List<String> autresNoms(int idCategorie) =>
+      _autresNoms[idCategorie] ?? const <String>[];
+
+  /// État de la gestion des catégories regroupées, partagé pour la session
+  /// (créé au premier appel), ou `null` sans service de catégories. Chaque
+  /// modification relit la bibliothèque et ses filtres.
+  EtatCategories? get etatCategories {
+    final service = _serviceCategories;
+    if (service == null || estLibere) return null;
+    return _etatCategories ??= EtatCategories(
+      service,
+      surModification: charger,
+    );
+  }
 
   /// Liste choisie comme filtre, ou `null` pour toutes.
   int? get idListeChoisie => _idListe;
@@ -158,12 +200,12 @@ class EtatBibliotheque extends EtatNotifiant {
   /// `true` si le chargement a abouti sans aucun titre à afficher.
   bool get estVide => _estCharge && _erreur == null && _titres.isEmpty;
 
-  /// Listes cochées par défaut lors de l'ajout d'un titre : Favoris et Suivis.
+  /// Listes cochées par défaut lors de l'ajout d'un titre : Suivis
+  /// seulement (retour X3 du client sur la 0.2.1-test : Favoris reste
+  /// proposée, mais décochée).
   Set<int> get idsListesParDefaut => <int>{
     for (final liste in _listes)
-      if (liste.id != null &&
-          (liste.nom == nomListeFavoris || liste.nom == nomListeSuivis))
-        liste.id!,
+      if (liste.id != null && liste.nom == nomListeSuivis) liste.id!,
   };
 
   /// `true` si [liste] est tenue automatiquement par l'application (« En
@@ -171,17 +213,126 @@ class EtatBibliotheque extends EtatNotifiant {
   bool estListeAutomatique(ListeLecture liste) =>
       ClassementListes.listesAutomatiques.contains(liste.nom);
 
+  /// `true` si [liste] peut être renommée et supprimée par le client (liste
+  /// personnelle) ; les listes système (Favoris, Suivis, Planifié, En
+  /// attente, Terminés) ne le peuvent pas.
+  bool estListeModifiable(ListeLecture liste) =>
+      liste.id != null && !liste.estSysteme;
+
+  // ------------------------------------------- Listes personnelles (X4)
+
+  /// Crée une liste personnelle nommée [nom], puis relit la bibliothèque.
+  /// Le service nettoie le nom et refuse un nom vide, trop long ou déjà
+  /// pris.
+  Future<ResultatAction<ListeLecture>> creerListe(String nom) =>
+      _modifierListes(() => _service.creerListe(nom));
+
+  /// Renomme la liste personnelle [idListe], puis relit la bibliothèque.
+  Future<ResultatAction<ListeLecture>> renommerListe(int idListe, String nom) =>
+      _modifierListes(() => _service.renommerListe(idListe, nom));
+
+  /// Supprime la liste personnelle [idListe] (ses titres restent dans la
+  /// bibliothèque), puis relit la bibliothèque. Un filtre posé sur cette
+  /// liste est abandonné au rechargement.
+  Future<ResultatAction<bool>> supprimerListe(int idListe) =>
+      _modifierListes(() async {
+        await _service.supprimerListe(idListe);
+        return true;
+      });
+
+  /// Enregistre l'ordre d'affichage des listes ([idsDansLOrdre] : de la
+  /// première à la dernière).
+  ///
+  /// L'ordre est appliqué tout de suite à l'écran (glisser-déposer sans
+  /// saut), puis enregistré ; en cas d'échec, la bibliothèque est relue et
+  /// l'ancien ordre revient.
+  Future<ResultatAction<bool>> reordonnerListes(List<int> idsDansLOrdre) async {
+    final parId = <int, ListeLecture>{
+      for (final liste in _listes)
+        if (liste.id != null) liste.id!: liste,
+    };
+    _listes = <ListeLecture>[
+      for (final id in idsDansLOrdre) ?parId[id],
+      for (final liste in _listes)
+        if (!idsDansLOrdre.contains(liste.id)) liste,
+    ];
+    notifier();
+    try {
+      _listes = await _service.reordonnerListes(idsDansLOrdre);
+      notifier();
+      return const ResultatAction<bool>.reussite(true);
+    } catch (erreur, pile) {
+      await charger();
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    }
+  }
+
+  /// Déroulement commun aux changements de listes : action du service puis
+  /// relecture de la bibliothèque (puces, filtre).
+  Future<ResultatAction<T>> _modifierListes<T>(
+    Future<T> Function() action,
+  ) async {
+    try {
+      final resultat = await action();
+      await charger();
+      return ResultatAction<T>.reussite(resultat);
+    } catch (erreur, pile) {
+      return ResultatAction<T>.echec(DescriptionErreur.depuis(erreur, pile));
+    }
+  }
+
+  // ------------------------------------------ Recherche sur MangaDex (X6)
+
+  /// Cherche [requete] sur MangaDex (onglet « Rechercher » du dialogue
+  /// d'ajout). Les résultats ne sont pas enregistrés : le client en choisit
+  /// un, qui est ensuite ajouté par son adresse ([ajouterTitre]).
+  ///
+  /// Le site MangaDex configuré est utilisé s'il existe, sinon la source
+  /// MangaDex par défaut (non enregistrée) : une recherche ne crée rien.
+  Future<ResultatAction<List<Titre>>> rechercherSurMangaDex(
+    String requete,
+  ) async {
+    final texte = requete.trim();
+    if (texte.isEmpty) {
+      return const ResultatAction<List<Titre>>.reussite(<Titre>[]);
+    }
+    try {
+      final sources = await _service.chargerSources();
+      final source =
+          sources
+              .where((source) => source.typeSource == TypeSource.mangaDex)
+              .firstOrNull ??
+          sourcesParDefaut
+              .firstWhere((defaut) => defaut.typeSource == TypeSource.mangaDex)
+              .versSource();
+      return ResultatAction<List<Titre>>.reussite(
+        await _service.rechercherSurSource(source, texte),
+      );
+    } catch (erreur, pile) {
+      return ResultatAction<List<Titre>>.echec(
+        DescriptionErreur.depuis(erreur, pile),
+      );
+    }
+  }
+
   /// Catégories qui contiennent [filtre] (sans tenir compte de la casse ni
   /// des accents), regroupées par initiale (« A », « B »… ; « # » pour un
   /// chiffre ou un symbole) et triées : le panneau des catégories reste
   /// lisible même avec des centaines de tags.
-  List<GroupeCategories> grouperCategories(String filtre) {
+  ///
+  /// Une référence de groupe est aussi trouvée par ses autres noms :
+  /// chercher « survival » montre « survie ».
+  List<CategoriesParInitiale> grouperCategories(String filtre) {
     final recherche = sansAccents(filtre.trim().toLowerCase());
+    bool correspond(String nom) =>
+        sansAccents(nom.toLowerCase()).contains(recherche);
     final retenues =
         _categories
             .where(
               (categorie) =>
-                  sansAccents(categorie.nom.toLowerCase()).contains(recherche),
+                  correspond(categorie.nom) ||
+                  (categorie.id != null &&
+                      autresNoms(categorie.id!).any(correspond)),
             )
             .toList()
           ..sort(
@@ -203,7 +354,7 @@ class EtatBibliotheque extends EtatNotifiant {
         if (b == '#') return -1;
         return a.compareTo(b);
       });
-    return <GroupeCategories>[
+    return <CategoriesParInitiale>[
       for (final cle in cles) (initiale: cle, categories: groupes[cle]!),
     ];
   }
@@ -243,7 +394,28 @@ class EtatBibliotheque extends EtatNotifiant {
     notifier();
     try {
       final listes = await _service.chargerListes();
-      final categories = await _service.chargerCategories();
+      final serviceCategories = _serviceCategories;
+      final List<Categorie> categories;
+      // Catégorie rattachée → sa référence : un filtre posé sur une
+      // catégorie qui vient d'être regroupée suit son groupe.
+      final versReference = <int, int>{};
+      final autresNoms = <int, List<String>>{};
+      if (serviceCategories == null) {
+        categories = await _service.chargerCategories();
+      } else {
+        categories = await serviceCategories.chargerCategoriesEffectives();
+        for (final groupe in await serviceCategories.chargerGroupes()) {
+          final idReference = groupe.reference.id;
+          if (idReference == null) continue;
+          autresNoms[idReference] = <String>[
+            for (final categorie in groupe.rattachees) categorie.nom,
+          ]..sort();
+          for (final categorie in groupe.rattachees) {
+            final id = categorie.id;
+            if (id != null) versReference[id] = idReference;
+          }
+        }
+      }
       final niveaux = await _serviceParametres?.chargerNiveauxContenu();
       // Un filtre qui désigne une liste ou une catégorie disparue est
       // abandonné, sinon la grille resterait vide sans raison visible.
@@ -254,8 +426,14 @@ class EtatBibliotheque extends EtatNotifiant {
         for (final categorie in categories)
           if (categorie.id != null) categorie.id!,
       };
-      final incluses = _idsCategories.where(idsConnus.contains).toSet();
-      final exclues = _idsExclues.where(idsConnus.contains).toSet();
+      Set<int> connues(Set<int> ids) =>
+          <int>{for (final id in ids) versReference[id] ?? id}
+              .where(idsConnus.contains)
+              .toSet();
+      final exclues = connues(_idsExclues);
+      // Deux catégories regroupées, l'une incluse et l'autre exclue : comme
+      // dans le panneau, l'exclusion l'emporte.
+      final incluses = connues(_idsCategories).difference(exclues);
       final titres = await _chargerTitresFiltres(
         idListe: idListe,
         incluses: incluses,
@@ -267,6 +445,7 @@ class EtatBibliotheque extends EtatNotifiant {
       }
       _listes = listes;
       _categories = categories;
+      _autresNoms = autresNoms;
       _niveauxContenu = niveaux;
       _idListe = idListe;
       _idsCategories = incluses;
@@ -287,12 +466,12 @@ class EtatBibliotheque extends EtatNotifiant {
   /// Titres filtrés : toutes les catégories [incluses] et aucune des
   /// [exclues] (demande du client).
   ///
-  /// Le service ne filtre que sur une catégorie à la fois : une lecture par
-  /// catégorie donne les titres de chacune, puis on garde l'intersection
+  /// Avec le service des catégories, une seule lecture fait tout (chaque
+  /// filtre porte sur le groupe de la catégorie). Sans lui (repli des
+  /// anciens tests), le service de la bibliothèque ne filtre que sur une
+  /// catégorie à la fois : une lecture par catégorie, puis l'intersection
   /// des incluses moins l'union des exclues, dans l'ordre de la lecture
   /// sans filtre de catégorie.
-  // LIMITE : une lecture en base par catégorie filtrée ; une méthode de
-  // service « inclure / exclure » ferait tout en une requête.
   Future<List<Titre>> _chargerTitresFiltres({
     required int? idListe,
     required Set<int> incluses,
@@ -300,6 +479,16 @@ class EtatBibliotheque extends EtatNotifiant {
     required List<String>? niveaux,
   }) async {
     final texte = _recherche.trim();
+    final serviceCategories = _serviceCategories;
+    if (serviceCategories != null) {
+      return serviceCategories.chargerTitresFiltres(
+        recherche: texte.isEmpty ? null : texte,
+        idListe: idListe,
+        idsCategoriesIncluses: incluses,
+        idsCategoriesExclues: exclues,
+        niveauxContenu: niveaux,
+      );
+    }
     Future<List<Titre>> lire(int? idCategorie) => _service.chargerTitres(
       recherche: texte.isEmpty ? null : texte,
       idListe: idListe,
@@ -500,10 +689,13 @@ class EtatBibliotheque extends EtatNotifiant {
     _service,
     idTitre,
     serviceTelechargement: _serviceTelechargement,
+    serviceCategories: _serviceCategories,
   );
 
   @override
   void dispose() {
+    _etatCategories?.dispose();
+    _etatCategories = null;
     _minuterieRecherche?.cancel();
     // Personne ne doit rester bloqué sur une recherche qui n'aura pas lieu.
     final attente = _rechercheEnAttente;

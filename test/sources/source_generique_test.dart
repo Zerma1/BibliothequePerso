@@ -379,10 +379,66 @@ void main() {
       expect(ConfigurationGenerique.depuisJson('  ').estVide, isTrue);
     });
 
-    test('sélecteur CSS invalide : ErreurSource claire', () {
-      final mauvais = ConfigurationGenerique.depuisJson(
-        '{"selecteurLiensChapitres": "a[["}',
+    test('sélecteur CSS invalide refusé par depuisJson : libellé et '
+        'sélecteur nommés', () {
+      for (final (cle, selecteur, libelle) in <(String, String, String)>[
+        ('selecteurLiensChapitres', 'a[[', 'Liens des chapitres'),
+        ('selecteurTitre', 'h1[class=', 'Nom du titre'),
+        ('selecteurImagesChapitre', 'img:hover', "Images d'un chapitre"),
+        ('selecteurCategories', '.tags li:nth-child(2n)', 'Catégories'),
+      ]) {
+        expect(
+          () => ConfigurationGenerique.depuisJson(
+            jsonEncode(<String, String>{cle: selecteur}),
+            url: 'https://exemple.org/',
+          ),
+          throwsA(
+            isA<ErreurSource>()
+                .having((e) => e.typeDetecte, 'type', TypeSource.generique)
+                .having((e) => e.url, 'url', 'https://exemple.org/')
+                .having((e) => e.message, 'message', contains(libelle))
+                .having(
+                  (e) => e.message,
+                  'message',
+                  contains('« $selecteur »'),
+                ),
+          ),
+          reason: selecteur,
+        );
+      }
+    });
+
+    test('erreurSelecteur : motif du refus, ou null si accepté', () {
+      for (final valide in <String>[
+        'h1',
+        '.liste a',
+        'div.pages > img',
+        'a[href*="chapter"]',
+        'ul li:first-child a',
+        'h2.nom, h1',
+        'img:not(.pub)',
+      ]) {
+        expect(
+          ConfigurationGenerique.erreurSelecteur(valide),
+          isNull,
+          reason: valide,
+        );
+      }
+      expect(
+        ConfigurationGenerique.erreurSelecteur('a[['),
+        contains('syntaxe'),
       );
+      expect(
+        ConfigurationGenerique.erreurSelecteur('a:hover'),
+        contains('non pris en charge'),
+      );
+      expect(ConfigurationGenerique.erreurSelecteur('  '), isNotNull);
+    });
+
+    test('sélecteur CSS invalide à la lecture : ErreurSource claire', () {
+      // Réglages construits sans depuisJson (qui les refuserait) : la
+      // lecture garde sa propre vérification.
+      const mauvais = ConfigurationGenerique(selecteurLiensChapitres: 'a[[');
       expect(
         () => SourceGenerique.analyserChapitres(
           html,
@@ -605,5 +661,93 @@ void main() {
       SourceGenerique.imagesChapitre(parse(htmlAccueil), Uri.parse(urlRacine)),
       isEmpty,
     );
+  });
+
+  group('pages qui ne sont pas des sites de lecture (retour 0.2.1-test)', () {
+    // Page Wikipédia enregistrée le 2026-11-18 (une seule requête, avec le
+    // User-Agent de l'application) : le client attendait un refus.
+    final htmlWikipedia = lireExemple(
+      'exemples_html/generique_wikipedia_ruri_dragon.html',
+    );
+    final urlWikipedia = Uri.parse('https://fr.wikipedia.org/wiki/Ruri_Dragon');
+
+    test('Wikipédia : aucun chapitre, fiche refusée, diagnostic illisible', () {
+      expect(
+        SourceGenerique.analyserChapitres(htmlWikipedia, urlWikipedia),
+        isEmpty,
+      );
+      expect(
+        () => SourceGenerique.analyserFiche(htmlWikipedia, urlWikipedia),
+        throwsA(
+          isA<ErreurSource>().having(
+            (e) => e.message,
+            'message',
+            contains('Aucun lien de chapitre'),
+          ),
+        ),
+      );
+      final diagnostic = verifierLisibilite(htmlWikipedia, urlWikipedia);
+      expect(diagnostic.estLisible, isFalse);
+      expect(diagnostic.nombreLiensChapitres, 0);
+      expect(diagnostic.raisons.single, contains('Aucun lien de chapitre'));
+    });
+
+    test('ancres et liens vers la page elle-même ignorés', () {
+      const html =
+          '<html><body><h1>Article</h1>'
+          '<ul class="sommaire">'
+          '<li><a href="#Chapitre_1">Chapitre 1</a></li>'
+          '<li><a href="/wiki/Oeuvre#Chapitre_2">Chapitre 2</a></li>'
+          '<li><a href="https://wiki.exemple.org/wiki/Oeuvre">Chapitre 3</a>'
+          '</li></ul></body></html>';
+      expect(
+        SourceGenerique.analyserChapitres(
+          html,
+          Uri.parse('https://wiki.exemple.org/wiki/Oeuvre'),
+        ),
+        isEmpty,
+      );
+    });
+
+    test("pages d'espaces de noms de wiki ignorées", () {
+      const html =
+          '<html><body>'
+          '<a href="/wiki/Fichier:Chapitre_1.jpg">Chapitre 1</a>'
+          '<a href="/wiki/Fichier:Chapitre_2.jpg">Chapitre 2</a>'
+          '<a href="/wiki/Sp%C3%A9cial:Chapitre_3">Chapitre 3</a>'
+          '</body></html>';
+      expect(
+        SourceGenerique.analyserChapitres(
+          html,
+          Uri.parse('https://wiki.exemple.org/wiki/Oeuvre'),
+        ),
+        isEmpty,
+      );
+    });
+
+    test('un lien isolé reconnu par son seul texte ne suffit pas', () {
+      const html =
+          '<html><body><p>Voir le <a href="/wiki/Liste_des_volumes">'
+          "chapitre 1</a> et <a href='/wiki/Auteur'>l'auteur</a>.</p>"
+          '</body></html>';
+      final url = Uri.parse('https://wiki.exemple.org/wiki/Oeuvre');
+      expect(SourceGenerique.analyserChapitres(html, url), isEmpty);
+      expect(verifierLisibilite(html, url).estLisible, isFalse);
+    });
+
+    test("un lien isolé reconnu par son adresse reste accepté (œuvre à un "
+        'chapitre)', () {
+      const html =
+          '<html><body><h1>Oneshot</h1>'
+          '<a href="/oeuvre/chapitre-1/">Lire</a></body></html>';
+      final chapitres = SourceGenerique.analyserChapitres(
+        html,
+        Uri.parse('https://exemple.org/oeuvre/'),
+      );
+      expect(
+        chapitres.single.urlChapitre,
+        'https://exemple.org/oeuvre/chapitre-1/',
+      );
+    });
   });
 }

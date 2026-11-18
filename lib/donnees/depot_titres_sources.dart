@@ -9,6 +9,7 @@ import '../modeles/lien_titre_source.dart';
 import '../modeles/titre.dart';
 import 'depot_chapitres.dart';
 import 'depot_titres.dart';
+import 'gestionnaire_transactions.dart';
 
 /// Accès à la table `titres_sources` (migrations 7 et 8).
 ///
@@ -28,8 +29,13 @@ class DepotTitresSources {
   /// secondaires dans l'ordre d'ajout. Liste vide si le titre n'existe pas.
   ///
   /// Requête servie par l'index UNIQUE (id_titre, id_source).
-  Future<List<LienTitreSource>> chargerLiensTitre(int idTitre) async {
-    final lignes = await _baseDeDonnees.query(
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
+  Future<List<LienTitreSource>> chargerLiensTitre(
+    int idTitre, {
+    DatabaseExecutor? executeur,
+  }) async {
+    final lignes = await (executeur ?? _baseDeDonnees).query(
       'titres_sources',
       where: 'id_titre = ?',
       whereArgs: <Object?>[idTitre],
@@ -55,8 +61,13 @@ class DepotTitresSources {
   ///
   /// Comparaison exacte après retrait des espaces autour, comme à
   /// l'enregistrement. Requête servie par l'index UNIQUE de `url_titre`.
-  Future<LienTitreSource?> chargerLienParUrl(String urlTitre) async {
-    final lignes = await _baseDeDonnees.query(
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
+  Future<LienTitreSource?> chargerLienParUrl(
+    String urlTitre, {
+    DatabaseExecutor? executeur,
+  }) async {
+    final lignes = await (executeur ?? _baseDeDonnees).query(
       'titres_sources',
       where: 'url_titre = ?',
       whereArgs: <Object?>[urlTitre.trim()],
@@ -69,12 +80,18 @@ class DepotTitresSources {
   /// [urlTitre], ou `null`.
   ///
   /// `DepotTitres.chargerTitreParUrl` ne cherche que dans le site principal.
-  Future<Titre?> chargerTitreParUrl(String urlTitre) async {
-    final lien = await chargerLienParUrl(urlTitre);
+  ///
+  /// [executeur] : transaction en cours (voir `GestionnaireTransactions`).
+  Future<Titre?> chargerTitreParUrl(
+    String urlTitre, {
+    DatabaseExecutor? executeur,
+  }) async {
+    final lien = await chargerLienParUrl(urlTitre, executeur: executeur);
     if (lien == null) {
       return null;
     }
-    return DepotTitres(_baseDeDonnees).chargerTitre(lien.idTitre);
+    return DepotTitres(_baseDeDonnees)
+        .chargerTitre(lien.idTitre, executeur: executeur);
   }
 
   /// Ajoute un site secondaire au titre [idTitre] : la source [idSource], où
@@ -93,12 +110,16 @@ class DepotTitresSources {
   ///
   /// Aucune requête réseau : vérifier que l'adresse est bien un titre du
   /// site est le rôle de la couche services.
+  ///
+  /// [executeur] : transaction ouverte par `GestionnaireTransactions` pour
+  /// écrire avec d'autres dépôts ; `null` : transaction propre à cet appel.
   Future<LienTitreSource> ajouterSourceSecondaire(
     int idTitre,
     int idSource,
     String urlTitre, {
     DateTime? dateAjout,
     bool lienSeul = false,
+    DatabaseExecutor? executeur,
   }) async {
     final url = urlTitre.trim();
     if (url.isEmpty) {
@@ -112,60 +133,64 @@ class DepotTitresSources {
       dateAjout: (dateAjout ?? DateTime.now()).toUtc(),
     );
     try {
-      return await _baseDeDonnees.transaction((txn) async {
-        final nomTitre = await _chargerNomTitre(txn, idTitre);
-        if (nomTitre == null) {
-          throw ErreurBaseDeDonnees(
-            "Impossible d'ajouter un site : le titre n°$idTitre n'existe pas.",
-          );
-        }
-        final nomSource = await _chargerNomSource(txn, idSource);
-        if (nomSource == null) {
-          throw ErreurBaseDeDonnees(
-            "Impossible d'ajouter un site : la source n°$idSource n'existe "
-            'pas.',
-          );
-        }
-
-        // Vérifications explicites avant l'insertion : les contraintes
-        // UNIQUE restent le filet de sécurité, mais sqflite ne dit pas
-        // laquelle a échoué.
-        final memeUrl = await txn.rawQuery(
-          'SELECT ts.id_titre, t.nom FROM titres_sources ts '
-          'JOIN titres t ON t.id = ts.id_titre '
-          'WHERE ts.url_titre = ? LIMIT 1',
-          <Object?>[url],
-        );
-        if (memeUrl.isNotEmpty) {
-          final idAutre = memeUrl.first['id_titre'];
-          if (idAutre == idTitre) {
+      return await GestionnaireTransactions.executerAtomiquement(
+        _baseDeDonnees,
+        executeur,
+        (txn) async {
+          final nomTitre = await _chargerNomTitre(txn, idTitre);
+          if (nomTitre == null) {
             throw ErreurBaseDeDonnees(
-              "L'adresse « $url » est déjà un site du titre « $nomTitre ».",
+              "Impossible d'ajouter un site : le titre n°$idTitre n'existe pas.",
             );
           }
-          throw ErreurBaseDeDonnees(
-            "L'adresse « $url » est déjà utilisée par un autre titre : "
-            "« ${memeUrl.first['nom']} ».",
-          );
-        }
-        final memeSource = await txn.query(
-          'titres_sources',
-          columns: <String>['url_titre'],
-          where: 'id_titre = ? AND id_source = ?',
-          whereArgs: <Object?>[idTitre, idSource],
-          limit: 1,
-        );
-        if (memeSource.isNotEmpty) {
-          throw ErreurBaseDeDonnees(
-            "Le site « $nomSource » est déjà lié au titre « $nomTitre » "
-            "(adresse « ${memeSource.first['url_titre']} »).",
-          );
-        }
+          final nomSource = await _chargerNomSource(txn, idSource);
+          if (nomSource == null) {
+            throw ErreurBaseDeDonnees(
+              "Impossible d'ajouter un site : la source n°$idSource n'existe "
+              'pas.',
+            );
+          }
 
-        final ligne = lien.versMap()..remove('id');
-        final id = await txn.insert('titres_sources', ligne);
-        return lien.copierAvec(id: id);
-      });
+          // Vérifications explicites avant l'insertion : les contraintes
+          // UNIQUE restent le filet de sécurité, mais sqflite ne dit pas
+          // laquelle a échoué.
+          final memeUrl = await txn.rawQuery(
+            'SELECT ts.id_titre, t.nom FROM titres_sources ts '
+            'JOIN titres t ON t.id = ts.id_titre '
+            'WHERE ts.url_titre = ? LIMIT 1',
+            <Object?>[url],
+          );
+          if (memeUrl.isNotEmpty) {
+            final idAutre = memeUrl.first['id_titre'];
+            if (idAutre == idTitre) {
+              throw ErreurBaseDeDonnees(
+                "L'adresse « $url » est déjà un site du titre « $nomTitre ».",
+              );
+            }
+            throw ErreurBaseDeDonnees(
+              "L'adresse « $url » est déjà utilisée par un autre titre : "
+              "« ${memeUrl.first['nom']} ».",
+            );
+          }
+          final memeSource = await txn.query(
+            'titres_sources',
+            columns: <String>['url_titre'],
+            where: 'id_titre = ? AND id_source = ?',
+            whereArgs: <Object?>[idTitre, idSource],
+            limit: 1,
+          );
+          if (memeSource.isNotEmpty) {
+            throw ErreurBaseDeDonnees(
+              "Le site « $nomSource » est déjà lié au titre « $nomTitre » "
+              "(adresse « ${memeSource.first['url_titre']} »).",
+            );
+          }
+
+          final ligne = lien.versMap()..remove('id');
+          final id = await txn.insert('titres_sources', ligne);
+          return lien.copierAvec(id: id);
+        },
+      );
     } on DatabaseException catch (erreur) {
       if (erreur.isUniqueConstraintError()) {
         throw ErreurBaseDeDonnees(
@@ -302,37 +327,49 @@ class DepotTitresSources {
   /// Lève une [ErreurBaseDeDonnees] si ce site n'est pas lié au titre, ou si
   /// [lienSeul] vaut `true` pour le site principal (choisir d'abord un autre
   /// site principal avec [definirSourcePrincipale]).
-  Future<int> marquerLienSeul(int idTitre, int idSource, bool lienSeul) async {
+  ///
+  /// [executeur] : transaction ouverte par `GestionnaireTransactions` pour
+  /// écrire avec d'autres dépôts ; `null` : transaction propre à cet appel.
+  Future<int> marquerLienSeul(
+    int idTitre,
+    int idSource,
+    bool lienSeul, {
+    DatabaseExecutor? executeur,
+  }) async {
     try {
-      return await _baseDeDonnees.transaction((txn) async {
-        final lien = await _chargerLien(txn, idTitre, idSource);
-        if (lien == null) {
-          throw ErreurBaseDeDonnees(
-            "La source n°$idSource n'est pas un site du titre n°$idTitre.",
+      return await GestionnaireTransactions.executerAtomiquement(
+        _baseDeDonnees,
+        executeur,
+        (txn) async {
+          final lien = await _chargerLien(txn, idTitre, idSource);
+          if (lien == null) {
+            throw ErreurBaseDeDonnees(
+              "La source n°$idSource n'est pas un site du titre n°$idTitre.",
+            );
+          }
+          if (lien.estLienSeul == lienSeul) {
+            return 0;
+          }
+          if (lienSeul && lien.estPrincipale) {
+            throw const ErreurBaseDeDonnees(
+              "Le site principal d'un titre ne peut pas être un lien seul : "
+              "choisissez d'abord un autre site principal.",
+            );
+          }
+          await txn.update(
+            'titres_sources',
+            <String, Object?>{
+              'lien_seul': lienSeul ? valeurSqlVrai : valeurSqlFaux,
+            },
+            where: 'id = ?',
+            whereArgs: <Object?>[lien.id],
           );
-        }
-        if (lien.estLienSeul == lienSeul) {
-          return 0;
-        }
-        if (lienSeul && lien.estPrincipale) {
-          throw const ErreurBaseDeDonnees(
-            "Le site principal d'un titre ne peut pas être un lien seul : "
-            "choisissez d'abord un autre site principal.",
-          );
-        }
-        await txn.update(
-          'titres_sources',
-          <String, Object?>{
-            'lien_seul': lienSeul ? valeurSqlVrai : valeurSqlFaux,
-          },
-          where: 'id = ?',
-          whereArgs: <Object?>[lien.id],
-        );
-        if (!lienSeul) {
-          return 0;
-        }
-        return supprimerChapitresNonConservesSource(txn, idTitre, idSource);
-      });
+          if (!lienSeul) {
+            return 0;
+          }
+          return supprimerChapitresNonConservesSource(txn, idTitre, idSource);
+        },
+      );
     } on DatabaseException catch (erreur) {
       throw ErreurBaseDeDonnees(
         "Impossible de modifier le mode « lien seul » du site n°$idSource "

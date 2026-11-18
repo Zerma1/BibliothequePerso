@@ -27,6 +27,10 @@ const List<Migration> migrations = <Migration>[
   _migration6,
   _migration7,
   _migration8,
+  _migration9,
+  _migration10,
+  _migration11,
+  _migration12,
 ];
 
 /// Version actuelle du schéma (nombre de migrations).
@@ -411,7 +415,7 @@ Future<void> _migration5(DatabaseExecutor executeur) async {
 /// sinon le premier nom libre parmi « base sans la parenthèse finale + 2) »,
 /// « ... 3) », etc. Ex. : « En attente (perso) » → « En attente (perso 2) ».
 ///
-/// Utilisée par la migration 5 : NE PLUS MODIFIER après livraison.
+/// Utilisée par les migrations 5 et 11 : NE PLUS MODIFIER après livraison.
 Future<String> _nomLibre(DatabaseExecutor executeur, String base) async {
   Future<bool> estPris(String nom) async => (await executeur.query(
     'listes',
@@ -638,4 +642,184 @@ Future<void> _migration8(DatabaseExecutor executeur) async {
   for (final instruction in instructions) {
     await executeur.execute(instruction);
   }
+}
+
+/// Migration 9 : regroupement des catégories de même sens (« survival » /
+/// « survie »), PLAYBOOK.md section « idées futures ».
+///
+/// Table `categories_equivalences` : chaque ligne rattache une catégorie à
+/// sa **catégorie de référence**. Un groupe = une référence et les
+/// catégories qui lui sont rattachées. Les catégories et `titres_categories`
+/// ne changent pas : les adaptateurs de sites continuent d'enregistrer les
+/// noms qu'ils lisent, le regroupement n'intervient qu'à la lecture.
+///
+/// Un seul niveau : une référence n'est jamais elle-même rattachée, et une
+/// catégorie rattachée n'est jamais la référence d'une autre (pas de
+/// chaîne, donc pas de cycle). Garanti par deux déclencheurs, en plus des
+/// contrôles de `DepotEquivalencesCategories`.
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration9(DatabaseExecutor executeur) async {
+  const instructions = <String>[
+    // id_categorie UNIQUE : une catégorie a au plus une référence ; l'index
+    // créé sert à retrouver la référence d'une catégorie (lecture des
+    // catégories effectives et filtre de la bibliothèque). Ce n'est pas la
+    // clé primaire INTEGER : elle deviendrait un alias du rowid, et une
+    // insertion avec NULL recevrait un identifiant automatique au lieu
+    // d'échouer.
+    // ON DELETE CASCADE des deux côtés : supprimer une catégorie retire son
+    // rattachement, et supprimer une référence défait son groupe (les
+    // catégories rattachées redeviennent indépendantes, rien d'autre n'est
+    // effacé).
+    // CHECK (id_categorie <> id_reference) : une catégorie ne peut pas être
+    // sa propre référence (cycle de longueur 1).
+    '''
+    CREATE TABLE categories_equivalences (
+      id_categorie INTEGER NOT NULL UNIQUE
+        REFERENCES categories (id) ON DELETE CASCADE,
+      id_reference INTEGER NOT NULL
+        REFERENCES categories (id) ON DELETE CASCADE,
+      CHECK (id_categorie <> id_reference)
+    )
+    ''',
+    // Index sur la clé étrangère id_reference : SQLite n'en crée pas. Il
+    // sert à la cascade quand une référence est supprimée, au chargement
+    // des catégories d'un groupe et aux contrôles des déclencheurs.
+    'CREATE INDEX index_categories_equivalences_id_reference '
+        'ON categories_equivalences (id_reference)',
+    // Déclencheurs : refusent toute chaîne (A → B → C), quel que soit le
+    // chemin d'écriture. Une contrainte CHECK ne peut pas lire d'autres
+    // lignes, d'où les déclencheurs. Le texte d'erreur sert seulement au
+    // diagnostic : le dépôt vérifie avant d'écrire et donne un message
+    // clair. Sans chaîne et sans boucle sur soi-même (CHECK), aucun cycle
+    // n'est possible.
+    '''
+    CREATE TRIGGER declencheur_categories_equivalences_insertion
+    BEFORE INSERT ON categories_equivalences
+    WHEN EXISTS (SELECT 1 FROM categories_equivalences
+                 WHERE id_categorie = NEW.id_reference)
+      OR EXISTS (SELECT 1 FROM categories_equivalences
+                 WHERE id_reference = NEW.id_categorie)
+    BEGIN
+      SELECT RAISE(ABORT, 'chaine de categories equivalentes interdite');
+    END
+    ''',
+    // Mise à jour : même contrôle, en ignorant la ligne modifiée elle-même
+    // (id_categorie est UNIQUE, il identifie la ligne).
+    '''
+    CREATE TRIGGER declencheur_categories_equivalences_modification
+    BEFORE UPDATE OF id_categorie, id_reference ON categories_equivalences
+    WHEN EXISTS (SELECT 1 FROM categories_equivalences
+                 WHERE id_categorie = NEW.id_reference
+                   AND id_categorie <> OLD.id_categorie)
+      OR EXISTS (SELECT 1 FROM categories_equivalences
+                 WHERE id_reference = NEW.id_categorie
+                   AND id_categorie <> OLD.id_categorie)
+    BEGIN
+      SELECT RAISE(ABORT, 'chaine de categories equivalentes interdite');
+    END
+    ''',
+  ];
+  for (final instruction in instructions) {
+    await executeur.execute(instruction);
+  }
+}
+
+/// Migration 10 : champs d'un titre modifiés à la main par le client,
+/// protégés contre l'actualisation depuis le site.
+///
+/// Colonne `titres.champs_manuels` : tableau JSON des noms des champs
+/// verrouillés (`["nom","resume"]`, valeurs de `ChampTitre`).
+///
+/// Une colonne JSON plutôt qu'une colonne booléenne par champ : un champ
+/// verrouillable ajouté plus tard ne demande pas de migration, et la ligne
+/// reste lisible d'un coup avec le titre (aucune requête de plus au
+/// chargement). Plutôt qu'une table à part : le verrou n'est jamais cherché
+/// seul (jamais de « tous les titres dont le résumé est manuel »), il est
+/// toujours lu avec son titre ; il disparaît avec lui sans cascade.
+///
+/// NOT NULL DEFAULT '[]' : les titres existants n'ont aucun champ manuel, et
+/// ADD COLUMN accepte NOT NULL grâce à la valeur par défaut. Pas de CHECK
+/// sur le contenu (SQLite sans JSON1 garanti sur tous les Android) : le
+/// modèle ignore un nom inconnu et le dépôt est le seul à écrire. Pas
+/// d'index : la colonne n'est jamais un critère de recherche.
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration10(DatabaseExecutor executeur) async {
+  await executeur.execute(
+    "ALTER TABLE titres ADD COLUMN champs_manuels TEXT NOT NULL DEFAULT '[]'",
+  );
+}
+
+/// Migration 11 : liste système « Terminés » (titres que le client a fini
+/// de lire), placée juste après « En attente ».
+///
+/// Aucune table ni colonne : une ligne de `listes` (`est_systeme = 1`), donc
+/// protégée par `DepotListes` comme les autres listes système.
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration11(DatabaseExecutor executeur) async {
+  // Valeurs écrites en dur, pour la même raison que dans les migrations 1
+  // et 5 : une migration livrée doit toujours produire le même résultat. Les
+  // constantes nomListeTermines et ordreListeTermines doivent rester égales
+  // (vérifié par migrations_test).
+  const nom = 'Terminés';
+  const ordre = 4;
+
+  // Les listes en position 4 et au-delà sont décalées d'un cran pour laisser
+  // la position 4 à « Terminés ». Contrairement à la migration 5, les listes
+  // système sont décalées aussi : le client peut les déplacer avec
+  // DepotListes.enregistrerOrdre, et décaler toutes les lignes
+  // garde exactement l'ordre relatif qu'il a choisi.
+  await executeur.rawUpdate(
+    'UPDATE listes SET ordre = ordre + ? WHERE ordre >= ?',
+    <Object?>[1, ordre],
+  );
+
+  // Le client a pu créer lui-même une liste « Terminés » (nom UNIQUE COLLATE
+  // NOCASE) : une insertion échouerait et bloquerait l'ouverture de la base.
+  // Comme pour « En attente » (migration 5), sa liste n'est pas fusionnée
+  // avec la liste système (dont le sens est fixé par l'application, et que
+  // la couche services peut remplir elle-même) : elle est renommée « Terminés (perso) » (ou
+  // « (perso 2) »… si ce nom est pris) et garde son identifiant, ses titres
+  // et sa position ; la liste système est créée à côté, vide.
+  final existantes = await executeur.query(
+    'listes',
+    columns: <String>['id'],
+    where: 'nom = ? COLLATE NOCASE',
+    whereArgs: <Object?>[nom],
+    limit: 1,
+  );
+  if (existantes.isNotEmpty) {
+    final nouveauNom = await _nomLibre(executeur, '$nom (perso)');
+    await executeur.update(
+      'listes',
+      <String, Object?>{'nom': nouveauNom},
+      where: 'id = ?',
+      whereArgs: <Object?>[existantes.first['id']],
+    );
+  }
+  await executeur.insert('listes', <String, Object?>{
+    'nom': nom,
+    'est_systeme': 1,
+    'ordre': ordre,
+  });
+}
+
+/// Migration 12 : description personnelle d'un titre, écrite par le client,
+/// distincte du résumé du site (`titres.resume`).
+///
+/// Colonne `titres.description_perso` : texte libre, NULL par défaut (les
+/// titres existants n'en ont pas ; ADD COLUMN sans valeur par défaut remplit
+/// NULL). NULL plutôt qu'un texte vide pour « aucune description » : le dépôt
+/// remplace un texte vide par NULL, une seule représentation de l'absence.
+/// Une colonne de `titres` plutôt qu'une table à part : au plus une
+/// description par titre, toujours lue avec lui, supprimée avec lui. Pas
+/// d'index : la colonne n'est jamais un critère de recherche.
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration12(DatabaseExecutor executeur) async {
+  await executeur.execute(
+    'ALTER TABLE titres ADD COLUMN description_perso TEXT',
+  );
 }

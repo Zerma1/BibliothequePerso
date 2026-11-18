@@ -1184,7 +1184,7 @@ abstract final class Textes {
   static const String explicationMisesAJour =
       'Titres favoris, suivis et en attente, du plus récemment paru au plus '
       'ancien, dans les langues de chaque titre. « Nouveau » : dernier '
-      "chapitre non lu, paru depuis moins d'une semaine.";
+      'chapitre non lu, paru depuis moins de 30 jours.';
 
   /// Onglet Mises à jour vide.
   static const String misesAJourVide =
@@ -1753,24 +1753,467 @@ abstract final class Textes {
       "pour que l'application devine. Un sélecteur CSS désigne un élément "
       'de la page (ex. « h1.titre », « .liste-chapitres a »).';
 
-  /// Libellé d'un réglage avancé d'un site générique, d'après sa clé.
-  static String libelleReglageSelecteur(String cle) => switch (cle) {
-    'selecteurTitre' => 'Nom du titre',
-    'selecteurCouverture' => 'Image de couverture',
-    'selecteurResume' => 'Résumé',
-    'selecteurAuteur' => 'Auteur',
-    'selecteurCategories' => 'Catégories (une par élément)',
-    'selecteurLiensChapitres' => 'Liens des chapitres',
-    'selecteurImagesChapitre' => "Images d'un chapitre",
-    'selecteurLienListeChapitres' =>
-      'Lien vers la liste des chapitres (depuis un chapitre)',
-    'motifNumeroChapitre' => 'Numéro de chapitre (expression régulière)',
-    _ => cle,
-  };
+  // Libellés des réglages et messages d'erreur : fournis par le service
+  // (`ServiceAjoutSite.libellesReglagesGeneriques`), via `EtatSources`.
 
-  /// Expression régulière invalide.
-  static const String erreurMotifInvalide =
-      "Cette expression régulière n'est pas valide.";
+  // ------------------------------------------------ Catégories regroupées
+
+  /// Autres noms d'un groupe (info-bulle d'une puce du filtre).
+  static String aussiAppelee(String autres) => 'Aussi appelée : $autres';
+
+  /// Titre de la section des Paramètres.
+  static const String sectionCategoriesRegroupees = 'Catégories regroupées';
+
+  /// Résumé de la section repliée.
+  static String resumeCategoriesRegroupees(int groupes, int suggestions) {
+    final debut = groupes == 0
+        ? 'Aucun groupe'
+        : (groupes == 1 ? '1 groupe' : '$groupes groupes');
+    if (suggestions == 0) return debut;
+    return suggestions == 1
+        ? '$debut, 1 suggestion'
+        : '$debut, $suggestions suggestions';
+  }
+
+  /// Explication en tête de la section.
+  static const String explicationCategoriesRegroupees =
+      'Les sites donnent parfois la même catégorie sous plusieurs noms '
+      '(« Survival », « Survie »). Regroupées, elles ne forment plus qu\'une '
+      'catégorie dans les filtres et sur les fiches, au nom de la référence. '
+      'Les catégories données par les sites ne sont pas modifiées.';
+
+  /// Intertitre : groupes existants.
+  static const String intertitreGroupes = 'Groupes';
+
+  /// Aucun groupe.
+  static const String aucunGroupe = 'Aucun groupe pour l\'instant.';
+
+  /// Libellé de la référence d'un groupe.
+  static const String referenceDuGroupe = 'Référence';
+
+  /// Catégories rattachées à la référence.
+  static String rattacheesAuGroupe(String noms) => 'Regroupe : $noms';
+
+  /// Info-bulle : retirer une catégorie de son groupe.
+  static String detacherCategorie(String nom) => 'Retirer « $nom » du groupe';
+
+  /// Bouton : défaire un groupe.
+  static const String defaireGroupe = 'Défaire le groupe';
+
+  /// Confirmation avant de défaire un groupe.
+  static String confirmationDefaireGroupe(String reference) =>
+      'Les catégories du groupe « $reference » redeviendront séparées dans '
+      'les filtres et sur les fiches.';
+
+  /// Bouton de confirmation : défaire.
+  static const String defaire = 'Défaire';
+
+  /// Message après le retrait d'une catégorie.
+  static String categorieDetachee(String nom) =>
+      '« $nom » ne fait plus partie du groupe.';
+
+  /// Message après la dissolution d'un groupe.
+  static String groupeDefait(String reference) =>
+      'Groupe « $reference » défait.';
+
+  /// Bouton et titre du dialogue de regroupement manuel.
+  static const String regrouperDesCategories = 'Regrouper des catégories';
+
+  /// Il faut au moins deux catégories pour regrouper.
+  static const String pasAssezDeCategories =
+      'Il faut au moins deux catégories pour en regrouper.';
+
+  /// Première étape du dialogue : choix de la référence.
+  static const String choisirReference =
+      '1. Choisissez la catégorie de référence : son nom représentera le '
+      'groupe.';
+
+  /// Deuxième étape du dialogue : catégories à rattacher.
+  static String choisirARattacher(String reference) =>
+      '2. Cochez les catégories de même sens à rattacher à « $reference ».';
+
+  /// Bouton : revenir au choix de la référence.
+  static const String changerReference = 'Changer de référence';
+
+  /// Catégorie déjà dans un autre groupe (elle en changera).
+  static String dansLeGroupe(String reference) =>
+      'Actuellement dans le groupe « $reference »';
+
+  /// Bouton de validation du regroupement manuel.
+  static String regrouperNombre(int nombre) => 'Regrouper ($nombre)';
+
+  /// Message après un regroupement.
+  static String categoriesRegroupees(String reference, int nombre) =>
+      nombre <= 1
+      ? '1 catégorie rattachée à « $reference ».'
+      : '$nombre catégories rattachées à « $reference ».';
+
+  /// Intertitre : suggestions.
+  static const String intertitreSuggestions = 'Suggestions';
+
+  /// Explication des suggestions.
+  static const String explicationSuggestions =
+      'Catégories qui semblent avoir le même sens (traduction ou écriture '
+      'proche). Rien n\'est regroupé sans votre accord.';
+
+  /// Aucune suggestion.
+  static const String aucuneSuggestion = 'Aucune suggestion pour l\'instant.';
+
+  /// Une suggestion : catégories à rattacher à la référence.
+  static String suggestion(String reference, String autres) =>
+      'Rattacher $autres à « $reference »';
+
+  /// Bouton : appliquer une suggestion.
+  static const String regrouper = 'Regrouper';
+
+  /// Bouton : écarter une suggestion pour la session.
+  static const String ignorer = 'Ignorer';
+
+  // ------------------------------------------------- Dossier des chapitres
+
+  /// Titre de la section des Paramètres.
+  static const String sectionDossierChapitres = 'Dossier des chapitres';
+
+  /// Explication en tête de la section.
+  static const String explicationDossierChapitres =
+      'Les chapitres téléchargés sont rangés dans ce dossier. Vous pouvez '
+      'en choisir un autre : un dossier de cet appareil, un lecteur réseau '
+      '(Z:\\Mangas) ou un partage de votre NAS (\\\\nas\\partage\\Mangas). '
+      'Les rapports d\'erreur et les exports restent dans le dossier de '
+      'l\'application.';
+
+  /// Intitulé du dossier utilisé pendant cette session.
+  static const String dossierActuel = 'Dossier actuel';
+
+  /// Précision : dossier par défaut de l'application.
+  static const String dossierParDefautApplication =
+      'Dossier par défaut de l\'application';
+
+  /// Précision : dossier choisi par le client.
+  static const String dossierChoisiParVous = 'Dossier choisi par vous';
+
+  /// Dossier qui sera utilisé au prochain démarrage.
+  static String dossierAuProchainDemarrage(String chemin) =>
+      'Au prochain démarrage : $chemin';
+
+  /// Bouton et titre du dialogue de changement de dossier.
+  static const String changerDeDossier = 'Changer de dossier';
+
+  /// Libellé du champ du chemin.
+  static const String champNouveauDossier = 'Nouveau dossier';
+
+  /// Exemple sous le champ du chemin.
+  static const String aideNouveauDossier =
+      r'D:\Mangas, Z:\Mangas ou \\nas\partage\Mangas';
+
+  /// Explication en tête du dialogue.
+  static const String explicationChangementDossier =
+      'Collez le chemin complet du dossier. Il est créé s\'il n\'existe pas, '
+      'puis l\'application vérifie qu\'elle peut y écrire.';
+
+  /// Case : déplacer les chapitres déjà téléchargés.
+  static const String deplacerChapitresTelecharges =
+      'Déplacer les chapitres déjà téléchargés';
+
+  /// Explication de la case cochée.
+  static const String explicationDeplacerCoche =
+      'Les chapitres et les couvertures sont déplacés vers le nouveau '
+      'dossier. Cela peut prendre du temps sur un NAS.';
+
+  /// Explication de la case décochée.
+  static const String explicationDeplacerDecoche =
+      'Les chapitres déjà téléchargés restent dans l\'ancien dossier : ceux '
+      'que vos règles demandent seront retéléchargés dans le nouveau.';
+
+  /// Bouton de validation du changement.
+  static const String changer = 'Changer';
+
+  /// Bouton : revenir au dossier par défaut.
+  static const String revenirDossierParDefaut = 'Revenir au dossier par défaut';
+
+  /// Chemin du dossier par défaut, sous le bouton.
+  static String cheminDossierParDefaut(String chemin) =>
+      'Dossier par défaut : $chemin';
+
+  /// Pendant le déplacement : boîte non fermable.
+  static const String deplacementEnCours =
+      'Déplacement des chapitres en cours. Ne fermez pas l\'application.';
+
+  /// Pendant un changement sans déplacement (vérification du dossier).
+  static const String changementEnCours = 'Vérification du dossier…';
+
+  /// Progression du déplacement.
+  static String progressionDeplacement(int faits, int total) =>
+      total <= 0 ? 'Préparation…' : '$faits / $total fichier(s)';
+
+  /// Titre de la boîte après un changement réussi.
+  static const String dossierChange = 'Dossier des chapitres changé';
+
+  /// Mention après un changement réussi.
+  static const String redemarrerPourNouveauDossier =
+      'Redémarrez l\'application pour utiliser le nouveau dossier.';
+
+  /// Titre de la confirmation demandée quand le service signale un risque
+  /// avant le changement de dossier.
+  static const String avantChangementDossier = 'Changer de dossier ?';
+
+  /// Bouton : changer de dossier malgré l'avertissement.
+  static const String changerQuandMeme = 'Changer quand même';
+
+  /// Titre de la liste des fichiers en conflit après un déplacement.
+  static String fichiersEnConflit(int nombre) =>
+      "Fichiers restés dans l'ancien dossier, à vérifier ($nombre) :";
+
+  /// Ligne de la liste des fichiers en conflit.
+  static String fichierEnConflit(String chemin) => '• $chemin';
+
+  /// Fin de la liste des fichiers en conflit quand elle est tronquée.
+  static String autresFichiersEnConflit(int nombre) =>
+      'et $nombre autre(s) fichier(s)';
+
+  /// Refus « chapitre en cours » : la file attend la décision du client.
+  static const String filePauseeParChangement =
+      'Les téléchargements sont en pause en attendant le changement de '
+      'dossier. Réessayez dans un instant, ou annulez pour les reprendre.';
+
+  /// Bouton : renoncer au changement et reprendre les téléchargements.
+  static const String reprendreTelechargements =
+      'Reprendre les téléchargements';
+
+  /// Déplacement inachevé détecté.
+  static String deplacementInacheve(String chemin) =>
+      'Un déplacement des chapitres vers « $chemin » n\'est pas terminé. '
+      'Les chapitres déjà déplacés ne sont pas perdus.';
+
+  /// Bouton : terminer le déplacement inachevé.
+  static const String terminerDeplacement = 'Terminer le déplacement';
+
+  /// Bouton : abandonner le déplacement inachevé.
+  static const String abandonner = 'Abandonner';
+
+  /// Titre de la confirmation d'abandon.
+  static const String abandonnerDeplacement = 'Abandonner le déplacement ?';
+
+  /// Confirmation avant d'abandonner un déplacement inachevé.
+  static const String confirmationAbandonDeplacement =
+      'Les chapitres restés dans l\'autre dossier ne seront plus reconnus : '
+      'ceux que vos règles demandent seront retéléchargés. Aucun fichier '
+      'n\'est supprimé.';
+
+  /// Message après l'abandon.
+  static const String deplacementAbandonne = 'Déplacement abandonné.';
+
+  /// Bandeau : le dossier a été changé pendant la session.
+  static const String bandeauRedemarrage =
+      'Redémarrez l\'application pour utiliser le nouveau dossier des '
+      'chapitres.';
+
+  // ------------------------------------------- Listes personnelles (X4)
+
+  /// Bouton et titre du dialogue de création d'une liste.
+  static const String nouvelleListe = 'Nouvelle liste';
+
+  /// Bouton et titre de l'écran de gestion des listes.
+  static const String gererListes = 'Gérer les listes';
+
+  /// Action : renommer une liste.
+  static const String renommerListe = 'Renommer';
+
+  /// Titre du dialogue de renommage d'une liste.
+  static const String titreRenommerListe = 'Renommer la liste';
+
+  /// Action : supprimer une liste.
+  static const String supprimerListe = 'Supprimer la liste';
+
+  /// Champ du nom d'une liste.
+  static const String champNomListe = 'Nom de la liste';
+
+  /// Bouton de création d'une liste.
+  static const String creer = 'Créer';
+
+  /// Bouton de validation d'un renommage.
+  static const String renommer = 'Renommer';
+
+  /// Mention d'une liste système (menu grisé, écran de gestion).
+  static const String listeSysteme =
+      "Liste de l'application : elle ne peut être ni renommée ni supprimée.";
+
+  /// Info-bulle de la poignée de déplacement d'une liste.
+  static const String deplacerListe = 'Faire glisser pour déplacer';
+
+  /// Info-bulle du bouton des actions d'une liste.
+  static const String actionsListe = 'Actions de la liste';
+
+  /// Explication de l'écran de gestion des listes.
+  static const String aideGestionListes =
+      "Faites glisser une liste par sa poignée pour changer l'ordre des "
+      'puces de la bibliothèque. Les listes de l\'application (Favoris, '
+      'Suivis…) se déplacent aussi, mais ne se renomment ni ne se '
+      'suppriment.';
+
+  /// Aucune liste à gérer.
+  static const String aucuneListe = 'Aucune liste.';
+
+  /// Question avant la suppression d'une liste personnelle.
+  static String confirmationSuppressionListe(String nom) =>
+      'Supprimer la liste « $nom » ?\n'
+      "Les titres qu'elle contient restent dans votre bibliothèque.";
+
+  /// Liste créée.
+  static String listeCreee(String nom) => 'Liste « $nom » créée.';
+
+  /// Liste renommée.
+  static String listeRenommee(String nom) => 'Liste renommée en « $nom ».';
+
+  /// Liste supprimée.
+  static String listeSupprimee(String nom) => 'Liste « $nom » supprimée.';
+
+  // ------------------------------------------------- Type d'un site (X5)
+
+  /// Aide du choix du type dans la modification d'un site.
+  static const String aideTypeSiteModification =
+      "Le type décide de la façon dont l'application lit le site. Les types "
+      'grisés ne conviennent pas à ce site.';
+
+  /// Avertissement : quitter le type générique efface les sélecteurs CSS.
+  static const String avertissementEffacementReglages =
+      'Changer de type effacera les réglages avancés (sélecteurs CSS) de ce '
+      'site : ils ne servent qu\'au type générique.';
+
+  /// Mention sous la liste des sources : toucher une ligne la modifie.
+  static const String aideModifierSource =
+      'Touchez un site pour le modifier (nom, type, langues) ou le supprimer.';
+
+  // ------------------------------------- Description personnelle (client)
+
+  /// Intitulé du bloc de la description personnelle, sous le résumé.
+  static const String maDescription = 'Ma description';
+
+  /// Explication sous l'intitulé : ce texte est au client, pas au site.
+  static const String aideMaDescription =
+      'Vos notes sur ce titre. Le site ne les remplace jamais.';
+
+  /// Bouton quand la description est vide.
+  static const String ajouterDescription = 'Ajouter une description';
+
+  /// Bouton de modification de la description.
+  static const String modifierDescription = 'Modifier';
+
+  /// Bouton d'effacement de la description.
+  static const String effacerDescription = 'Effacer';
+
+  /// Champ de saisie du dialogue.
+  static const String champDescription = 'Description';
+
+  /// Question avant d'effacer la description.
+  static const String titreEffacerDescription = 'Effacer la description ?';
+
+  /// Détail de la confirmation d'effacement.
+  static const String confirmationEffacerDescription =
+      'Votre description de ce titre sera effacée. Le résumé du site ne '
+      'change pas.';
+
+  /// Message après l'enregistrement de la description.
+  static const String descriptionEnregistree = 'Description enregistrée.';
+
+  /// Message après l'effacement de la description.
+  static const String descriptionEffacee = 'Description effacée.';
+
+  /// Erreur de saisie : texte trop long.
+  static String descriptionTropLongue(int maximum) =>
+      'La description est trop longue ($maximum caractères au plus).';
+
+  /// Choix « Adresse » du dialogue d'ajout d'un titre.
+  static const String modeAdresse = 'Adresse';
+
+  /// Choix « Rechercher » du dialogue d'ajout d'un titre.
+  static const String modeRechercher = 'Rechercher';
+
+  /// Champ de recherche sur MangaDex.
+  static const String champRechercheMangaDex = 'Rechercher sur MangaDex';
+
+  /// Bouton de recherche.
+  static const String rechercher = 'Rechercher';
+
+  /// Aucun résultat de recherche sur MangaDex.
+  static const String aucunResultatMangaDex =
+      'Aucun titre trouvé sur MangaDex.';
+
+  /// Aide de la recherche : choisir un résultat puis « Ajouter ».
+  static const String aideRechercheMangaDex =
+      'Choisissez un résultat, puis appuyez sur « Ajouter ».';
+
+  // -------------------------------------------- Archive complète (X7)
+
+  /// Interrupteur « Archive complète ».
+  static const String archiveComplete = 'Archive complète';
+
+  /// Explication de l'archive complète.
+  static const String explicationArchiveComplete =
+      'Télécharger tous les chapitres de tous les titres et ne jamais les '
+      'supprimer automatiquement (conseillé avec un NAS).';
+
+  /// Titre de la confirmation d'activation.
+  static const String activerArchiveComplete = "Activer l'archive complète ?";
+
+  /// Avertissement avant l'activation de l'archive complète.
+  static const String confirmationArchiveComplete =
+      'Tous les chapitres de tous les titres de la bibliothèque seront '
+      "téléchargés : cela peut représenter beaucoup de téléchargements et "
+      "d'espace disque. Plus aucun chapitre ne sera supprimé "
+      'automatiquement.';
+
+  /// Bouton d'activation.
+  static const String activer = 'Activer';
+
+  /// Message après le changement de l'archive complète.
+  static String archiveCompleteModifiee(bool active) => active
+      ? 'Archive complète activée : tous les chapitres vont être téléchargés.'
+      : 'Archive complète désactivée : les règles habituelles '
+            "s'appliquent de nouveau.";
+
+  // --------------------------------------- Chapitres lus en lot (X10)
+
+  /// Aide de la sélection de chapitres.
+  static const String aideSelectionChapitres =
+      'Appui long sur un chapitre (ou clic maintenu et glisser à la souris) '
+      'pour en sélectionner plusieurs.';
+
+  /// Titre de la barre de sélection.
+  static String chapitresSelectionnes(int nombre) =>
+      nombre <= 1 ? '$nombre sélectionné' : '$nombre sélectionnés';
+
+  /// Action : marquer la sélection lue.
+  static const String marquerSelectionLus = 'Marquer lus';
+
+  /// Action : marquer la sélection non lue.
+  static const String marquerSelectionNonLus = 'Marquer non lus';
+
+  /// Action : tout sélectionner.
+  static const String toutSelectionner = 'Tout sélectionner';
+
+  /// Action : quitter la sélection.
+  static const String annulerSelection = 'Annuler la sélection';
+
+  /// Action du menu d'un chapitre : marquer lus tous les précédents.
+  static const String marquerLusJusquIci = "Marquer lus jusqu'ici";
+
+  /// Action de la barre de sélection (une seule ligne choisie).
+  static const String lusJusquIci = "Lus jusqu'ici";
+
+  /// Info-bulle du bouton « ⋮ » d'un chapitre téléchargé.
+  static const String ouvrirMenuChapitre = 'Ouvrir le menu';
+
+  /// Message après un marquage en lot.
+  static String chapitresMarques(int nombre, {required bool lu}) {
+    if (nombre == 0) return 'Aucun chapitre à changer.';
+    if (nombre == 1) {
+      return lu ? '1 chapitre marqué lu.' : '1 chapitre marqué non lu.';
+    }
+    return lu
+        ? '$nombre chapitres marqués lus.'
+        : '$nombre chapitres marqués non lus.';
+  }
 
   // ------------------------------------------------------------- Formatage
 

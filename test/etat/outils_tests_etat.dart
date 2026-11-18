@@ -5,6 +5,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:bibliotheque_perso/donnees/depot_categories.dart';
@@ -12,8 +13,11 @@ import 'package:bibliotheque_perso/donnees/depot_chapitres.dart';
 import 'package:bibliotheque_perso/donnees/depot_listes.dart';
 import 'package:bibliotheque_perso/donnees/depot_sources.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres.dart';
+import 'package:bibliotheque_perso/donnees/stockage_telechargements.dart'
+    show BilanDeplacement;
 import 'package:bibliotheque_perso/etat/etat_bibliotheque.dart';
 import 'package:bibliotheque_perso/etat/etat_couvertures.dart';
+import 'package:bibliotheque_perso/etat/etat_dossier_chapitres.dart';
 import 'package:bibliotheque_perso/etat/etat_export.dart';
 import 'package:bibliotheque_perso/etat/etat_mises_a_jour.dart';
 import 'package:bibliotheque_perso/etat/etat_parametres.dart';
@@ -25,6 +29,8 @@ import 'package:bibliotheque_perso/main.dart';
 import 'package:bibliotheque_perso/modeles/categorie.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
+import 'package:bibliotheque_perso/modeles/equivalence_categorie.dart';
+import 'package:bibliotheque_perso/modeles/groupe_categories.dart';
 import 'package:bibliotheque_perso/modeles/lien_titre_source.dart';
 import 'package:bibliotheque_perso/modeles/liste_lecture.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
@@ -35,6 +41,7 @@ import 'package:bibliotheque_perso/services/planification_mises_a_jour.dart';
 import 'package:bibliotheque_perso/services/politique_telechargement.dart';
 import 'package:bibliotheque_perso/services/service_ajout_site.dart';
 import 'package:bibliotheque_perso/services/service_bibliotheque.dart';
+import 'package:bibliotheque_perso/services/service_categories.dart';
 import 'package:bibliotheque_perso/services/service_export.dart';
 import 'package:bibliotheque_perso/services/service_import.dart';
 import 'package:bibliotheque_perso/services/service_mises_a_jour.dart';
@@ -61,6 +68,9 @@ const int idListePlanifie = 4;
 
 /// Identifiant de la liste système « En attente » dans les faux services.
 const int idListeEnAttente = 5;
+
+/// Identifiant de la liste système « Terminés » dans les faux services.
+const int idListeTermines = 6;
 
 /// Faux `ServiceBibliotheque` entièrement en mémoire, pour les tests de
 /// widgets (aucune base, aucun réseau, réponses immédiates ou retenues).
@@ -95,7 +105,17 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
       estSysteme: true,
       ordre: ordreListeEnAttente,
     ),
-    const ListeLecture(id: 3, nom: 'À lire plus tard', ordre: 4),
+    const ListeLecture(
+      id: idListeTermines,
+      nom: nomListeTermines,
+      estSysteme: true,
+      ordre: ordreListeTermines,
+    ),
+    const ListeLecture(
+      id: 3,
+      nom: 'À lire plus tard',
+      ordre: ordreDerniereListeSysteme + 1,
+    ),
   ];
 
   /// Toutes les catégories.
@@ -770,11 +790,30 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
     );
   }
 
+  /// Résultats renvoyés par [rechercherSurSource].
+  List<Titre> resultatsRecherche = <Titre>[];
+
+  /// Recherches reçues par [rechercherSurSource] (site et texte).
+  final List<({Source source, String requete})> recherches =
+      <({Source source, String requete})>[];
+
   @override
-  Future<List<Titre>> rechercherSurSource(
-    Source source,
-    String requete,
-  ) async => const <Titre>[];
+  Future<List<Titre>> rechercherSurSource(Source source, String requete) async {
+    recherches.add((source: source, requete: requete));
+    return List<Titre>.of(resultatsRecherche);
+  }
+
+  /// Erreur levée par la création, le renommage, la suppression et le
+  /// réordonnancement des listes, si définie.
+  Object? erreurListes;
+
+  /// Erreur levée par [enregistrerDescriptionPerso], si définie.
+  Object? erreurDescription;
+
+  void _refuserListes() {
+    final erreur = erreurListes;
+    if (erreur != null) throw erreur;
+  }
 
   @override
   Future<void> ajouterTitreALaListe(int idListe, int idTitre) async {
@@ -797,14 +836,70 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
 
   @override
   Future<ListeLecture> creerListe(String nom) async {
-    final liste = ListeLecture(id: listes.length + 1, nom: nom);
+    _refuserListes();
+    // Identifiant libre (les listes de test ne sont pas numérotées dans
+    // l'ordre).
+    final id = listes.map((liste) => liste.id ?? 0).fold<int>(0, math.max) + 1;
+    final liste = ListeLecture(
+      id: id,
+      nom: ServiceBibliotheque.nettoyerNomListe(nom),
+      ordre: listes.length,
+    );
     listes.add(liste);
     return liste;
   }
 
   @override
   Future<void> supprimerListe(int idListe) async {
+    _refuserListes();
     listes.removeWhere((liste) => liste.id == idListe);
+    for (final ids in listesParTitre.values) {
+      ids.remove(idListe);
+    }
+  }
+
+  @override
+  Future<ListeLecture> renommerListe(int idListe, String nom) async {
+    _refuserListes();
+    final index = listes.indexWhere((liste) => liste.id == idListe);
+    if (index < 0) throw const ErreurService("Cette liste n'existe plus.");
+    final renommee = listes[index].copierAvec(
+      nom: ServiceBibliotheque.nettoyerNomListe(nom),
+    );
+    listes[index] = renommee;
+    return renommee;
+  }
+
+  @override
+  Future<List<ListeLecture>> reordonnerListes(List<int> idsDansLOrdre) async {
+    _refuserListes();
+    final ordonnees = <ListeLecture>[
+      for (final id in idsDansLOrdre)
+        ...listes.where((liste) => liste.id == id),
+      ...listes.where((liste) => !idsDansLOrdre.contains(liste.id)),
+    ];
+    listes
+      ..clear()
+      ..addAll(<ListeLecture>[
+        for (var i = 0; i < ordonnees.length; i++)
+          ordonnees[i].copierAvec(ordre: i),
+      ]);
+    return List<ListeLecture>.of(listes);
+  }
+
+  @override
+  Future<Titre> enregistrerDescriptionPerso(int idTitre, String? texte) async {
+    final erreur = erreurDescription;
+    if (erreur != null) throw erreur;
+    final index = titres.indexWhere((titre) => titre.id == idTitre);
+    if (index < 0) throw const ErreurService("Ce titre n'existe plus.");
+    final propre = texte?.trim() ?? '';
+    final modifie = titres[index].copierAvec(
+      descriptionPerso: propre.isEmpty ? null : propre,
+      effacerDescriptionPerso: propre.isEmpty,
+    );
+    titres[index] = modifie;
+    return modifie;
   }
 
   @override
@@ -832,6 +927,46 @@ class FauxServiceBibliotheque implements ServiceBibliotheque {
         for (final chapitre in chapitres) chapitre.copierAvec(estLu: estLu),
       ]);
     }
+  }
+
+  /// Appels à [marquerChapitresLus] et [marquerLusJusqua].
+  int nombreMarquagesEnLot = 0;
+
+  @override
+  Future<int> marquerChapitresLus(
+    int idTitre,
+    Iterable<int> idsChapitres, {
+    bool lu = true,
+  }) async {
+    nombreMarquagesEnLot++;
+    final ids = idsChapitres.toSet();
+    return _marquerSi(idTitre, (chapitre) => ids.contains(chapitre.id), lu);
+  }
+
+  @override
+  Future<int> marquerLusJusqua(
+    int idTitre,
+    double numero, {
+    bool lu = true,
+  }) async {
+    nombreMarquagesEnLot++;
+    return _marquerSi(idTitre, (chapitre) => chapitre.numero <= numero, lu);
+  }
+
+  /// Comme le vrai service : seuls les chapitres de [idTitre] dont l'état
+  /// change sont modifiés et comptés.
+  int _marquerSi(int idTitre, bool Function(Chapitre) choisi, bool lu) {
+    final chapitres = chapitresParTitre[idTitre];
+    if (chapitres == null) return 0;
+    var nombre = 0;
+    for (var i = 0; i < chapitres.length; i++) {
+      final chapitre = chapitres[i];
+      if (choisi(chapitre) && chapitre.estLu != lu) {
+        chapitres[i] = chapitre.copierAvec(estLu: lu);
+        nombre++;
+      }
+    }
+    return nombre;
   }
 
   @override
@@ -865,7 +1000,14 @@ class FauxServiceAjoutSite implements ServiceAjoutSite {
   Completer<void>? retenue;
 
   /// Derniers paramètres reçus par [ajouterSite].
-  ({String url, String? nom, String langue, TypeSource? type})? dernierAppel;
+  ({
+    String url,
+    String? nom,
+    String langue,
+    TypeSource? type,
+    String? selecteurs,
+  })?
+  dernierAppel;
 
   @override
   Future<Source> ajouterSite(
@@ -873,12 +1015,14 @@ class FauxServiceAjoutSite implements ServiceAjoutSite {
     String? nom,
     String langueParDefaut = '',
     TypeSource? typeForce,
+    String? configurationSelecteurs,
   }) async {
     dernierAppel = (
       url: url,
       nom: nom,
       langue: langueParDefaut,
       type: typeForce,
+      selecteurs: configurationSelecteurs,
     );
     final attente = retenue;
     if (attente != null) {
@@ -921,7 +1065,20 @@ class FauxServiceAjoutSite implements ServiceAjoutSite {
     if (erreur != null) {
       throw erreur;
     }
-    // Même normalisation que le vrai service.
+    // Même normalisation que le vrai service (réglages vérifiés s'ils ont
+    // changé, effacés s'ils sont vides).
+    final brut = source.configurationSelecteurs;
+    final avant = bibliotheque.sources
+        .where((s) => s.id == source.id)
+        .firstOrNull
+        ?.configurationSelecteurs;
+    // Comme le vrai service : un type autre que générique n'a pas de
+    // réglages avancés (quitter le générique les efface).
+    final reglages = source.typeSource != TypeSource.generique
+        ? null
+        : brut != null && brut == avant
+        ? brut
+        : ServiceAjoutSite.normaliserReglagesGeneriques(brut);
     final modifiee = source.copierAvec(
       nom: source.nom.trim(),
       langueParDefaut: source.langueParDefaut
@@ -929,6 +1086,8 @@ class FauxServiceAjoutSite implements ServiceAjoutSite {
           .map((code) => code.trim().toLowerCase())
           .where((code) => code.isNotEmpty)
           .join(','),
+      configurationSelecteurs: reglages,
+      effacerConfigurationSelecteurs: reglages == null,
     );
     sourcesModifiees.add(modifiee);
     final index = bibliotheque.sources.indexWhere((s) => s.id == source.id);
@@ -979,6 +1138,11 @@ class FauxServiceTelechargement implements ServiceTelechargement {
 
   /// Erreur levée par [chargerFile], si définie.
   Object? erreurFile;
+
+  /// Erreur levée par [supprimerTelechargement] (donc aussi
+  /// [supprimerMaintenant]) et [supprimerTitre], si définie : par exemple
+  /// le refus « chapitres en cours de déplacement » du vrai service.
+  Object? erreurSuppression;
 
   /// Index de page qui lève une erreur à la lecture.
   final Set<int> pagesIllisibles = <int>{};
@@ -1102,6 +1266,8 @@ class FauxServiceTelechargement implements ServiceTelechargement {
     bool signalerChangement = true,
   }) async {
     journal.add('supprimer:$idChapitre');
+    final refus = erreurSuppression;
+    if (refus != null) throw refus;
     file.removeWhere((t) => t.idChapitre == idChapitre);
     pages.remove(idChapitre);
     textes.remove(idChapitre);
@@ -1178,6 +1344,8 @@ class FauxServiceTelechargement implements ServiceTelechargement {
   @override
   Future<void> supprimerTitre(int idTitre) async {
     journal.add('supprimerTitre:$idTitre');
+    final refus = erreurSuppression;
+    if (refus != null) throw refus;
     titresSupprimes.add(idTitre);
     for (final chapitre
         in bibliotheque.chapitresParTitre[idTitre] ?? const <Chapitre>[]) {
@@ -1474,6 +1642,17 @@ class FauxServiceParametres implements ServiceParametres {
   @override
   Future<void> reinitialiserNiveauxContenu() async {
     niveaux = null;
+  }
+
+  /// Réglage « Archive complète » enregistré (faux stockage).
+  bool archiveComplete = ServiceParametres.archiveCompleteParDefaut;
+
+  @override
+  Future<bool> chargerArchiveComplete() async => archiveComplete;
+
+  @override
+  Future<void> enregistrerArchiveComplete(bool active) async {
+    archiveComplete = active;
   }
 
   /// Verrou de la file « enregistré ».
@@ -1785,6 +1964,430 @@ class FauxServiceImport implements ServiceImport {
   }) => importerFichier('<texte>');
 }
 
+/// Faux `ServiceCategories` en mémoire, branché sur les catégories et les
+/// titres d'un [FauxServiceBibliotheque] : groupes (catégorie → référence),
+/// filtres par groupe et suggestions calculées comme le vrai service.
+class FauxServiceCategories implements ServiceCategories {
+  /// Crée le faux service sur [bibliotheque].
+  FauxServiceCategories(this.bibliotheque);
+
+  /// Faux service de la bibliothèque (catégories et titres).
+  final FauxServiceBibliotheque bibliotheque;
+
+  /// Rattachements : identifiant de catégorie → identifiant de référence.
+  final Map<int, int> equivalences = <int, int>{};
+
+  /// Erreur levée par toutes les lectures, si définie.
+  Object? erreurLecture;
+
+  /// Erreur levée par toutes les écritures, si définie.
+  Object? erreurEcriture;
+
+  /// Nombre d'appels à [chargerTitresFiltres].
+  int nombreLecturesTitres = 0;
+
+  /// Derniers filtres reçus par [chargerTitresFiltres].
+  ({Set<int> incluses, Set<int> exclues})? derniersFiltres;
+
+  /// Journal des écritures (« regrouper:1:2,3 », « detacher:2 »…).
+  final List<String> journal = <String>[];
+
+  void _lire() {
+    final erreur = erreurLecture;
+    if (erreur != null) throw erreur;
+  }
+
+  void _ecrire() {
+    final erreur = erreurEcriture;
+    if (erreur != null) throw erreur;
+  }
+
+  int _effective(int idCategorie) => equivalences[idCategorie] ?? idCategorie;
+
+  Categorie? _parId(int id) =>
+      bibliotheque.categories.where((c) => c.id == id).firstOrNull;
+
+  List<Categorie> _triees(Iterable<Categorie> categories) =>
+      categories.toList()..sort((a, b) => a.nom.compareTo(b.nom));
+
+  /// Ajoute un groupe de test (sans contrôle).
+  void regrouperDeTest(int idReference, List<int> idsCategories) {
+    for (final id in idsCategories) {
+      equivalences[id] = idReference;
+    }
+  }
+
+  @override
+  Future<List<Titre>> chargerTitresFiltres({
+    String? recherche,
+    int? idListe,
+    Set<int> idsCategoriesIncluses = const <int>{},
+    Set<int> idsCategoriesExclues = const <int>{},
+    List<String>? niveauxContenu,
+    bool inclureNiveauInconnu = true,
+  }) async {
+    _lire();
+    nombreLecturesTitres++;
+    derniersFiltres = (
+      incluses: Set<int>.of(idsCategoriesIncluses),
+      exclues: Set<int>.of(idsCategoriesExclues),
+    );
+    final titres = await bibliotheque.chargerTitres(
+      recherche: recherche,
+      idListe: idListe,
+      niveauxContenu: niveauxContenu,
+      inclureNiveauInconnu: inclureNiveauInconnu,
+    );
+    final incluses = idsCategoriesIncluses.map(_effective).toSet();
+    final exclues = idsCategoriesExclues.map(_effective).toSet();
+    return <Titre>[
+      for (final titre in titres)
+        if (() {
+          final groupes = <int>{
+            for (final categorie
+                in bibliotheque.categoriesParTitre[titre.id] ??
+                    const <Categorie>[])
+              if (categorie.id != null) _effective(categorie.id!),
+          };
+          return incluses.every(groupes.contains) &&
+              !exclues.any(groupes.contains);
+        }())
+          titre,
+    ];
+  }
+
+  @override
+  Future<List<Categorie>> chargerCategories() async {
+    _lire();
+    return _triees(bibliotheque.categories);
+  }
+
+  @override
+  Future<List<GroupeCategories>> chargerGroupes() async {
+    _lire();
+    final parReference = <int, List<Categorie>>{};
+    for (final MapEntry(key: id, value: idReference) in equivalences.entries) {
+      final categorie = _parId(id);
+      if (categorie != null) {
+        (parReference[idReference] ??= <Categorie>[]).add(categorie);
+      }
+    }
+    final groupes = <GroupeCategories>[
+      for (final MapEntry(key: idReference, value: rattachees)
+          in parReference.entries)
+        if (_parId(idReference) case final reference?)
+          GroupeCategories(
+            reference: reference,
+            rattachees: _triees(rattachees),
+          ),
+    ]..sort((a, b) => a.reference.nom.compareTo(b.reference.nom));
+    return groupes;
+  }
+
+  @override
+  Future<List<Categorie>> chargerCategoriesEffectives() async {
+    _lire();
+    return _triees(
+      bibliotheque.categories.where((c) => !equivalences.containsKey(c.id)),
+    );
+  }
+
+  @override
+  Future<List<Categorie>> chargerCategoriesEffectivesDuTitre(
+    int idTitre,
+  ) async {
+    _lire();
+    final ids = <int>{
+      for (final categorie
+          in bibliotheque.categoriesParTitre[idTitre] ?? const <Categorie>[])
+        if (categorie.id != null) _effective(categorie.id!),
+    };
+    return _triees(<Categorie>[for (final id in ids) ?_parId(id)]);
+  }
+
+  @override
+  Future<Categorie?> chargerCategorieEffective(int idCategorie) async {
+    _lire();
+    return _parId(_effective(idCategorie));
+  }
+
+  /// Mêmes refus que le dépôt réel, sans écrire.
+  void _verifier(int idCategorie, int idReference, Map<int, int> etat) {
+    final categorie = _parId(idCategorie);
+    final reference = _parId(idReference);
+    if (categorie == null || reference == null) {
+      throw const ErreurService("Cette catégorie n'existe plus.");
+    }
+    if (idCategorie == idReference) {
+      throw const ErreurService(
+        'Une catégorie ne peut pas être rattachée à elle-même.',
+      );
+    }
+    if (etat.containsKey(idReference)) {
+      throw ErreurService(
+        '« ${reference.nom} » est déjà rattachée à une autre catégorie : '
+        'choisissez sa référence.',
+      );
+    }
+    if (etat.containsValue(idCategorie)) {
+      throw ErreurService(
+        '« ${categorie.nom} » est la référence d\'autres catégories : '
+        'détachez-les d\'abord.',
+      );
+    }
+  }
+
+  @override
+  Future<void> rattacherCategorie(int idCategorie, int idReference) async {
+    _ecrire();
+    _verifier(idCategorie, idReference, equivalences);
+    equivalences[idCategorie] = idReference;
+    journal.add('rattacher:$idCategorie:$idReference');
+  }
+
+  @override
+  Future<void> regrouperCategories(
+    int idReference,
+    Iterable<int> idsCategories,
+  ) async {
+    _ecrire();
+    final ids = <int>[
+      for (final id in idsCategories)
+        if (id != idReference) id,
+    ]..sort();
+    // Tout ou rien, comme le vrai service avec transaction.
+    final copie = Map<int, int>.of(equivalences);
+    for (final id in ids) {
+      _verifier(id, idReference, copie);
+      copie[id] = idReference;
+    }
+    equivalences
+      ..clear()
+      ..addAll(copie);
+    journal.add('regrouper:$idReference:${ids.join(',')}');
+  }
+
+  @override
+  Future<void> appliquerSuggestion(SuggestionRegroupement suggestion) =>
+      regrouperCategories(suggestion.reference.id!, <int>[
+        for (final categorie in suggestion.aRattacher) ?categorie.id,
+      ]);
+
+  @override
+  Future<bool> detacherCategorie(int idCategorie) async {
+    _ecrire();
+    journal.add('detacher:$idCategorie');
+    return equivalences.remove(idCategorie) != null;
+  }
+
+  @override
+  Future<int> dissoudreGroupe(int idReference) async {
+    _ecrire();
+    journal.add('dissoudre:$idReference');
+    final avant = equivalences.length;
+    equivalences.removeWhere((_, reference) => reference == idReference);
+    return avant - equivalences.length;
+  }
+
+  @override
+  Future<List<SuggestionRegroupement>> suggererRegroupements() async {
+    _lire();
+    return ServiceCategories.calculerSuggestions(
+      bibliotheque.categories,
+      <EquivalenceCategorie>[
+        for (final MapEntry(key: id, value: reference) in equivalences.entries)
+          EquivalenceCategorie(idCategorie: id, idReference: reference),
+      ],
+    );
+  }
+}
+
+/// Faux `ServiceDossierChapitres` en mémoire : aucun fichier n'est touché.
+///
+/// Reproduit les règles visibles du vrai service : pause gardée après un
+/// refus « chapitre en cours » ([chapitreEnCours]), redémarrage nécessaire
+/// après un changement réussi, repère de déplacement inachevé.
+class FauxServiceDossierChapitres implements ServiceDossierChapitres {
+  final StreamController<void> _changements =
+      StreamController<void>.broadcast();
+
+  @override
+  Stream<void> get changements => _changements.stream;
+
+  /// Prévient les écouteurs (comme le vrai service).
+  void signaler() => _changements.add(null);
+
+  @override
+  String dossierActuel = r'C:\appli\telechargements';
+
+  @override
+  bool estDossierPersonnalise = false;
+
+  @override
+  bool redemarrageNecessaire = false;
+
+  @override
+  bool estFileEnPause = false;
+
+  @override
+  AccesDossierChapitres accesDossier = const AccesDossierChapitres.accessible(
+    r'C:\appli\telechargements',
+    estPersonnalise: false,
+  );
+
+  /// État renvoyé par [verifierAccesDossier] (sinon [accesDossier]).
+  AccesDossierChapitres? accesApresVerification;
+
+  /// Nombre d'appels à [verifierAccesDossier].
+  int nombreVerifications = 0;
+
+  /// Si défini, [verifierAccesDossier] attend qu'il soit complété.
+  Completer<void>? retenueVerification;
+
+  /// Dossier enregistré dans les réglages.
+  String? dossierChoisi;
+
+  /// Chemin du dossier par défaut.
+  String cheminParDefaut = r'C:\appli\telechargements';
+
+  /// Déplacement inachevé enregistré.
+  String? deplacementInacheve;
+
+  /// Erreur levée par les lectures des réglages, si définie.
+  Object? erreurLecture;
+
+  /// Si `true`, un changement avec déplacement est refusé comme par le vrai
+  /// service quand un chapitre est en cours (file laissée en pause).
+  bool chapitreEnCours = false;
+
+  /// Erreur levée par [changerDossierChapitres], si définie.
+  Object? erreurChangement;
+
+  /// Nombre de fichiers « déplacés » (progression annoncée).
+  int nombreFichiers = 3;
+
+  /// Chemins relatifs signalés en conflit dans le bilan d'un déplacement.
+  List<String> cheminsEnConflit = const <String>[];
+
+  /// Si défini, le déplacement attend qu'il soit complété après la première
+  /// progression (déplacement en cours).
+  Completer<void>? retenueDeplacement;
+
+  /// Demandes reçues : (dossier, déplacer).
+  final List<({String? dossier, bool deplacer})> demandes =
+      <({String? dossier, bool deplacer})>[];
+
+  /// Nombre d'appels à [reprendreFile].
+  int nombreReprises = 0;
+
+  /// Nombre d'appels à [abandonnerDeplacementInacheve].
+  int nombreAbandons = 0;
+
+  @override
+  Future<AccesDossierChapitres> verifierAccesDossier() async {
+    nombreVerifications++;
+    final attente = retenueVerification;
+    if (attente != null) await attente.future;
+    final nouveau = accesApresVerification;
+    if (nouveau != null) accesDossier = nouveau;
+    signaler();
+    return accesDossier;
+  }
+
+  void _lire() {
+    final panne = erreurLecture;
+    if (panne != null) throw panne;
+  }
+
+  @override
+  Future<String?> chargerDossierChoisi() async {
+    _lire();
+    return dossierChoisi;
+  }
+
+  @override
+  Future<String> chargerCheminDossierParDefaut() async {
+    _lire();
+    return cheminParDefaut;
+  }
+
+  @override
+  Future<String?> chargerDeplacementInacheve() async {
+    _lire();
+    return deplacementInacheve;
+  }
+
+  @override
+  Future<void> abandonnerDeplacementInacheve() async {
+    nombreAbandons++;
+    deplacementInacheve = null;
+  }
+
+  @override
+  void reprendreFile() {
+    nombreReprises++;
+    if (redemarrageNecessaire || !estFileEnPause) return;
+    estFileEnPause = false;
+    signaler();
+  }
+
+  @override
+  Future<ResultatChangementDossier> changerDossierChapitres(
+    String? nouveauDossier, {
+    bool deplacerArchives = true,
+    void Function(int faits, int total)? surProgression,
+  }) async {
+    demandes.add((dossier: nouveauDossier, deplacer: deplacerArchives));
+    final panne = erreurChangement;
+    if (panne != null) throw panne;
+    if (deplacerArchives && chapitreEnCours) {
+      estFileEnPause = true;
+      signaler();
+      throw const ErreurService(
+        'Un chapitre est en cours de téléchargement : la file est mise '
+        "en pause et s'arrêtera à la fin de ce chapitre. Réessayez dans "
+        'un instant.',
+      );
+    }
+    final demande = nouveauDossier?.trim() ?? '';
+    final cible = demande.isEmpty ? cheminParDefaut : demande;
+    BilanDeplacement? bilan;
+    if (deplacerArchives) {
+      surProgression?.call(0, nombreFichiers);
+      final attente = retenueDeplacement;
+      if (attente != null) {
+        surProgression?.call(1, nombreFichiers);
+        await attente.future;
+      }
+      surProgression?.call(nombreFichiers, nombreFichiers);
+      bilan = BilanDeplacement(
+        nombreFichiers: nombreFichiers,
+        nombreCopies: nombreFichiers,
+        nombreDejaPresents: 0,
+        octetsCopies: 0,
+        cheminsEnConflit: cheminsEnConflit,
+      );
+    }
+    // Même avertissement que le vrai service (texte de l'extension
+    // `avertissementAvantChangement`, lue avant l'effacement du repère).
+    final avertissement = await avertissementAvantChangement(
+      nouveauDossier,
+      deplacerArchives: deplacerArchives,
+    );
+    dossierChoisi = demande.isEmpty ? null : cible;
+    deplacementInacheve = null;
+    redemarrageNecessaire = true;
+    estFileEnPause = true;
+    signaler();
+    return ResultatChangementDossier(
+      dossierChoisi: dossierChoisi,
+      cheminDossier: cible,
+      bilan: bilan,
+      avertissement: avertissement,
+    );
+  }
+}
+
 // ------------------------------------------------------------------ Widgets
 
 /// Enveloppe [enfant] dans les fournisseurs de l'application et un
@@ -1799,6 +2402,8 @@ Widget envelopper(
   FauxServiceRapportsErreur? rapports,
   FauxServiceExport? export,
   FauxServiceImport? importation,
+  FauxServiceCategories? categories,
+  FauxServiceDossierChapitres? dossierChapitres,
   Future<List<String>> Function()? listerExports,
   bool verifierMisesAJourAuDemarrage = false,
   DateTime Function()? maintenant,
@@ -1835,6 +2440,9 @@ Widget envelopper(
           bibliotheque,
           serviceTelechargement: serviceTelechargement,
           serviceParametres: serviceParametres,
+          // Catégories regroupées seulement si un faux service est fourni
+          // (sinon, ancien chemin de lecture et section masquée).
+          serviceCategories: categories,
         )..charger(),
       ),
       ChangeNotifierProvider<EtatParutions>(
@@ -1862,6 +2470,12 @@ Widget envelopper(
           serviceBibliotheque: bibliotheque,
         )..charger(),
       ),
+      // Section « Dossier des chapitres » et bandeaux seulement si un faux
+      // service est fourni (comme l'application sans service).
+      if (dossierChapitres != null)
+        ChangeNotifierProvider<EtatDossierChapitres>(
+          create: (_) => EtatDossierChapitres(dossierChapitres)..charger(),
+        ),
     ],
     child: BibliothequePersoApp(accueil: enfant),
   );

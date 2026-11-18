@@ -71,7 +71,18 @@ class SectionPliable extends StatelessWidget {
           espacementMoyen,
           espacementMoyen,
         ),
-        children: enfants,
+        // Chaque enfant reçoit sa propre clé de mémorisation : sans elle, une
+        // zone qui défile dans la section (VueErreur, liste) partagerait
+        // l'identifiant de l'ExpansionTile et relirait son booléen « déplié »
+        // comme une position de défilement (plantage « bool is not a
+        // subtype of double? »).
+        children: <Widget>[
+          for (final (index, enfant) in enfants.indexed)
+            KeyedSubtree(
+              key: PageStorageKey<String>('$identifiant.$index'),
+              child: enfant,
+            ),
+        ],
       ),
     );
   }

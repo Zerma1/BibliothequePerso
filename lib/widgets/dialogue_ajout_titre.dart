@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../etat/description_erreur.dart';
 import '../etat/etat_bibliotheque.dart';
 import '../etat/etat_sources.dart';
+import '../modeles/titre.dart';
 import 'bouton_rapport_erreur.dart';
 import 'constantes_interface.dart';
 import 'textes.dart';
@@ -40,8 +41,9 @@ Future<IssueAjoutTitre?> afficherDialogueAjoutTitre(BuildContext context) {
   );
 }
 
-/// Formulaire d'ajout d'un titre par son adresse, avec le choix des listes
-/// (Favoris et Suivis cochées par défaut).
+/// Formulaire d'ajout d'un titre par son adresse, ou par une recherche sur
+/// MangaDex, avec le choix des listes (Suivis cochée par défaut, Favoris
+/// proposée mais décochée : retour X3 du client).
 class DialogueAjoutTitre extends StatefulWidget {
   /// Crée le dialogue.
   const DialogueAjoutTitre({super.key});
@@ -52,6 +54,18 @@ class DialogueAjoutTitre extends StatefulWidget {
 
 class _EtatDialogueAjoutTitre extends State<DialogueAjoutTitre> {
   final TextEditingController _url = TextEditingController();
+  final TextEditingController _requete = TextEditingController();
+
+  /// `true` pour le mode « Rechercher » (sur MangaDex), `false` pour
+  /// « Adresse ».
+  bool _modeRecherche = false;
+
+  /// Résultats de la dernière recherche, `null` avant toute recherche.
+  List<Titre>? _resultats;
+  bool _rechercheEnCours = false;
+
+  /// Adresse du résultat choisi, ajoutée par « Ajouter ».
+  String? _urlChoisie;
 
   /// Listes choisies par le client ; `null` tant qu'il n'a rien touché : on
   /// suit alors les listes par défaut, même si elles arrivent après
@@ -94,7 +108,30 @@ class _EtatDialogueAjoutTitre extends State<DialogueAjoutTitre> {
   @override
   void dispose() {
     _url.dispose();
+    _requete.dispose();
     super.dispose();
+  }
+
+  /// Lance la recherche sur MangaDex (une requête au site).
+  Future<void> _rechercher() async {
+    final etat = context.read<EtatBibliotheque>();
+    setState(() {
+      _rechercheEnCours = true;
+      _messageErreur = null;
+      _erreur = null;
+      _urlChoisie = null;
+    });
+    final resultat = await etat.rechercherSurMangaDex(_requete.text);
+    if (!mounted) return;
+    setState(() {
+      _rechercheEnCours = false;
+      _resultats = resultat.donnee;
+      final erreur = resultat.erreur;
+      if (erreur != null) {
+        _erreur = erreur;
+        _messageErreur = Textes.messageErreur(erreur);
+      }
+    });
   }
 
   Future<void> _ajouter() async {
@@ -104,7 +141,8 @@ class _EtatDialogueAjoutTitre extends State<DialogueAjoutTitre> {
       _messageErreur = null;
       _erreur = null;
     });
-    final resultat = await etat.ajouterTitre(_url.text, _idsListes(etat));
+    final url = _modeRecherche ? (_urlChoisie ?? '') : _url.text;
+    final resultat = await etat.ajouterTitre(url, _idsListes(etat));
     // MangaDex est ajouté automatiquement à la première adresse collée, même
     // si la lecture du titre échoue ensuite : l'onglet Sources doit le
     // montrer.
@@ -167,18 +205,46 @@ class _EtatDialogueAjoutTitre extends State<DialogueAjoutTitre> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              TextField(
-                controller: _url,
-                enabled: !enCours,
-                autofocus: true,
-                keyboardType: TextInputType.url,
-                decoration: const InputDecoration(
-                  labelText: Textes.champUrlTitre,
-                  hintText: Textes.aideUrlTitre,
-                  border: OutlineInputBorder(),
-                ),
-                onSubmitted: enCours ? null : (_) => _ajouter(),
+              // Deux façons d'ajouter : coller une adresse (tous les sites
+              // configurés) ou chercher par nom sur MangaDex.
+              SegmentedButton<bool>(
+                segments: const <ButtonSegment<bool>>[
+                  ButtonSegment<bool>(
+                    value: false,
+                    icon: Icon(Icons.link),
+                    label: Text(Textes.modeAdresse),
+                  ),
+                  ButtonSegment<bool>(
+                    value: true,
+                    icon: Icon(Icons.search),
+                    label: Text(Textes.modeRechercher),
+                  ),
+                ],
+                selected: <bool>{_modeRecherche},
+                onSelectionChanged: enCours
+                    ? null
+                    : (choix) => setState(() {
+                        _modeRecherche = choix.first;
+                        _messageErreur = null;
+                        _erreur = null;
+                      }),
               ),
+              const SizedBox(height: espacementMoyen),
+              if (_modeRecherche)
+                ..._recherche(enCours)
+              else
+                TextField(
+                  controller: _url,
+                  enabled: !enCours,
+                  autofocus: true,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(
+                    labelText: Textes.champUrlTitre,
+                    hintText: Textes.aideUrlTitre,
+                    border: OutlineInputBorder(),
+                  ),
+                  onSubmitted: enCours ? null : (_) => _ajouter(),
+                ),
               const SizedBox(height: espacementMoyen),
               const Text(Textes.rangerDans),
               if (etat.listes.isEmpty && etat.estEnChargement)
@@ -225,10 +291,69 @@ class _EtatDialogueAjoutTitre extends State<DialogueAjoutTitre> {
           child: const Text(Textes.annuler),
         ),
         FilledButton(
-          onPressed: enCours ? null : _ajouter,
+          // En mode recherche, il faut d'abord choisir un résultat.
+          onPressed: enCours || (_modeRecherche && _urlChoisie == null)
+              ? null
+              : _ajouter,
           child: const Text(Textes.ajouter),
         ),
       ],
     );
+  }
+
+  /// Champ de recherche sur MangaDex et résultats à choisir.
+  List<Widget> _recherche(bool enCours) {
+    final resultats = _resultats;
+    final occupe = enCours || _rechercheEnCours;
+    return <Widget>[
+      TextField(
+        controller: _requete,
+        enabled: !occupe,
+        autofocus: true,
+        decoration: InputDecoration(
+          labelText: Textes.champRechercheMangaDex,
+          border: const OutlineInputBorder(),
+          suffixIcon: IconButton(
+            tooltip: Textes.rechercher,
+            icon: const Icon(Icons.search),
+            onPressed: occupe ? null : _rechercher,
+          ),
+        ),
+        onSubmitted: occupe ? null : (_) => _rechercher(),
+      ),
+      if (_rechercheEnCours) ...<Widget>[
+        const SizedBox(height: espacementPetit),
+        const LinearProgressIndicator(),
+      ],
+      if (resultats != null && !_rechercheEnCours) ...<Widget>[
+        const SizedBox(height: espacementPetit),
+        if (resultats.isEmpty)
+          const Text(Textes.aucunResultatMangaDex)
+        else ...<Widget>[
+          Text(
+            Textes.aideRechercheMangaDex,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          // Résultats dans le défilement du dialogue (une vingtaine au
+          // plus) : pas de liste imbriquée à hauteur fixe.
+          for (final titre in resultats)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              selected: _urlChoisie == titre.urlTitre,
+              leading: Icon(
+                _urlChoisie == titre.urlTitre
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked,
+              ),
+              title: Text(titre.nom),
+              subtitle: titre.auteur == null ? null : Text(titre.auteur!),
+              onTap: enCours
+                  ? null
+                  : () => setState(() => _urlChoisie = titre.urlTitre),
+            ),
+        ],
+      ],
+    ];
   }
 }

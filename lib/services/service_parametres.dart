@@ -52,6 +52,26 @@ class ServiceParametres {
   /// aux deux isolats.
   static const String cleVerrouTelechargement = 'telechargement.verrou';
 
+  /// Clé : dossier des chapitres téléchargés choisi par le client (chemin
+  /// complet : disque local, lecteur réseau, chemin UNC, dossier monté).
+  /// Absente (valeur par défaut) : dossier par défaut de l'application.
+  ///
+  /// Lue au démarrage seulement (`ServiceDossierChapitres.creerStockage`) :
+  /// un changement s'applique au prochain démarrage. Écrite par
+  /// `ServiceDossierChapitres.changerDossierChapitres`.
+  // Pas de méthode d'instance ici : `ServiceParametres` est implémenté par de
+  // faux services dans les tests de l'interface, qui devraient tous suivre ;
+  // la lecture et l'écriture passent par `ServiceDossierChapitres`.
+  static const String cleDossierChapitres = 'telechargement.dossier';
+
+  /// Clé : dossier vers lequel un déplacement des archives a commencé sans
+  /// se terminer (erreur, application fermée). Tant qu'elle existe, le
+  /// contrôle des archives manquantes au démarrage est suspendu : les
+  /// archives déjà déplacées ne sont pas perdues, elles sont dans ce
+  /// dossier.
+  static const String cleDeplacementDossierEnCours =
+      'telechargement.dossier.deplacement_en_cours';
+
   /// Valeur maximale acceptée pour une limite, pour éviter qu'une faute de
   /// frappe (1000 au lieu de 10) ne lance des centaines de téléchargements.
   static const int limiteMaximale = 500;
@@ -125,6 +145,43 @@ class ServiceParametres {
       await _depot.supprimer(cle);
     }
   }
+
+  /// Clé : « Archive complète » (retour du client sur la 0.2.1-test, X7).
+  /// Activée, **tous** les chapitres connus de **tous** les titres de la
+  /// bibliothèque sont voulus (une version par numéro, dans les langues du
+  /// client), et aucune archive n'est supprimée automatiquement : le dossier
+  /// des chapitres (en général un NAS) garde tout, au cas où les sites
+  /// retireraient des chapitres. Voir `PolitiqueTelechargement.archiveComplete`.
+  ///
+  /// Enregistrée comme un entier (1 activée, 0 désactivée) : la table
+  /// `parametres` ne stocke que du texte, et `DepotParametres` sait déjà lire
+  /// et écrire les entiers.
+  static const String cleArchiveComplete = 'telechargement.archive_complete';
+
+  /// « Archive complète » tant que le client n'a rien choisi : désactivée
+  /// (les règles favoris / suivis s'appliquent).
+  static const bool archiveCompleteParDefaut = false;
+
+  /// `true` si le client a activé « Archive complète » ([cleArchiveComplete]).
+  /// Une valeur illisible vaut [archiveCompleteParDefaut].
+  Future<bool> chargerArchiveComplete() async {
+    final valeur = await _depot.chargerEntier(cleArchiveComplete);
+    // Toute valeur autre que 0 ou 1 (écrite à la main, base abîmée) est
+    // ignorée : activer l'archive complète par erreur lancerait des milliers
+    // de téléchargements.
+    if (valeur == 1) return true;
+    if (valeur == 0) return false;
+    return archiveCompleteParDefaut;
+  }
+
+  /// Active ou désactive « Archive complète » ([cleArchiveComplete]).
+  ///
+  /// N'applique pas les règles : l'appelant lance ensuite
+  /// `ServiceTelechargement.appliquerReglesATous` (mise en file de tous les
+  /// chapitres à l'activation ; à la désactivation, les archives qui ne sont
+  /// plus voulues passent en suppression différée de 24 h).
+  Future<void> enregistrerArchiveComplete(bool active) =>
+      _depot.enregistrerEntier(cleArchiveComplete, active ? 1 : 0);
 
   /// Nombre de recherches de mises à jour par jour (2 par défaut : 00:00 et
   /// 12:00 UTC).
@@ -277,11 +334,17 @@ class ServiceParametres {
 
   /// Nettoie une liste de codes de langue : minuscules, sans espaces, codes
   /// invalides et doublons retirés (le premier garde sa place), au plus
-  /// [nombreMaximalLangues]. « pt-br » est accepté (variante régionale).
+  /// [nombreMaximalLangues].
+  ///
+  /// Variantes régionales (tâche P3) : un code `xx-yy` est accepté tel quel
+  /// (`pt-br`, `es-la`, `zh-hk`), distinct de sa langue de base `xx` ; la
+  /// forme `pt_BR` (souvent vue dans les réglages système) devient `pt-br`.
+  /// La correspondance avec les chapitres (exacte d'abord, langue de base
+  /// en repli) est décrite par `PolitiqueTelechargement.rangLangue`.
   static List<String> nettoyerLangues(Iterable<String> langues) {
     final propres = <String>[];
     for (final langue in langues) {
-      final code = langue.trim().toLowerCase();
+      final code = langue.trim().toLowerCase().replaceAll('_', '-');
       if (!_motifLangue.hasMatch(code) || propres.contains(code)) continue;
       propres.add(code);
       if (propres.length >= nombreMaximalLangues) break;

@@ -108,8 +108,13 @@ class Source {
 
   /// Renvoie une copie avec les champs donnés remplacés.
   ///
-  /// LIMITE : un champ nullable ne peut pas être remis à `null` par cette
-  /// méthode (un argument `null` signifie « inchangé »).
+  /// Un argument `null` signifie « inchangé ». Pour remettre
+  /// [configurationSelecteurs] à `null` (site qui n'est plus générique,
+  /// sélecteurs abandonnés), passer `effacerConfigurationSelecteurs: true` :
+  /// cet indicateur l'emporte sur une valeur donnée pour le même champ (même
+  /// motif que `Titre.copierAvec`).
+  ///
+  /// LIMITE : [id] ne peut pas être remis à `null` par cette méthode.
   Source copierAvec({
     int? id,
     String? nom,
@@ -117,6 +122,7 @@ class Source {
     TypeSource? typeSource,
     String? langueParDefaut,
     String? configurationSelecteurs,
+    bool effacerConfigurationSelecteurs = false,
     bool? estActive,
   }) {
     return Source(
@@ -125,8 +131,9 @@ class Source {
       urlBase: urlBase ?? this.urlBase,
       typeSource: typeSource ?? this.typeSource,
       langueParDefaut: langueParDefaut ?? this.langueParDefaut,
-      configurationSelecteurs:
-          configurationSelecteurs ?? this.configurationSelecteurs,
+      configurationSelecteurs: effacerConfigurationSelecteurs
+          ? null
+          : configurationSelecteurs ?? this.configurationSelecteurs,
       estActive: estActive ?? this.estActive,
     );
   }

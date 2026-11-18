@@ -9,7 +9,7 @@ library;
 /// `pubspec.yaml` n'est mis à jour qu'à la publication (tâche T7). Un test
 /// vérifie qu'elle est égale ou supérieure. Recopiée ici car lire la version
 /// à l'exécution demanderait un paquet supplémentaire.
-const String versionApplication = '0.2.1';
+const String versionApplication = '0.2.2';
 
 // ---------------------------------------------------------------- Chapitres
 
@@ -126,6 +126,11 @@ const double largeurCouvertureLigne = 48;
 /// dialogue de largeur fixe (choix de la couverture) : laisse les marges
 /// Material visibles sur téléphone.
 const double fractionLargeurDialogue = 0.8;
+
+/// Part de la hauteur de l'écran occupée au plus par le texte d'un bandeau
+/// global (dossier des chapitres inaccessible, redémarrage) : au-delà, le
+/// texte défile, et l'onglet garde la place de s'afficher sur un téléphone.
+const double fractionHauteurMaxBandeau = 0.15;
 
 /// Part de la hauteur de l'écran occupée au plus par le panneau des
 /// catégories (feuille du bas sur téléphone).

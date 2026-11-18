@@ -46,7 +46,12 @@ void _relireEcrans(BuildContext context) {
   relire<EtatBibliotheque>((etat) => etat.charger());
   relire<EtatSources>((etat) => etat.charger());
   relire<EtatParutions>((etat) => etat.charger());
-  relire<EtatParametres>((etat) => etat.charger());
+  relire<EtatParametres>((etat) async {
+    await etat.charger();
+    // Titres ajoutés à Favoris/Suivis, archive complète activée par le
+    // fichier : leurs téléchargements partent tout de suite.
+    await etat.appliquerReglesATous();
+  });
 }
 
 /// Dialogue « Importer un export » : liste des exports trouvés (un appui

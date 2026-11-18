@@ -11,6 +11,16 @@ const String extensionArchiveChapitre = '.zip';
 /// porte ce suffixe n'est donc jamais pris pour un chapitre téléchargé.
 const String suffixeArchivePartielle = '.part';
 
+/// Suffixe de la copie temporaire d'un fichier pendant un déplacement des
+/// archives vers un autre dossier (`ch1.en.zip.deplacement`,
+/// `couverture.png.deplacement`).
+///
+/// Distinct de [suffixeArchivePartielle] : dans un dossier partagé (NAS), un
+/// déplacement ne doit jamais écraser ni supprimer le `.part` d'un
+/// téléchargement en cours d'une autre bibliothèque. Comme il ne finit pas
+/// par `.zip`, un tel fichier n'est jamais pris pour une archive.
+const String suffixeCopieDeplacement = '.deplacement';
+
 /// Préfixe du nom de fichier d'un chapitre (`ch<numero>.<langue>.zip`).
 const String prefixeFichierChapitre = 'ch';
 
@@ -77,3 +87,22 @@ const int tailleMaxCouverture = 20 * 1024 * 1024;
 /// Le tampon par défaut d'`OutputFileStream` fait 1 Mio ; on le réduit car
 /// chaque page est de toute façon vidée sur le disque dès qu'elle est ajoutée.
 const int tailleTamponEcritureArchive = 256 * 1024;
+
+/// Nom du fichier repère écrit à la racine d'un dossier de téléchargements
+/// choisi par le client (`StockageTelechargements.personnalise`).
+///
+/// Sa présence prouve que le dossier joint est bien le bon : sous Linux ou
+/// Android, un point de montage dont le partage est démonté reste un dossier
+/// vide qui existe ; sans ce repère, les archives seraient recréées en
+/// silence sur le disque local.
+const String nomFichierMarqueurRacine = '.bibliotheque_perso';
+
+/// Contenu du fichier repère ([nomFichierMarqueurRacine]), lisible par le
+/// client s'il ouvre le dossier.
+const String contenuMarqueurRacine =
+    'Dossier des téléchargements de Bibliothèque perso. '
+    'Ne pas supprimer ce fichier.\n';
+
+/// Préfixe du fichier d'essai écrit puis supprimé pour vérifier qu'un dossier
+/// candidat accepte l'écriture (`.essai_ecriture_<horodatage>`).
+const String prefixeFichierEssaiEcriture = '.essai_ecriture_';

@@ -3,6 +3,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -14,7 +15,9 @@ import '../modeles/source.dart';
 import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
 import '../services/classement_listes.dart';
+import '../services/constantes_services.dart';
 import '../services/service_bibliotheque.dart';
+import '../services/service_categories.dart';
 import '../services/service_telechargement.dart';
 import 'constantes_etat.dart';
 import 'description_erreur.dart';
@@ -63,10 +66,15 @@ class EtatTitre extends EtatNotifiant {
   ///
   /// [maintenant] permet aux tests de fixer l'heure du compte à rebours des
   /// suppressions prévues.
+  ///
+  /// Avec [serviceCategories], la fiche montre les catégories ramenées à
+  /// leur groupe, sans doublon de même sens (« survie » seulement, pas
+  /// aussi « survival ») ; sans lui, les catégories telles qu'enregistrées.
   EtatTitre(
     this._service,
     this.idTitre, {
     ServiceTelechargement? serviceTelechargement,
+    this._serviceCategories,
     DateTime Function()? maintenant,
   }) : _serviceTelechargement = serviceTelechargement,
        _maintenant = maintenant ?? (() => DateTime.now().toUtc()) {
@@ -79,6 +87,7 @@ class EtatTitre extends EtatNotifiant {
 
   final ServiceBibliotheque _service;
   final ServiceTelechargement? _serviceTelechargement;
+  final ServiceCategories? _serviceCategories;
   final DateTime Function() _maintenant;
   StreamSubscription<void>? _abonnement;
 
@@ -887,15 +896,245 @@ class EtatTitre extends EtatNotifiant {
     );
   }
 
-  /// Applique les règles de conservation si [idListe] est Favoris ou Suivis
-  /// (les seules listes qui déclenchent des téléchargements).
+  /// Applique les règles de conservation si [idListe] est Favoris, Suivis
+  /// ou Terminés (ou si la liste est introuvable).
+  ///
+  /// Seules Favoris et Suivis (et l'archive complète) comptent pour la
+  /// politique de téléchargement : Terminés ne l'arrête pas (un titre à la
+  /// fois Suivis et Terminés reste téléchargé, voir `ClassementListes`). Le
+  /// déclenchement sur Terminés ne fait que relire la politique, sans effet
+  /// propre.
   Future<void> _appliquerReglesSiSysteme(int idListe) async {
     final liste = _listes.where((liste) => liste.id == idListe).firstOrNull;
     if (liste == null ||
         liste.nom == nomListeFavoris ||
-        liste.nom == nomListeSuivis) {
+        liste.nom == nomListeSuivis ||
+        liste.nom == nomListeTermines) {
       await _appliquerRegles();
     }
+  }
+
+  // ------------------------------------ Description personnelle (client)
+
+  bool _estEnEnregistrementDescription = false;
+
+  /// `true` pendant l'enregistrement de la description personnelle.
+  bool get estEnEnregistrementDescription => _estEnEnregistrementDescription;
+
+  /// Nombre maximal de caractères de la description personnelle (au-delà,
+  /// le service refuse l'enregistrement).
+  static const int longueurMaxDescription = longueurMaxDescriptionPerso;
+
+  /// Description personnelle du titre (distincte du résumé du site), ou
+  /// `null` s'il n'y en a pas.
+  String? get descriptionPerso => _titre?.descriptionPerso;
+
+  /// Enregistre la description personnelle ; `null` ou un texte vide
+  /// l'efface. La fiche est relue ensuite.
+  ///
+  /// Décision du client : la fiche venant du site n'est pas modifiable,
+  /// seule cette description lui appartient.
+  Future<ResultatAction<bool>> enregistrerDescriptionPerso(
+    String? texte,
+  ) async {
+    if (_estEnEnregistrementDescription) {
+      return const ResultatAction<bool>.reussite(false);
+    }
+    _estEnEnregistrementDescription = true;
+    notifier();
+    try {
+      await _service.enregistrerDescriptionPerso(idTitre, texte);
+      final numero = ++_numeroLecture;
+      final donnees = await _lireBase();
+      if (numero == _numeroLecture) _appliquer(donnees);
+      return const ResultatAction<bool>.reussite(true);
+    } on _TitreIntrouvable {
+      _signalerIntrouvable();
+      return const ResultatAction<bool>.echec(
+        DescriptionErreur(NatureErreur.introuvable),
+      );
+    } catch (erreur, pile) {
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnEnregistrementDescription = false;
+      notifier();
+    }
+  }
+
+  // ------------------------------------------- Sélection de chapitres (X10)
+
+  /// Lignes sélectionnées, par identifiant de leur version retenue
+  /// (`GroupeChapitres.retenu`) : une ligne = un numéro, toutes langues.
+  Set<int> _idsSelection = const <int>{};
+
+  /// Sélection d'avant le glisser en cours : le glisser y ajoute la plage
+  /// entre la ligne de départ et la ligne survolée.
+  Set<int> _selectionAvantGlisser = const <int>{};
+
+  /// Ligne où le glisser a commencé, ou `null`.
+  int? _ancreGlisser;
+
+  bool _estEnSelection = false;
+  bool _estEnMarquageLot = false;
+
+  /// `true` en mode sélection (cases à cocher, barre d'actions).
+  bool get estEnSelection => _estEnSelection;
+
+  /// `true` pendant l'enregistrement d'un marquage en lot.
+  bool get estEnMarquageLot => _estEnMarquageLot;
+
+  /// Nombre de lignes sélectionnées (parmi celles affichées).
+  int get nombreSelectionnes => _groupesSelectionnes.length;
+
+  /// `true` si toutes les lignes affichées sont sélectionnées.
+  bool get toutEstSelectionne =>
+      _groupes.isNotEmpty && nombreSelectionnes == _groupes.length;
+
+  /// Seule ligne sélectionnée (parmi celles affichées), ou `null` s'il y en
+  /// a zéro ou plusieurs.
+  GroupeChapitres? get groupeSelectionneUnique {
+    final choisis = _groupesSelectionnes;
+    return choisis.length == 1 ? choisis.single : null;
+  }
+
+  /// `true` si la ligne [groupe] est sélectionnée.
+  bool estSelectionne(GroupeChapitres groupe) =>
+      _idsSelection.contains(groupe.retenu.id);
+
+  List<GroupeChapitres> get _groupesSelectionnes => <GroupeChapitres>[
+    for (final groupe in _groupes)
+      if (_idsSelection.contains(groupe.retenu.id)) groupe,
+  ];
+
+  /// Entre en mode sélection avec [groupe] sélectionné (appui long).
+  void commencerSelection(GroupeChapitres groupe) {
+    final id = groupe.retenu.id;
+    if (id == null) return;
+    _estEnSelection = true;
+    _idsSelection = <int>{..._idsSelection, id};
+    notifier();
+  }
+
+  /// Ajoute ou retire [groupe] de la sélection (appui ou case en mode
+  /// sélection). La sélection reste ouverte même vide : le client la ferme
+  /// avec « Annuler ».
+  void basculerSelection(GroupeChapitres groupe) {
+    final id = groupe.retenu.id;
+    if (id == null) return;
+    _estEnSelection = true;
+    _idsSelection = _idsSelection.contains(id)
+        ? (Set<int>.of(_idsSelection)..remove(id))
+        : <int>{..._idsSelection, id};
+    notifier();
+  }
+
+  /// Début d'un glisser de sélection sur [groupe] (appui long suivi d'un
+  /// glisser, ou clic maintenu à la souris).
+  void commencerGlisser(GroupeChapitres groupe) {
+    final id = groupe.retenu.id;
+    if (id == null) return;
+    _estEnSelection = true;
+    _selectionAvantGlisser = _idsSelection;
+    _ancreGlisser = id;
+    _idsSelection = <int>{..._idsSelection, id};
+    notifier();
+  }
+
+  /// Le glisser survole [groupe] : la sélection devient celle d'avant le
+  /// glisser, plus toutes les lignes entre la ligne de départ et celle-ci.
+  void etendreGlisser(GroupeChapitres groupe) {
+    final ancre = _ancreGlisser;
+    if (ancre == null) return;
+    final debut = _groupes.indexWhere((g) => g.retenu.id == ancre);
+    final fin = _groupes.indexWhere((g) => g.retenu.id == groupe.retenu.id);
+    if (debut < 0 || fin < 0) return;
+    final plage = <int>{
+      for (var i = math.min(debut, fin); i <= math.max(debut, fin); i++)
+        ?_groupes[i].retenu.id,
+    };
+    final nouvelle = <int>{..._selectionAvantGlisser, ...plage};
+    if (setEquals(nouvelle, _idsSelection)) return;
+    _idsSelection = nouvelle;
+    notifier();
+  }
+
+  /// Fin du glisser de sélection.
+  void terminerGlisser() {
+    _ancreGlisser = null;
+    _selectionAvantGlisser = const <int>{};
+  }
+
+  /// Sélectionne toutes les lignes affichées (filtre de site compris).
+  void toutSelectionner() {
+    _estEnSelection = true;
+    _idsSelection = <int>{for (final groupe in _groupes) ?groupe.retenu.id};
+    notifier();
+  }
+
+  /// Quitte le mode sélection sans rien changer.
+  void annulerSelection() {
+    _estEnSelection = false;
+    _idsSelection = const <int>{};
+    terminerGlisser();
+    notifier();
+  }
+
+  /// Marque lues (ou non lues si [lu] vaut `false`) toutes les versions des
+  /// lignes sélectionnées, en une fois, puis quitte le mode sélection.
+  /// Renvoie le nombre de chapitres dont l'état a changé.
+  Future<ResultatAction<int>> marquerSelection({bool lu = true}) async {
+    final ids = <int>{
+      for (final groupe in _groupesSelectionnes)
+        for (final chapitre in groupe.versions) ?chapitre.id,
+    };
+    if (ids.isEmpty) return const ResultatAction<int>.reussite(0);
+    _estEnMarquageLot = true;
+    notifier();
+    try {
+      final nombre = await _service.marquerChapitresLus(idTitre, ids, lu: lu);
+      _marquerLocalement((chapitre) => ids.contains(chapitre.id), lu);
+      _estEnSelection = false;
+      _idsSelection = const <int>{};
+      terminerGlisser();
+      notifier();
+      await _appliquerRegles();
+      return ResultatAction<int>.reussite(nombre);
+    } catch (erreur, pile) {
+      return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnMarquageLot = false;
+      notifier();
+    }
+  }
+
+  /// « Marquer lus jusqu'ici » : tous les chapitres de numéro inférieur ou
+  /// égal à [numero] (toutes langues, tous sites) deviennent lus. Renvoie
+  /// le nombre de chapitres dont l'état a changé.
+  Future<ResultatAction<int>> marquerLusJusqua(double numero) async {
+    _estEnMarquageLot = true;
+    notifier();
+    try {
+      final nombre = await _service.marquerLusJusqua(idTitre, numero);
+      _marquerLocalement((chapitre) => chapitre.numero <= numero, true);
+      notifier();
+      await _appliquerRegles();
+      return ResultatAction<int>.reussite(nombre);
+    } catch (erreur, pile) {
+      return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnMarquageLot = false;
+      notifier();
+    }
+  }
+
+  /// Mise à jour locale après un marquage en lot (la liste ne saute pas).
+  void _marquerLocalement(bool Function(Chapitre) choisi, bool lu) {
+    _chapitres = <Chapitre>[
+      for (final chapitre in _chapitres)
+        choisi(chapitre) ? chapitre.copierAvec(estLu: lu) : chapitre,
+    ];
+    _mettreAJourNonLus();
+    _regrouper();
   }
 
   /// Demande au service d'appliquer les règles de conservation à ce titre.
@@ -1005,7 +1244,10 @@ class EtatTitre extends EtatNotifiant {
     final source = idSource == null
         ? null
         : await _service.chargerSource(idSource);
-    final categories = await _service.chargerCategoriesDuTitre(idTitre);
+    final serviceCategories = _serviceCategories;
+    final categories = serviceCategories == null
+        ? await _service.chargerCategoriesDuTitre(idTitre)
+        : await serviceCategories.chargerCategoriesEffectivesDuTitre(idTitre);
     final listes = await _service.chargerListes();
     final listesDuTitre = await _service.chargerListesDuTitre(idTitre);
     final chapitres = await _service.chargerChapitres(idTitre);
