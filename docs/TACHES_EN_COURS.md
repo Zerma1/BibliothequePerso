@@ -176,13 +176,13 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
 
 ## Retours 0.2.1-test (2026-11-18) → 0.2.2-test
 
-- [ ] X1. Téléchargement : image WEBP sans Content-Type refusée, message avec octets illisibles (sources)
-- [ ] X2. Wikipédia acceptée comme site générique lisible (heuristique trop large)
-- [ ] X3. Case Favoris décochée par défaut à l'ajout d'un titre
-- [ ] X4. Listes personnelles : créer, renommer, supprimer, réordonner (+ « En attente (perso) » gérable)
-- [ ] X5. CRUD sources : modifier/supprimer depuis l'onglet Sources, type modifiable
-- [ ] X6. CRUD titres : modifier nom, alternatifs, résumé, auteur, catégories, niveau de contenu (protégés de l'actualisation) ; ajout par recherche
-- [ ] X7. Archive complète (NAS) : tout télécharger, ne jamais supprimer automatiquement
-- [ ] X8. Plan de tests 0.2.2-test : reprendre D4 (import d'un titre retiré)
-- [ ] X9. Liste système « Terminés » (titres terminés) : pas de notification ni de téléchargement automatique (sauf archive complète)
-- [ ] X10. Marquer lus en lot : sélection de chapitres (appui long + glisser, ou cases) et « Marquer lus jusqu'ici » depuis un chapitre
+- [x] X1. Téléchargement : image WEBP sans Content-Type refusée, message avec octets illisibles (sources)
+- [x] X2. Wikipédia acceptée comme site générique lisible (heuristique trop large)
+- [x] X3. Case Favoris décochée par défaut à l'ajout d'un titre
+- [x] X4. Listes personnelles : créer, renommer, supprimer, réordonner (+ « En attente (perso) » gérable)
+- [x] X5. CRUD sources : modifier/supprimer depuis l'onglet Sources, type modifiable
+- [x] X6. CRUD titres : modifier nom, alternatifs, résumé, auteur, catégories, niveau de contenu (protégés de l'actualisation) ; ajout par recherche
+- [x] X7. Archive complète (NAS) : tout télécharger, ne jamais supprimer automatiquement
+- [x] X8. Plan de tests 0.2.2-test : reprendre D4 (import d'un titre retiré)
+- [x] X9. Liste système « Terminés » (titres terminés) : pas de notification ni de téléchargement automatique (sauf archive complète)
+- [x] X10. Marquer lus en lot : sélection de chapitres (appui long + glisser, ou cases) et « Marquer lus jusqu'ici » depuis un chapitre
