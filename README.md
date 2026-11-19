@@ -30,7 +30,8 @@ Installation actuelle sur le poste de développement (vérifiée avec `flutter d
 | Android SDK 35 et 36, build-tools 28.0.3, 35 et 36 | `D:\dev\android-sdk` | Compilation de l'APK (sans Android Studio) |
 | Microsoft OpenJDK 17 | `C:\Program Files\Microsoft\jdk-17.0.21.21-hotspot` | Gradle (Android) |
 | Visual Studio Build Tools 2022 (C++) | `C:\Program Files (x86)\…` | Compilateur de la version Windows `.exe` (aucune interface à utiliser) |
-| Cache des paquets Dart | `D:\dev\pub-cache` (variable `PUB_CACHE`) | Évite de remplir C: |
+| NuGet 8 (`winget install Microsoft.NuGet`) | `C:\Users\<utilisateur>\AppData\Local\Microsoft\WinGet\Links\nuget.exe` (dans le `PATH`) | Exigé par `flutter build windows` : télécharge les dépendances WebView2 du navigateur intégré (`flutter_inappwebview`) |
+| Cache des paquets Dart | `D:\dev\pub-cache` (variable `PUB_CACHE`, chemin confirmé par `.dart_tool/package_config.json`) | Évite de remplir C: |
 | Cache Gradle | `D:\dev\gradle` (variable `GRADLE_USER_HOME`) | Évite de remplir C: |
 
 Variables d'environnement utilisateur : `JAVA_HOME`, `ANDROID_HOME`, `PUB_CACHE`,
@@ -46,7 +47,13 @@ flutter doctor
 ```
 
 La version Linux se compile **sur une machine Linux** (ou sous WSL2), avec les paquets
-`clang cmake ninja-build pkg-config libgtk-3-dev`.
+`clang cmake ninja-build pkg-config libgtk-3-dev`. WPE WebKit n'est pas nécessaire : la
+partie Linux de `flutter_inappwebview` est remplacée par un paquet vide
+(`paquets/flutter_inappwebview_linux_vide/`), il n'y a pas de navigateur intégré sous Linux.
+
+`flutter build windows` exige aussi le **mode développeur** de Windows (liens symboliques
+des plugins) et `nuget.exe` dans le `PATH` (après l'installation par winget, rouvrir le
+terminal et IntelliJ).
 
 ## Commandes utiles
 

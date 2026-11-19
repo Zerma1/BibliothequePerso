@@ -16,6 +16,7 @@ import '../widgets/indicateur_hors_ligne.dart';
 import '../widgets/messages.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
+import 'ecran_navigateur.dart';
 
 /// Lecteur d'un chapitre : pages lues directement dans l'archive `.zip`,
 /// chargées au fur et à mesure du défilement, zoom, position « page X / N »
@@ -180,6 +181,21 @@ class _VueNonTelecharge extends StatelessWidget {
                     : Textes.telecharger,
               ),
             ),
+          // « Lire en ligne » : navigateur intégré (Windows, Android) ; au
+          // retour, le chapitre a peut-être été enregistré depuis la page.
+          if (chapitre != null && EcranNavigateur.estDisponible(context))
+            OutlinedButton.icon(
+              onPressed: () async {
+                await EcranNavigateur.ouvrir(
+                  context,
+                  chapitre.urlChapitre,
+                  idTitre: etat.idTitre,
+                );
+                await etat.charger();
+              },
+              icon: const Icon(Icons.public),
+              label: const Text(Textes.lireEnLigne),
+            ),
           if (chapitre != null)
             OutlinedButton.icon(
               onPressed: () => ouvrirLienExterne(context, chapitre.urlChapitre),
@@ -207,23 +223,37 @@ class _VueExterne extends StatelessWidget {
     return VueVide(
       message: Textes.lecteurChapitreExterne(site),
       icone: iconeLienExterne,
-      action: _BoutonLireSurSite(chapitre: chapitre, site: site),
+      action: _BoutonLireSurSite(
+        chapitre: chapitre,
+        site: site,
+        idTitre: etat.idTitre,
+      ),
     );
   }
 }
 
-/// Bouton « Lire sur `site` » d'un chapitre externe : ouvre la page dans
-/// l'application de l'éditeur si elle est installée, sinon le navigateur.
+/// Bouton « Lire sur `site` » d'un chapitre externe : ouvre la page dans le
+/// navigateur intégré (Windows, Android), sinon dans le navigateur du
+/// système.
 class _BoutonLireSurSite extends StatelessWidget {
-  const _BoutonLireSurSite({required this.chapitre, required this.site});
+  const _BoutonLireSurSite({
+    required this.chapitre,
+    required this.site,
+    required this.idTitre,
+  });
 
   final Chapitre chapitre;
   final String site;
+  final int idTitre;
 
   @override
   Widget build(BuildContext context) {
     return OutlinedButton.icon(
-      onPressed: () => ouvrirLienExterne(context, chapitre.urlExterne!),
+      onPressed: () => EcranNavigateur.ouvrir(
+        context,
+        chapitre.urlExterne!,
+        idTitre: idTitre,
+      ),
       icon: const Icon(iconeLienExterne),
       label: Text(
         '${Textes.lireSur(site)} : '
@@ -601,7 +631,11 @@ class _PiedChapitre extends StatelessWidget {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: espacementPetit),
-            _BoutonLireSurSite(chapitre: premierExterne, site: site),
+            _BoutonLireSurSite(
+              chapitre: premierExterne,
+              site: site,
+              idTitre: etat.idTitre,
+            ),
             const SizedBox(height: espacementMoyen),
           ],
           if (suivant == null && premierExterne != null)

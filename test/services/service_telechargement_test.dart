@@ -546,6 +546,10 @@ void main() {
     test(
       "s'arrête avant le chapitre suivant si un autre isolat a pris le verrou",
       () async {
+        // Un chapitre à la fois : avec plusieurs, le second serait déjà
+        // commencé quand le verrou change de main (cas testé dans
+        // service_telechargement_parallele_test.dart).
+        await parametres.enregistrerTelechargementsSimultanes(1);
         final premier = await chapitre(1);
         final second = await chapitre(2);
         avantImage = () => poserVerrouAutre(

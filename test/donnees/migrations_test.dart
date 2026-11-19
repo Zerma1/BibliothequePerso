@@ -20,8 +20,8 @@ void main() {
     await base.close();
   });
 
-  test('la version du schéma est 12 et correspond à la base ouverte', () async {
-    expect(versionSchema, 12);
+  test('la version du schéma est 13 et correspond à la base ouverte', () async {
+    expect(versionSchema, 13);
     expect(await base.getVersion(), versionSchema);
   });
 
@@ -1967,9 +1967,14 @@ void main() {
         for (final table in tables) {
           final apres = await version12.query(table, orderBy: 'rowid');
           expect(
-            table == 'titres'
-                ? sansColonnes(apres, const <String>{'description_perso'})
-                : apres,
+            switch (table) {
+              'titres' => sansColonnes(apres, const <String>{
+                'description_perso',
+              }),
+              // chapitres.origine : ajoutée plus tard par la migration 13.
+              'chapitres' => sansColonnes(apres, const <String>{'origine'}),
+              _ => apres,
+            },
             avant[table],
             reason: 'table $table',
           );
@@ -1986,6 +1991,150 @@ void main() {
       await dossier.delete(recursive: true);
     }
   });
+
+  test('la migration 12 → 13 ne perd rien, met origine à « site » et '
+      'garde les chapitres déjà présents sur un lien seul', () async {
+    final dossier = await Directory.systemTemp.createTemp('migration13_test_');
+    final chemin = p.join(dossier.path, 'version12.db');
+    try {
+      final version12 = await databaseFactoryFfi.openDatabase(
+        chemin,
+        options: OpenDatabaseOptions(
+          version: 12,
+          onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+          onCreate: (db, version) => appliquerMigrations(db, 0, 12),
+        ),
+      );
+      final idMangaDex = await version12.insert('sources', <String, Object?>{
+        'nom': 'MangaDex',
+        'url_base': 'https://mangadex.org',
+        'type_source': 'mangaDex',
+      });
+      final idComix = await version12.insert('sources', <String, Object?>{
+        'nom': 'Comix',
+        'url_base': 'https://comix.to',
+        'type_source': 'generique',
+      });
+      final idTitre = await version12.insert('titres', <String, Object?>{
+        'id_source': idMangaDex,
+        'url_titre': 'https://mangadex.org/title/ruri',
+        'nom': 'Ruri Dragon',
+        'type_titre': 'manga',
+      });
+      await version12.insert('titres_sources', <String, Object?>{
+        'id_titre': idTitre,
+        'id_source': idComix,
+        'url_titre': 'https://comix.to/title/ruri',
+        'est_principale': 0,
+        'date_ajout': 42,
+      });
+      await version12.insert('chapitres', <String, Object?>{
+        'id_titre': idTitre,
+        'url_chapitre': 'https://mangadex.org/chapter/1',
+        'nom': 'Chapitre 1',
+        'numero': 1.0,
+        'est_lu': 1,
+      });
+      // Chapitre lu sur Comix, gardé lors de son passage en lien seul.
+      final idGarde = await version12.insert('chapitres', <String, Object?>{
+        'id_titre': idTitre,
+        'id_source': idComix,
+        'url_chapitre': 'https://comix.to/title/ruri/chapter-1',
+        'nom': 'Chapitre 1',
+        'numero': 1.0,
+        'est_lu': 1,
+      });
+      await version12.update(
+        'titres_sources',
+        <String, Object?>{'lien_seul': 1},
+        where: 'id_source = ?',
+        whereArgs: <Object?>[idComix],
+      );
+      const tables = <String>[
+        'sources',
+        'titres',
+        'titres_sources',
+        'chapitres',
+        'listes',
+      ];
+      final avant = <String, List<Map<String, Object?>>>{
+        for (final table in tables)
+          table: await version12.query(table, orderBy: 'rowid'),
+      };
+      expect(
+        (await version12.rawQuery('PRAGMA table_info(chapitres)'))
+            .map((colonne) => colonne['name']),
+        isNot(contains('origine')),
+      );
+      await version12.close();
+
+      final version13 = await ouvrirBaseDeDonnees(
+        chemin: chemin,
+        fabrique: databaseFactoryFfi,
+      );
+      try {
+        expect(await version13.getVersion(), versionSchema);
+        for (final table in tables) {
+          final apres = await version13.query(table, orderBy: 'rowid');
+          expect(
+            table == 'chapitres'
+                ? sansColonnes(apres, const <String>{'origine'})
+                : apres,
+            avant[table],
+            reason: 'table $table',
+          );
+        }
+        // Tous les chapitres existants viennent du site.
+        expect(
+          (await version13.query('chapitres'))
+              .map((chapitre) => chapitre['origine']),
+          everyElement('site'),
+        );
+        // Le chapitre site gardé sur le lien seul reste modifiable.
+        await version13.update(
+          'chapitres',
+          <String, Object?>{'est_lu': 0, 'est_garde': 1},
+          where: 'id = ?',
+          whereArgs: <Object?>[idGarde],
+        );
+        // Nouveau chapitre site sur le lien seul : refusé ; web : accepté.
+        final nouveau = <String, Object?>{
+          'id_titre': idTitre,
+          'id_source': idComix,
+          'url_chapitre': 'https://comix.to/title/ruri/chapter-2',
+          'nom': 'Chapitre 2',
+          'numero': 2.0,
+        };
+        await expectLater(
+          version13.insert('chapitres', nouveau),
+          throwsA(isA<DatabaseException>()),
+        );
+        await version13.insert('chapitres', <String, Object?>{
+          ...nouveau,
+          'origine': 'web',
+        });
+        final declencheurs = await version13.query(
+          'sqlite_master',
+          columns: <String>['name'],
+          where: 'type = ? AND tbl_name = ?',
+          whereArgs: <Object?>['trigger', 'chapitres'],
+        );
+        expect(
+          declencheurs.map((ligne) => ligne['name']),
+          containsAll(<String>[
+            'declencheur_chapitres_source',
+            'declencheur_chapitres_lien_seul_insertion',
+            'declencheur_chapitres_lien_seul_modification',
+          ]),
+        );
+        expect(await version13.rawQuery('PRAGMA foreign_key_check'), isEmpty);
+      } finally {
+        await version13.close();
+      }
+    } finally {
+      await dossier.delete(recursive: true);
+    }
+  });
 }
 
 /// Annule, dans les [lignes] de [table] lues après toutes les migrations,
@@ -1995,6 +2144,7 @@ void main() {
 /// - Migration 11 sur `listes` : ligne « Terminés » ajoutée en position 4,
 ///   lignes suivantes décalées d'un cran.
 /// - Migration 12 sur `titres` : colonne `description_perso` retirée.
+/// - Migration 13 sur `chapitres` : colonne `origine` retirée.
 ///
 /// Les autres tables sont renvoyées telles quelles.
 List<Map<String, Object?>> sansMigrationsRecentes(
@@ -2003,6 +2153,9 @@ List<Map<String, Object?>> sansMigrationsRecentes(
 ) {
   if (table == 'titres') {
     return sansColonnes(lignes, const <String>{'description_perso'});
+  }
+  if (table == 'chapitres') {
+    return sansColonnes(lignes, const <String>{'origine'});
   }
   if (table != 'listes') {
     return lignes;

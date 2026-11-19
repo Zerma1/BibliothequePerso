@@ -20,6 +20,7 @@ import '../donnees/depot_telechargements.dart';
 import '../donnees/depot_titres.dart';
 import '../donnees/depot_titres_sources.dart';
 import '../donnees/erreur_stockage.dart';
+import '../donnees/journal_fichier.dart';
 import '../donnees/stockage_telechargements.dart';
 import '../modeles/chapitre.dart';
 import '../modeles/constantes.dart';
@@ -49,6 +50,11 @@ import 'verrou_telechargement.dart';
 // la même bibliothèque. Sans nouveau membre public ici, les faux
 // `ServiceTelechargement` des tests de l'interface restent valables.
 part 'service_dossier_chapitres.dart';
+// Même raison pour les enregistrements faits depuis le navigateur intégré :
+// ils consultent la pause et le changement de dossier, et ce dernier compte
+// les enregistrements en cours. Extension plutôt que nouveaux membres
+// publics, pour la même compatibilité avec les faux services.
+part 'enregistrements_web_telechargement.dart';
 
 /// Chapitre avec son titre et sa source, tels qu'il faut les passer au
 /// stockage (la langue vide est remplacée par la langue de la source pour que
@@ -76,11 +82,20 @@ class _VerrouPerdu implements Exception {
 /// File de téléchargement persistante, lecture des archives et règles de
 /// conservation (favoris / suivis).
 ///
-/// Un seul chapitre est téléchargé à la fois : les images d'un chapitre
-/// viennent du même serveur, et le délai par domaine de `ClientHttpPoli`
-/// rendrait de toute façon le parallélisme inutile.
+/// Jusqu'à N chapitres sont téléchargés en même temps (réglage du client,
+/// `ServiceParametres.chargerTelechargementsSimultanes`, 1 à 32). Le rythme
+/// des requêtes reste celui de `ClientHttpPoli` : 1 s entre deux requêtes
+/// vers un même domaine, créneau partagé par tous les chapitres en cours.
+/// Plusieurs chapitres d'un même site avancent donc en alternance, sans
+/// jamais solliciter ce site plus vite qu'avec un seul chapitre ; le gain
+/// vient des chapitres de sites différents.
 class ServiceTelechargement {
   /// Crée le service.
+  ///
+  /// [plafondTelechargementsSimultanes] : nombre maximal de chapitres en
+  /// même temps quel que soit le réglage du client (tâche de fond Android :
+  /// [telechargementsSimultanesTacheDeFond]). `null` : plafond déduit de
+  /// l'isolat (voir [_plafondEffectif]).
   ServiceTelechargement({
     required DepotTelechargements depotTelechargements,
     required DepotChapitres depotChapitres,
@@ -97,7 +112,9 @@ class ServiceTelechargement {
     DateTime Function()? horloge,
     DepotTitresSources? depotTitresSources,
     DepotParametres? depotParametres,
-  }) : _depotTitresSources = depotTitresSources,
+    int? plafondTelechargementsSimultanes,
+  }) : _plafondSimultanes = plafondTelechargementsSimultanes,
+       _depotTitresSources = depotTitresSources,
        _depotParametres = depotParametres,
        _accesDossier = AccesDossierChapitres.accessible(
          stockage.dossierRacine,
@@ -173,8 +190,38 @@ class ServiceTelechargement {
   final StreamController<void> _changements =
       StreamController<void>.broadcast();
 
+  /// Plafond des téléchargements simultanés imposé à la construction (voir
+  /// le constructeur), ou `null`.
+  final int? _plafondSimultanes;
+
   /// Traitement de la file en cours, partagé si on le redemande.
   Future<void>? _traitement;
+
+  /// `true` si [lancerTraitement] a été appelé pendant un traitement après
+  /// sa dernière recherche d'un chapitre en attente : le traitement refait
+  /// alors un passage avant de se terminer. Sans lui, un chapitre mis en
+  /// file pendant la fin d'un traitement (file vue vide, suppressions
+  /// échues, libération du verrou) attendrait la relance suivante.
+  bool _relanceDemandee = false;
+
+  /// Enregistrements de chapitres en cours depuis le navigateur intégré
+  /// (`executerEnregistrementWeb`) : un changement du dossier des chapitres
+  /// avec déplacement est refusé tant qu'il y en a un, comme pendant un
+  /// téléchargement.
+  int _enregistrementsWebEnCours = 0;
+
+  /// Réveil de la boucle de la file pendant qu'elle attend la fin d'un
+  /// chapitre : complété par [lancerTraitement] (chapitre ajouté, réglage du
+  /// nombre de téléchargements simultanés changé) pour qu'un emplacement
+  /// libre soit rempli sans attendre la fin des chapitres en cours.
+  Completer<void>? _reveil;
+
+  /// `true` dès que le verrou de la file a été repris par l'autre isolat
+  /// pendant le traitement en cours : tous les chapitres en cours
+  /// s'arrêtent à leur page suivante (et pas seulement celui qui l'a vu), et
+  /// aucun autre n'est commencé. Remis à `false` au début de chaque
+  /// traitement.
+  bool _verrouPerdu = false;
 
   /// Nouvel essai prévu quand le verrou était tenu par un autre isolat.
   Timer? _relance;
@@ -803,7 +850,7 @@ class ServiceTelechargement {
       if (archiveComplete || vientDEtreDesactivee) {
         // Archive complète : toute la bibliothèque, y compris les titres
         // sans liste et ceux des listes du client. La file reste traitée
-        // un chapitre à la fois, avec le délai par domaine de
+        // au plus N chapitres à la fois, avec le délai par domaine de
         // `ClientHttpPoli` : le volume ne change rien au rythme des requêtes.
         // Juste désactivée : même parcours, sans réseau (calcul en base),
         // pour vider la file de ce qui n'est plus voulu.
@@ -1496,9 +1543,18 @@ class ServiceTelechargement {
   /// être attendu.
   ///
   /// File en pause (changement du dossier des chapitres) : rien n'est lancé.
+  ///
+  /// Pendant un traitement, l'appel le réveille : le nombre de
+  /// téléchargements simultanés est relu et les emplacements libres sont
+  /// remplis tout de suite. À appeler après
+  /// `ServiceParametres.enregistrerTelechargementsSimultanes`.
   Future<void> lancerTraitement() {
     final enCours = _traitement;
     if (enCours != null) {
+      // Demande notée même si la boucle est en train de finir : elle sera
+      // servie par un nouveau passage ([_traiterFileTantQueDemande]).
+      _relanceDemandee = true;
+      _reveiller();
       return enCours;
     }
     if (_enPause) {
@@ -1506,12 +1562,28 @@ class ServiceTelechargement {
     }
     _relance?.cancel();
     _relance = null;
-    final nouveau = _traiterFile().whenComplete(() {
+    final nouveau = _traiterFileTantQueDemande().whenComplete(() {
       _traitement = null;
       _signaler();
     });
     _traitement = nouveau;
     return nouveau;
+  }
+
+  /// Traite la file, puis la retraite tant que [lancerTraitement] a été
+  /// appelé pendant la fin du passage précédent ([_relanceDemandee]).
+  ///
+  /// Relance faite dans le même `Future` plutôt qu'après sa fin : celui qui
+  /// attend [lancerTraitement] attend aussi le chapitre ajouté au dernier
+  /// moment. Toujours borné : un passage de plus n'a lieu que si un appel
+  /// est arrivé pendant le précédent (le drapeau est remis à `false` à
+  /// chaque recherche d'un chapitre en attente), jamais en boucle seule.
+  Future<void> _traiterFileTantQueDemande() async {
+    do {
+      _relanceDemandee = false;
+      await _traiterFile();
+    } while (_relanceDemandee && !_enPause && !_changements.isClosed);
+    _relanceDemandee = false;
   }
 
   Future<void> _traiterFile() async {
@@ -1529,47 +1601,16 @@ class ServiceTelechargement {
         return;
       }
       try {
+        _verrouPerdu = false;
         // Même contrôle qu'avant chaque chapitre, avant de toucher aux
         // archives partielles de l'ancien dossier.
         if (!await _dossierStablePourLaFile()) return;
         await _reprendreApresInterruption();
-        while (!_changements.isClosed) {
-          // Pause demandée pendant le traitement (changement du dossier) :
-          // le chapitre en cours s'est terminé, on n'en commence pas d'autre.
-          if (_enPause) return;
-          // Réglages relus avant chaque chapitre : la pause est propre à cet
-          // isolat, et une tâche de fond Android lancée avant un changement
-          // de dossier écrirait sinon dans l'ancien dossier (ou pendant la
-          // copie). Arrêt sans échec : le chapitre reste en attente.
-          if (!await _dossierStablePourLaFile()) return;
-          // Renouvelé avant chaque chapitre ; si un autre isolat a repris le
-          // verrou entre-temps (le nôtre avait expiré), on lui laisse la file
-          // plutôt que d'écrire les mêmes archives que lui.
-          if (!await _renouvelerVerrou(verifier: true)) {
-            return;
-          }
-          // Le NAS peut s'éteindre au milieu d'une longue file : contrôle
-          // avant chaque chapitre, avant toute requête vers le site.
-          if (!await _dossierPretPourLaFile()) return;
-          // Réservation atomique (en attente → en cours) : même si les deux
-          // isolats se croient propriétaires du verrou (voir la LIMITE
-          // ci-dessous), un chapitre n'est jamais pris par les deux.
-          final suivant = await _depotTelechargements.reserverProchain();
-          if (suivant == null) {
-            // File vide : les suppressions prévues échues pendant le
-            // traitement (qui peut durer longtemps) sont faites maintenant.
-            await _supprimerArchivesEchuesSansErreur();
-            await _planifierRepriseSiNecessaire();
-            return;
-          }
-          if (!await _telecharger(suivant)) {
-            // Dossier devenu injoignable pendant le chapitre : la file
-            // attend son retour (un seul nouvel essai prévu).
-            _planifierNouvelEssai(attenteNouvelEssaiDossierInaccessible);
-            return;
-          }
-        }
+        await _traiterChapitresEnParallele();
       } finally {
+        // Toujours après la fin de tous les chapitres en cours
+        // (`_traiterChapitresEnParallele` les attend même en cas d'erreur) :
+        // l'autre isolat ne doit pas reprendre la file pendant qu'on écrit.
         await _libererVerrou();
       }
     } catch (erreur, pile) {
@@ -1583,6 +1624,230 @@ class ServiceTelechargement {
         pile: pile,
       );
     }
+  }
+
+  /// Cœur de la file, verrou pris : garde jusqu'à N chapitres en cours
+  /// ([_chargerLimiteSimultanes]) et commence le suivant dès qu'un
+  /// emplacement se libère, jusqu'à ce que la file soit vide ou qu'un
+  /// contrôle demande l'arrêt. Ne rend la main qu'une fois **tous** les
+  /// chapitres commencés terminés (même si une erreur de base interrompt la
+  /// boucle) : le verrou reste ainsi tenu, et renouvelé page après page,
+  /// tant qu'une archive est en cours d'écriture.
+  ///
+  /// Les contrôles d'avant chapitre de la file à un seul chapitre sont faits
+  /// avant **chaque** réservation (pause, dossier réglé ou en déplacement,
+  /// verrou, dossier joignable). Quand l'un d'eux échoue, aucun chapitre
+  /// n'est plus commencé ; ceux en cours se terminent (comme le chapitre en
+  /// cours d'avant), sauf verrou perdu, où ils s'arrêtent à leur page
+  /// suivante.
+  Future<void> _traiterChapitresEnParallele() async {
+    final enCours = <Future<void>>{};
+    var limite = await _chargerLimiteSimultanes();
+    // Ligne de début écrite au premier chapitre réservé seulement : la file
+    // est relancée à chaque lecture et à chaque application des règles, une
+    // ligne par relance sans rien à télécharger noierait le journal.
+    var debutAnnonce = false;
+    // Plus aucun chapitre ne doit être commencé (pause, dossier changé ou
+    // injoignable, verrou perdu, erreur inattendue).
+    var arret = false;
+    // Dossier des chapitres devenu injoignable pendant un chapitre.
+    var dossierPerdu = false;
+    try {
+      while (!_changements.isClosed) {
+        // Les demandes arrivées jusqu'ici sont servies par le remplissage
+        // qui suit (il relit la file) : seules les suivantes demandent un
+        // nouveau passage.
+        _relanceDemandee = false;
+        // Remplissage des emplacements libres.
+        while (!arret && enCours.length < limite) {
+          // Pause demandée pendant le traitement (changement du dossier) :
+          // les chapitres en cours se terminent, aucun autre n'est commencé.
+          // Verrou repris par l'autre isolat (vu par un chapitre en cours) :
+          // on lui laisse la file.
+          if (_enPause || _verrouPerdu) {
+            arret = true;
+            break;
+          }
+          // Réglages relus avant chaque chapitre : la pause est propre à cet
+          // isolat, et une tâche de fond Android lancée avant un changement
+          // de dossier écrirait sinon dans l'ancien dossier (ou pendant la
+          // copie). Arrêt sans échec : le chapitre reste en attente.
+          if (!await _dossierStablePourLaFile()) {
+            arret = true;
+            break;
+          }
+          // Renouvelé avant chaque chapitre ; si un autre isolat a repris le
+          // verrou entre-temps (le nôtre avait expiré), on lui laisse la file
+          // plutôt que d'écrire les mêmes archives que lui.
+          if (!await _renouvelerVerrou(verifier: true)) {
+            _verrouPerdu = true;
+            arret = true;
+            break;
+          }
+          // Le NAS peut s'éteindre au milieu d'une longue file : contrôle
+          // avant chaque chapitre, avant toute requête vers le site.
+          if (!await _dossierPretPourLaFile()) {
+            arret = true;
+            break;
+          }
+          // Réservation atomique (en attente → en cours) : ni deux chapitres
+          // en cours de ce traitement, ni les deux isolats (même s'ils se
+          // croient tous deux propriétaires du verrou, voir la LIMITE plus
+          // bas) ne peuvent prendre la même ligne. Les réservations de ce
+          // traitement se font de plus une par une (chaque `await` ci-dessus
+          // est fini avant la suivante).
+          final suivant = await _depotTelechargements.reserverProchain();
+          if (suivant == null) break;
+          if (!debutAnnonce) {
+            debutAnnonce = true;
+            Journal.actuel.info(
+              CategorieJournal.telechargement,
+              "File de téléchargement : début, jusqu'à $limite chapitre(s) "
+              'en même temps${_descriptionPlafond(limite)}',
+            );
+          }
+          late final Future<void> tache;
+          tache =
+              _executerChapitre(
+                suivant,
+                surDossierPerdu: () {
+                  dossierPerdu = true;
+                  arret = true;
+                },
+                surErreur: () => arret = true,
+              ).whenComplete(() {
+                enCours.remove(tache);
+              });
+          enCours.add(tache);
+        }
+        if (enCours.isEmpty) {
+          if (!arret) {
+            // File vide : les suppressions prévues échues pendant le
+            // traitement (qui peut durer longtemps) sont faites maintenant.
+            await _supprimerArchivesEchuesSansErreur();
+            await _planifierRepriseSiNecessaire();
+          }
+          return;
+        }
+        // Attente de la fin d'un chapitre, ou d'un réveil
+        // ([lancerTraitement] : chapitre ajouté, réglage changé). Jamais de
+        // boucle active : sans l'un ou l'autre, rien n'est relu.
+        final reveil = _reveil = Completer<void>();
+        await Future.any<void>(<Future<void>>[...enCours, reveil.future]);
+        _reveil = null;
+        if (!arret) {
+          // Réglage relu à chaque emplacement libéré (une lecture en base) :
+          // la jauge des Paramètres s'applique sans redémarrer la file. Une
+          // baisse laisse finir les chapitres en trop sans en commencer.
+          final nouvelle = await _chargerLimiteSimultanes();
+          if (nouvelle != limite) {
+            Journal.actuel.info(
+              CategorieJournal.telechargement,
+              'File de téléchargement : $limite → $nouvelle chapitre(s) en '
+              'même temps${_descriptionPlafond(nouvelle)}',
+            );
+            limite = nouvelle;
+          }
+        }
+      }
+    } finally {
+      _reveil = null;
+      // Copie : chaque fin de chapitre retire sa tâche de l'ensemble.
+      await Future.wait<void>(enCours.toList());
+      if (dossierPerdu) {
+        // Dossier devenu injoignable pendant un chapitre : la file attend
+        // son retour (un seul nouvel essai prévu).
+        _planifierNouvelEssai(attenteNouvelEssaiDossierInaccessible);
+      }
+    }
+  }
+
+  /// Télécharge un chapitre réservé, pour [_traiterChapitresEnParallele].
+  /// Ne lève jamais : [surDossierPerdu] est appelé si le dossier des
+  /// chapitres est devenu injoignable, [surErreur] pour une erreur
+  /// inattendue (qui arrêtait toute la file quand un seul chapitre était
+  /// traité à la fois : même effet ici, plus aucun chapitre n'est commencé).
+  Future<void> _executerChapitre(
+    Telechargement telechargement, {
+    required void Function() surDossierPerdu,
+    required void Function() surErreur,
+  }) async {
+    try {
+      if (!await _telecharger(telechargement)) surDossierPerdu();
+    } catch (erreur, pile) {
+      surErreur();
+      Journal.actuel.erreur(
+        CategorieJournal.telechargement,
+        'Traitement de la file interrompu (chapitre n°'
+        '${telechargement.idChapitre})',
+        erreur: erreur,
+        pile: pile,
+      );
+    }
+  }
+
+  /// Réveille la boucle de la file si elle attend (voir [_reveil]).
+  void _reveiller() {
+    final reveil = _reveil;
+    if (reveil != null && !reveil.isCompleted) reveil.complete();
+  }
+
+  /// Nombre de chapitres à télécharger en même temps : réglage du client,
+  /// ramené au plafond de l'isolat ([_plafondEffectif]). Ne lève jamais :
+  /// un réglage illisible vaut la valeur par défaut.
+  Future<int> _chargerLimiteSimultanes() async {
+    int reglage;
+    try {
+      reglage = await _serviceParametres.chargerTelechargementsSimultanes();
+    } catch (erreur) {
+      Journal.actuel.avertissement(
+        CategorieJournal.parametres,
+        'Nombre de téléchargements simultanés illisible',
+        erreur: erreur,
+      );
+      reglage = telechargementsSimultanesParDefaut;
+    }
+    // Bornes redites ici : un faux `ServiceParametres` (ou une future
+    // version) ne doit jamais lancer 0 ou 1000 chapitres.
+    final borne = reglage.clamp(
+      telechargementsSimultanesMinimum,
+      telechargementsSimultanesMaximum,
+    );
+    final plafond = _plafondEffectif();
+    return plafond != null && plafond < borne ? plafond : borne;
+  }
+
+  /// Plafond des téléchargements simultanés de cet isolat, ou `null`.
+  ///
+  /// Celui passé au constructeur s'il existe ; sinon
+  /// [telechargementsSimultanesTacheDeFond] dans la tâche de fond Android,
+  /// reconnue à son journal (`JournalFichier` installé avec
+  /// [nomIsolatFond] avant la construction des services).
+  // LIMITE : sans plafond passé au constructeur, la tâche de fond n'est
+  // reconnue que par son journal ; si celui-ci n'a pas pu être ouvert, elle
+  // suit le réglage du client (32 au plus). Passer
+  // `plafondTelechargementsSimultanes` depuis `executerTacheDeFond`
+  // (lib/main.dart) supprimerait cette dépendance.
+  int? _plafondEffectif() {
+    final impose = _plafondSimultanes;
+    if (impose != null) {
+      return impose < telechargementsSimultanesMinimum
+          ? telechargementsSimultanesMinimum
+          : impose;
+    }
+    final journal = Journal.actuel;
+    if (journal is JournalFichier && journal.nomIsolat == nomIsolatFond) {
+      return telechargementsSimultanesTacheDeFond;
+    }
+    return null;
+  }
+
+  /// Précision du journal quand [limite] vient du plafond de l'isolat.
+  String _descriptionPlafond(int limite) {
+    final plafond = _plafondEffectif();
+    return plafond != null && limite >= plafond
+        ? ' (plafond de cet isolat : $plafond)'
+        : '';
   }
 
   /// Remet en attente les téléchargements « en cours » et efface les
@@ -1685,7 +1950,10 @@ class ServiceTelechargement {
       return true;
     }
     try {
-      return await _renouvelerVerrou(verifier: true);
+      final garde = await _renouvelerVerrou(verifier: true);
+      // Partagé par tous les chapitres en cours (voir [_verrouPerdu]).
+      if (!garde) _verrouPerdu = true;
+      return garde;
     } catch (erreur) {
       // Un renouvellement manqué (base momentanément occupée) ne doit pas
       // faire échouer le chapitre : le verrou reste valable jusqu'à son
@@ -1852,7 +2120,10 @@ class ServiceTelechargement {
           )) {
             throw const _Annulation();
           }
-          if (!await _renouvelerVerrouSiNecessaire()) {
+          // Verrou repris par l'autre isolat, vu par un autre chapitre en
+          // cours (ou par celui-ci) : chaque chapitre s'arrête à sa page
+          // suivante, sans attendre son propre renouvellement.
+          if (_verrouPerdu || !await _renouvelerVerrouSiNecessaire()) {
             throw const _VerrouPerdu();
           }
           _signaler();
@@ -2060,7 +2331,7 @@ class ServiceTelechargement {
     _ContexteChapitre contexte,
   ) async {
     final uri = Uri.parse(url);
-    if (SignalementMangaDex.estServeurMangaDexAtHome(url)) {
+    if (_estImageMangaDexAtHome(url, contexte)) {
       // Une seule tentative : chaque échec doit être signalé, puis on change
       // de serveur plutôt que d'insister (documentation MangaDex).
       try {
@@ -2093,6 +2364,19 @@ class ServiceTelechargement {
     );
   }
 
+  /// `true` si [url] est une page servie par un nœud MangaDex@Home : chapitre
+  /// d'une source MangaDex **et** adresse hors `mangadex.org`.
+  ///
+  /// `SignalementMangaDex.estServeurMangaDexAtHome` ne regarde que l'adresse
+  /// (« base url that doesn't contain mangadex.org ») : seule, elle prenait
+  /// les images de tous les autres sites (Madara, Scan-Manga…) pour des
+  /// nœuds MangaDex@Home. Chacune était alors signalée à
+  /// `api.mangadex.network` (une requête de plus par page, vers un tiers qui
+  /// n'a rien servi) et téléchargée sans nouvelle tentative.
+  static bool _estImageMangaDexAtHome(String url, _ContexteChapitre contexte) =>
+      contexte.source.typeSource == TypeSource.mangaDex &&
+      SignalementMangaDex.estServeurMangaDexAtHome(url);
+
   /// `true` si un échec sur [url] justifie de redemander les adresses des
   /// images : tout échec d'un nœud MangaDex@Home (nœud en panne), ou un 403
   /// sur une autre adresse MangaDex (adresse expirée). Les autres sites ne
@@ -2102,7 +2386,7 @@ class ServiceTelechargement {
     ErreurSource erreur,
     _ContexteChapitre contexte,
   ) {
-    if (SignalementMangaDex.estServeurMangaDexAtHome(url)) return true;
+    if (_estImageMangaDexAtHome(url, contexte)) return true;
     final hote = Uri.tryParse(url)?.host ?? '';
     final estMangaDex =
         contexte.source.typeSource == TypeSource.mangaDex ||

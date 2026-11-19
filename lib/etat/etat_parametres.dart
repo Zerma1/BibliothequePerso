@@ -3,6 +3,8 @@
 /// suivis) et « Mises à jour » (nombre de recherches par jour).
 library;
 
+import 'dart:async';
+
 import '../modeles/journal.dart';
 import '../services/planification_mises_a_jour.dart';
 import '../services/politique_telechargement.dart';
@@ -349,6 +351,71 @@ class EtatParametres extends EtatNotifiant {
     }
   }
 
+  // ------------------------------------------ Téléchargements simultanés
+
+  /// Borne basse de la jauge (même borne que le service).
+  static const int minimumTelechargementsSimultanes =
+      ServiceParametres.minimumTelechargementsSimultanes;
+
+  /// Borne haute de la jauge (même borne que le service).
+  static const int maximumTelechargementsSimultanes =
+      ServiceParametres.maximumTelechargementsSimultanes;
+
+  int _telechargementsSimultanes =
+      ServiceParametres.telechargementsSimultanesParDefautClient;
+
+  /// Valeur affichée pendant que le client fait glisser la jauge (rien
+  /// n'est enregistré avant qu'il la lâche), ou `null`.
+  int? _apercuSimultanes;
+  bool _estEnEnregistrementSimultanes = false;
+
+  /// Nombre de chapitres téléchargés en même temps (valeur affichée).
+  int get telechargementsSimultanes =>
+      _apercuSimultanes ?? _telechargementsSimultanes;
+
+  /// `true` pendant l'enregistrement du nombre de téléchargements
+  /// simultanés.
+  bool get estEnEnregistrementSimultanes => _estEnEnregistrementSimultanes;
+
+  /// Affiche [nombre] pendant le glissement de la jauge, sans l'enregistrer.
+  void previsualiserTelechargementsSimultanes(int nombre) {
+    final borne = nombre.clamp(
+      minimumTelechargementsSimultanes,
+      maximumTelechargementsSimultanes,
+    );
+    if (borne == _apercuSimultanes) return;
+    _apercuSimultanes = borne;
+    notifier();
+  }
+
+  /// Enregistre le nombre de téléchargements simultanés (ramené entre les
+  /// bornes) puis relance la file : un traitement en cours relit le réglage
+  /// et remplit aussitôt les emplacements libres.
+  Future<ResultatAction<int>> modifierTelechargementsSimultanes(
+    int nombre,
+  ) async {
+    _estEnEnregistrementSimultanes = true;
+    _apercuSimultanes = nombre.clamp(
+      minimumTelechargementsSimultanes,
+      maximumTelechargementsSimultanes,
+    );
+    notifier();
+    try {
+      await _serviceParametres.enregistrerTelechargementsSimultanes(nombre);
+      _telechargementsSimultanes = await _serviceParametres
+          .chargerTelechargementsSimultanes();
+      // Ne lève jamais d'erreur et peut durer toute la file : pas attendu.
+      unawaited(_serviceTelechargement.lancerTraitement());
+      return ResultatAction<int>.reussite(_telechargementsSimultanes);
+    } catch (erreur, pile) {
+      return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _apercuSimultanes = null;
+      _estEnEnregistrementSimultanes = false;
+      notifier();
+    }
+  }
+
   /// Lit les réglages enregistrés.
   Future<void> charger() async {
     _estEnChargement = true;
@@ -362,6 +429,8 @@ class EtatParametres extends EtatNotifiant {
       _heuresEnAttente = await _serviceParametres.chargerHeuresEnAttente();
       _derniereVerification = await _serviceParametres
           .chargerDerniereVerification();
+      _telechargementsSimultanes = await _serviceParametres
+          .chargerTelechargementsSimultanes();
       _enregistres = reglages;
       _brouillon = reglages;
       _estCharge = true;

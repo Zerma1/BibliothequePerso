@@ -3,6 +3,41 @@ library;
 
 import 'outils_modeles.dart';
 
+/// Façon dont l'application a connu un chapitre (colonne
+/// `chapitres.origine`, migration 13).
+///
+/// Stockée en base sous `Enum.name` (`'site'`, `'web'`) : ne jamais renommer
+/// une valeur sans migration (la contrainte CHECK de la colonne la vérifie).
+enum OrigineChapitre {
+  /// Chapitre lu par l'adaptateur du site (actualisation) : cas normal.
+  site,
+
+  /// Chapitre enregistré depuis le navigateur intégré, pendant que le client
+  /// le lisait sur le site (utile pour un site en « lien seul », que
+  /// l'application ne sait pas lire). Une actualisation depuis le site ne le
+  /// supprime ni ne le modifie jamais.
+  web,
+}
+
+/// Forme normalisée d'une adresse de chapitre, pour comparer deux adresses :
+/// espaces autour retirés, fragment (`#…`) retiré, `/` finaux retirés.
+///
+/// `https://site.example/ch/12/#page-3` et `https://site.example/ch/12`
+/// donnent la même valeur. La casse et le reste de l'adresse sont gardés
+/// tels quels (un chemin peut être sensible à la casse). Même règle que la
+/// comparaison SQL de `DepotChapitres.chargerChapitreParUrl`.
+String normaliserUrlChapitre(String url) {
+  var resultat = url.trim();
+  final diese = resultat.indexOf('#');
+  if (diese >= 0) {
+    resultat = resultat.substring(0, diese);
+  }
+  while (resultat.endsWith('/')) {
+    resultat = resultat.substring(0, resultat.length - 1);
+  }
+  return resultat;
+}
+
 /// Un chapitre d'un titre.
 class Chapitre {
   /// Crée un chapitre. [id] vaut `null` tant qu'il n'est pas enregistré.
@@ -22,6 +57,7 @@ class Chapitre {
     this.estGarde = false,
     this.urlExterne,
     this.idSource,
+    this.origine = OrigineChapitre.site,
   });
 
   static const String _entite = 'Chapitre';
@@ -100,6 +136,14 @@ class Chapitre {
   /// source réelle.
   final int? idSource;
 
+  /// Façon dont le chapitre a été connu : lu sur le site par l'application
+  /// ([OrigineChapitre.site], par défaut) ou enregistré depuis le navigateur
+  /// intégré ([OrigineChapitre.web]).
+  final OrigineChapitre origine;
+
+  /// `true` si le chapitre a été enregistré depuis le navigateur intégré.
+  bool get estWeb => origine == OrigineChapitre.web;
+
   /// `true` si le chapitre est hébergé sur un site externe ([urlExterne]
   /// non vide) : il n'a ni pages à lire dans l'application ni archive.
   bool get estExterne {
@@ -125,6 +169,7 @@ class Chapitre {
       'est_garde': booleenVersEntier(estGarde),
       'url_externe': urlExterne,
       'id_source': idSource,
+      'origine': origine.name,
     };
   }
 
@@ -159,6 +204,12 @@ class Chapitre {
       // Colonne absente (requête partielle, base avant la migration 7) :
       // site principal du titre.
       idSource: map.lireEntierOptionnel('id_source', _entite),
+      // Colonne absente ou NULL (requête partielle, base avant la
+      // migration 13) : chapitre lu sur le site, comme la valeur par défaut
+      // de la migration 13.
+      origine: map['origine'] == null
+          ? OrigineChapitre.site
+          : map.lireEnum('origine', _entite, OrigineChapitre.values),
     );
   }
 
@@ -192,6 +243,7 @@ class Chapitre {
     bool? estGarde,
     String? urlExterne,
     int? idSource,
+    OrigineChapitre? origine,
     bool effacerNomArchive = false,
     bool effacerDateSuppressionPrevue = false,
     bool effacerUrlExterne = false,
@@ -214,6 +266,7 @@ class Chapitre {
       estGarde: estGarde ?? this.estGarde,
       urlExterne: effacerUrlExterne ? null : urlExterne ?? this.urlExterne,
       idSource: idSource ?? this.idSource,
+      origine: origine ?? this.origine,
     );
   }
 
@@ -235,7 +288,8 @@ class Chapitre {
             other.dateSuppressionPrevue == dateSuppressionPrevue &&
             other.estGarde == estGarde &&
             other.urlExterne == urlExterne &&
-            other.idSource == idSource;
+            other.idSource == idSource &&
+            other.origine == origine;
   }
 
   @override
@@ -255,6 +309,7 @@ class Chapitre {
     estGarde,
     urlExterne,
     idSource,
+    origine,
   );
 
   @override
@@ -263,5 +318,5 @@ class Chapitre {
       'numero: $numero, nom: $nom, '
       'langue: $langue, estLu: $estLu, estTelecharge: $estTelecharge, '
       'nomArchive: $nomArchive, estGarde: $estGarde, '
-      'urlExterne: $urlExterne)';
+      'urlExterne: $urlExterne, origine: ${origine.name})';
 }

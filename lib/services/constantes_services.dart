@@ -66,6 +66,32 @@ const int largeurBlocIdentifiantVerrou = 8;
 /// deux pages, sans écrire en base à chaque page.
 const int fractionRenouvellementVerrou = 3;
 
+/// Téléchargements de chapitres simultanés tant que le client n'a rien
+/// choisi (Paramètres). Trois chapitres avancent en même temps : de quoi
+/// profiter de plusieurs sites à la fois sans multiplier les archives
+/// partielles en cas d'interruption.
+const int telechargementsSimultanesParDefaut = 3;
+
+/// Minimum du réglage des téléchargements simultanés : un chapitre à la fois
+/// (comportement des versions précédentes).
+const int telechargementsSimultanesMinimum = 1;
+
+/// Maximum du réglage des téléchargements simultanés (demande du client).
+/// Le rythme des requêtes vers un même site ne change pas pour autant :
+/// `ClientHttpPoli` garde 1 s entre deux requêtes **par domaine**, partagé
+/// par tous les chapitres en cours. Le parallélisme ne fait gagner du temps
+/// que lorsque les chapitres viennent de sites différents.
+const int telechargementsSimultanesMaximum = 32;
+
+/// Plafond des téléchargements simultanés dans la tâche de fond Android
+/// (décision du 2026-11-19). Android l'interrompt au bout d'environ
+/// 10 minutes : chaque chapitre coupé laisse une archive partielle et une
+/// ligne « en cours », reprises de zéro une durée de verrou plus tard. Avec
+/// 32 chapitres ouverts, une interruption gâcherait jusqu'à 32 chapitres de
+/// requêtes déjà faites (PLAYBOOK.md section 10) ; 4 limite cette perte tout
+/// en avançant sur plusieurs sites à la fois.
+const int telechargementsSimultanesTacheDeFond = 4;
+
 /// Marge ajoutée à l'expiration d'un verrou avant un nouvel essai : on
 /// réessaie juste **après** l'expiration, pas pile dessus (sinon le verrou
 /// serait encore considéré comme pris).
@@ -238,3 +264,76 @@ const int nombreMaximalCouverturesEnCache = 100;
 /// Nombre maximal d'exports dans la même minute (`…_1430.json`,
 /// `…_1430_2.json`…) : borne la recherche d'un nom libre.
 const int nombreMaximalExportsMemeMinute = 50;
+
+/// Navigateur intégré : nombre maximal d'images enregistrées pour un même
+/// chapitre (`ServiceLectureWeb.enregistrerImagesChapitre`). Un chapitre
+/// réel en compte rarement plus de 200 ; au-delà, la page affichée n'est
+/// sans doute pas un chapitre (galerie, défilement infini de plusieurs
+/// chapitres) et l'archive serait fausse.
+const int nombreMaxImagesChapitreWeb = 500;
+
+/// Navigateur intégré : taille maximale (en octets) d'une image enregistrée.
+/// 30 Mo couvrent les longues bandes verticales des webtoons (quelques Mo)
+/// avec une large marge ; au-delà, ce n'est pas une page de chapitre.
+const int tailleMaxImageChapitreWeb = 30 * 1024 * 1024;
+
+/// Navigateur intégré : taille totale maximale (en octets) des images d'un
+/// chapitre enregistré. 300 Mo laissent une large marge à un long chapitre
+/// de webtoon (souvent 20 à 80 Mo) sans écrire d'archive démesurée.
+// LIMITE : toutes les images sont en mémoire avant l'écriture (reçues de la
+// page en base64 puis décodées, puis passées en bloc au service) ; la
+// mémoire réellement prise dépasse donc ce plafond pendant l'échange avec
+// la page. Plafond gardé bas pour les téléphones Android modestes.
+const int tailleMaxTotaleChapitreWeb = 300 * 1024 * 1024;
+
+/// Navigateur intégré : plus grand numéro de chapitre accepté quand il est
+/// tiré d'une adresse. Au-delà, le « numéro » est presque toujours un
+/// identifiant interne du site (`/chapter/4815162`), pas un numéro de
+/// chapitre.
+const double numeroMaxChapitreWeb = 100000;
+
+/// Navigateur intégré : longueur minimale du morceau d'adresse d'un titre
+/// (son « identifiant lisible », `solo-leveling`) cherché dans l'adresse
+/// d'un chapitre pour l'attribuer à ce titre. Plus court, il se
+/// retrouverait par hasard dans l'adresse d'une autre œuvre.
+const int longueurMinIdentifiantTitreWeb = 4;
+
+/// Navigateur intégré : morceaux d'adresse trop courants pour désigner un
+/// titre (`/manga/`, `/series/`…). Ils ne servent jamais d'identifiant
+/// lisible d'un titre.
+const Set<String> segmentsGeneriquesAdresseTitre = <String>{
+  'manga',
+  'mangas',
+  'manhwa',
+  'manhua',
+  'webtoon',
+  'webtoons',
+  'comic',
+  'comics',
+  'series',
+  'serie',
+  'title',
+  'titles',
+  'titre',
+  'titres',
+  'novel',
+  'novels',
+  'book',
+  'books',
+  'read',
+  'lecture',
+  'oeuvre',
+  'oeuvres',
+  'detail',
+  'details',
+  'index.php',
+};
+
+/// Navigateur intégré : domaines (sans `www.`) dont les images de chapitre
+/// sont chiffrées ou brouillées par l'éditeur (PLAYBOOK.md section 10 :
+/// MANGA Plus de Shueisha). Leurs images peuvent avoir un en-tête d'image
+/// valide alors que le contenu est brouillé : elles ne sont jamais
+/// enregistrées, quel que soit le contrôle des octets.
+const Set<String> domainesImagesProtegees = <String>{
+  'mangaplus.shueisha.co.jp',
+};

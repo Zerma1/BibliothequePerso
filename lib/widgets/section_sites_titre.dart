@@ -24,10 +24,19 @@ import 'textes.dart';
 /// méthodes ; aucune logique métier ici.
 class SectionSitesTitre extends StatelessWidget {
   /// Crée la section pour [etat].
-  const SectionSitesTitre({super.key, required this.etat});
+  const SectionSitesTitre({
+    super.key,
+    required this.etat,
+    this.surLireDansApplication,
+  });
 
   /// État de la fiche affichée.
   final EtatTitre etat;
+
+  /// Ouvre l'adresse d'un lien seul dans le navigateur intégré ; `null` si
+  /// celui-ci n'existe pas ici (le bouton « Lire dans l'application » est
+  /// alors masqué).
+  final Future<void> Function(String url)? surLireDansApplication;
 
   Future<void> _ajouter(BuildContext context) async {
     // Le dialogue renvoie directement le message de confirmation : il est
@@ -190,6 +199,10 @@ class SectionSitesTitre extends StatelessWidget {
             site: site,
             occupe: occupe,
             surOuvrir: () => ouvrirLienExterne(context, site.urlTitre),
+            surLireDansApplication: switch (surLireDansApplication) {
+              final lire? => () => lire(site.urlTitre),
+              null => null,
+            },
             surDefinirPrincipal: () => _definirPrincipal(context, site),
             surRetirer: () => _retirer(context, site),
             surPasserEnLienSeul: () => _passerEnLienSeul(context, site),
@@ -220,6 +233,7 @@ class _LigneSite extends StatelessWidget {
     required this.site,
     required this.occupe,
     required this.surOuvrir,
+    required this.surLireDansApplication,
     required this.surDefinirPrincipal,
     required this.surRetirer,
     required this.surPasserEnLienSeul,
@@ -229,6 +243,7 @@ class _LigneSite extends StatelessWidget {
   final SiteDuTitre site;
   final bool occupe;
   final VoidCallback surOuvrir;
+  final VoidCallback? surLireDansApplication;
   final VoidCallback surDefinirPrincipal;
   final VoidCallback surRetirer;
   final VoidCallback surPasserEnLienSeul;
@@ -285,6 +300,15 @@ class _LigneSite extends StatelessWidget {
                         : Textes.ouvrirCeSite,
                   ),
                 ),
+                // Lien seul : l'application ne lit pas ce site, mais le
+                // navigateur intégré permet d'y lire (et d'y enregistrer)
+                // les chapitres.
+                if (lienSeul && surLireDansApplication != null)
+                  TextButton.icon(
+                    onPressed: surLireDansApplication,
+                    icon: const Icon(Icons.public),
+                    label: const Text(Textes.lireDansApplication),
+                  ),
                 if (lienSeul)
                   // Pas de « Définir comme site principal » : l'application
                   // ne sait pas lire ce site, il ne peut pas fournir la fiche.

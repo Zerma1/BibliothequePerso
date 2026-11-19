@@ -74,9 +74,8 @@ limité à son scope :
 ## État actuel (2026-11-17)
 
 - `main` : version **0.1.0** (validée par le client).
-- `test` : **0.2.2-test** (listes perso et « Terminés », catégories regroupées, dossier des
-  chapitres / NAS et archive complète, sélection de chapitres, description personnelle), en
-  attente des retours du client (`testUtilisateur/retour/v0.2.2-test/`). Prochaine : 0.2.3-test.
+- `test` : **0.2.3-test** (0.2.2-test + journal de l'application), en attente des retours du
+  client sur la 0.2.2-test et la 0.2.3-test (testés ensemble). Prochaine : 0.2.4-test.
 - Suivi des tâches dans `docs/TACHES_EN_COURS.md`.
 
 ## Pièges connus
@@ -104,6 +103,11 @@ cause et solution). Toute erreur inattendue ou récurrente est confiée à `anal
   Un essai réel d'image vérifie le type des octets, pas seulement leur présence.
 - `dart format` seulement sur les fichiers qu'on a modifiés, jamais sur un dossier entier
   (sinon des fichiers d'autres agents sont reformatés : E12).
-- Le cache pub réel est `C:\Users\bapti\AppData\Local\Pub\Cache` (et non `D:\dev\pub-cache`
-  comme l'indique le README). Le projet étant sur D:, le cache Kotlin incrémental plante entre
-  les deux disques : d'où `kotlin.incremental=false` dans `android/gradle.properties`.
+- Le cache pub utilisé est `D:\dev\pub-cache` (vérifié dans `.dart_tool/package_config.json`
+  le 2026-11-19). Le cache Kotlin incrémental plantait entre deux disques : d'où
+  `kotlin.incremental=false` dans `android/gradle.properties` (à garder).
+- `flutter build windows` exige `nuget.exe` dans le PATH depuis le navigateur intégré
+  (installé par winget : `C:\Users\bapti\AppData\Local\Microsoft\WinGet\Links`).
+- Navigateur intégré (`flutter_inappwebview`, bêta épinglée) : jamais de vue web sous Linux
+  (paquet local vide `paquets/flutter_inappwebview_linux_vide` via `dependency_overrides`) ;
+  tester `Platform.isAndroid || Platform.isWindows` avant de créer `InAppWebView`.

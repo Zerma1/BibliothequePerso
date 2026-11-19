@@ -1304,8 +1304,13 @@ class FauxServiceTelechargement implements ServiceTelechargement {
   @override
   Future<String?> lireTexte(int idChapitre) async => textes[idChapitre];
 
+  /// Appels à [lancerTraitement].
+  int nombreLancementsTraitement = 0;
+
   @override
-  Future<void> lancerTraitement() async {}
+  Future<void> lancerTraitement() async {
+    nombreLancementsTraitement++;
+  }
 
   /// Protections posées par le lecteur, par chapitre (compteur).
   final Map<int, int> protections = <int, int>{};
@@ -1655,6 +1660,22 @@ class FauxServiceParametres implements ServiceParametres {
   @override
   Future<void> enregistrerArchiveComplete(bool active) async {
     archiveComplete = active;
+  }
+
+  /// Nombre de téléchargements simultanés « enregistré ».
+  int telechargementsSimultanes =
+      ServiceParametres.telechargementsSimultanesParDefautClient;
+
+  @override
+  Future<int> chargerTelechargementsSimultanes() async =>
+      telechargementsSimultanes;
+
+  @override
+  Future<void> enregistrerTelechargementsSimultanes(int nombre) async {
+    telechargementsSimultanes = nombre.clamp(
+      ServiceParametres.minimumTelechargementsSimultanes,
+      ServiceParametres.maximumTelechargementsSimultanes,
+    );
   }
 
   /// Verrou de la file « enregistré ».

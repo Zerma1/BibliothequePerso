@@ -186,3 +186,15 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
 - [x] X8. Plan de tests 0.2.2-test : reprendre D4 (import d'un titre retiré)
 - [x] X9. Liste système « Terminés » (titres terminés) : pas de notification ni de téléchargement automatique (sauf archive complète)
 - [x] X10. Marquer lus en lot : sélection de chapitres (appui long + glisser, ou cases) et « Marquer lus jusqu'ici » depuis un chapitre
+
+## Navigateur intégré (2026-11-19, demande du client) → 0.2.4-test
+
+- [ ] N1. Paquet flutter_inappwebview (Windows WebView2, Android ; Linux : navigateur externe)
+- [ ] N2. Données : chapitres d'origine « web » acceptés sur un site en simple lien (migration 13)
+- [ ] N3. Services : reconnaître le chapitre affiché (adresse), le marquer lu en passant au suivant ; enregistrer les images affichées en archive .zip
+- [ ] N4. Interface : écran navigateur (lire sur le web, simples liens, chapitres externes), bouton « Enregistrer ce chapitre », repère du chapitre reconnu
+- Limite : jamais d'usage caché ou automatique du navigateur ; jamais de canvas ni d'images chiffrées.
+- [ ] N5. « Enregistrer ce chapitre » toujours cliquable ; si les images sont en canvas ou chiffrées, la tentative échoue avec un message clair (jamais de décodage)
+- [ ] N6. Téléchargements simultanés : 1 à 32, jauge dans Paramètres (politesse 1 s par domaine inchangée)
+
+**Décision du client (2026-11-19)** : Windows seul jusqu'à validation, puis Android, puis Linux. Les versions de test ne livrent plus que le .zip Windows.
