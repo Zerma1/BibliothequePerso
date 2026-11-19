@@ -264,3 +264,72 @@ const int nombreMaximalCouverturesEnCache = 100;
 /// Nombre maximal d'exports dans la même minute (`…_1430.json`,
 /// `…_1430_2.json`…) : borne la recherche d'un nom libre.
 const int nombreMaximalExportsMemeMinute = 50;
+
+/// Navigateur intégré : nombre maximal d'images enregistrées pour un même
+/// chapitre (`ServiceLectureWeb.enregistrerImagesChapitre`). Un chapitre
+/// réel en compte rarement plus de 200 ; au-delà, la page affichée n'est
+/// sans doute pas un chapitre (galerie, défilement infini de plusieurs
+/// chapitres) et l'archive serait fausse.
+const int nombreMaxImagesChapitreWeb = 500;
+
+/// Navigateur intégré : taille maximale (en octets) d'une image enregistrée.
+/// 30 Mo couvrent les longues bandes verticales des webtoons (quelques Mo)
+/// avec une large marge ; au-delà, ce n'est pas une page de chapitre.
+const int tailleMaxImageChapitreWeb = 30 * 1024 * 1024;
+
+/// Navigateur intégré : taille totale maximale (en octets) des images d'un
+/// chapitre enregistré, pour ne pas écrire une archive démesurée (les
+/// octets sont déjà en mémoire côté interface).
+const int tailleMaxTotaleChapitreWeb = 1024 * 1024 * 1024;
+
+/// Navigateur intégré : plus grand numéro de chapitre accepté quand il est
+/// tiré d'une adresse. Au-delà, le « numéro » est presque toujours un
+/// identifiant interne du site (`/chapter/4815162`), pas un numéro de
+/// chapitre.
+const double numeroMaxChapitreWeb = 100000;
+
+/// Navigateur intégré : longueur minimale du morceau d'adresse d'un titre
+/// (son « identifiant lisible », `solo-leveling`) cherché dans l'adresse
+/// d'un chapitre pour l'attribuer à ce titre. Plus court, il se
+/// retrouverait par hasard dans l'adresse d'une autre œuvre.
+const int longueurMinIdentifiantTitreWeb = 4;
+
+/// Navigateur intégré : morceaux d'adresse trop courants pour désigner un
+/// titre (`/manga/`, `/series/`…). Ils ne servent jamais d'identifiant
+/// lisible d'un titre.
+const Set<String> segmentsGeneriquesAdresseTitre = <String>{
+  'manga',
+  'mangas',
+  'manhwa',
+  'manhua',
+  'webtoon',
+  'webtoons',
+  'comic',
+  'comics',
+  'series',
+  'serie',
+  'title',
+  'titles',
+  'titre',
+  'titres',
+  'novel',
+  'novels',
+  'book',
+  'books',
+  'read',
+  'lecture',
+  'oeuvre',
+  'oeuvres',
+  'detail',
+  'details',
+  'index.php',
+};
+
+/// Navigateur intégré : domaines (sans `www.`) dont les images de chapitre
+/// sont chiffrées ou brouillées par l'éditeur (PLAYBOOK.md section 10 :
+/// MANGA Plus de Shueisha). Leurs images peuvent avoir un en-tête d'image
+/// valide alors que le contenu est brouillé : elles ne sont jamais
+/// enregistrées, quel que soit le contrôle des octets.
+const Set<String> domainesImagesProtegees = <String>{
+  'mangaplus.shueisha.co.jp',
+};
