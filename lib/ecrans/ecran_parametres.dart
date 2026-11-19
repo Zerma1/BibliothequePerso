@@ -420,6 +420,17 @@ class _SectionTelechargements extends StatelessWidget {
     }
   }
 
+  /// Enregistre la jauge au lâcher ; seule une erreur est signalée (un
+  /// message à chaque réglage serait du bruit).
+  Future<void> _modifierSimultanes(
+    BuildContext context,
+    EtatParametres etat,
+    int nombre,
+  ) async {
+    final resultat = await etat.modifierTelechargementsSimultanes(nombre);
+    if (context.mounted) afficherResultat(context, resultat);
+  }
+
   Widget _contenu(BuildContext context, ThemeData theme, EtatParametres etat) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -435,6 +446,32 @@ class _SectionTelechargements extends StatelessWidget {
           onChanged: etat.estEnEnregistrementArchive
               ? null
               : (active) => _basculerArchive(context, etat, active),
+        ),
+        const Divider(),
+        // Jauge plutôt que + / − : de 1 à 32, le client choisit d'un geste.
+        // Rien n'est enregistré pendant le glissement, seulement au lâcher.
+        Text(
+          Textes.telechargementsSimultanes(etat.telechargementsSimultanes),
+          style: theme.textTheme.titleSmall,
+        ),
+        Slider(
+          value: etat.telechargementsSimultanes.toDouble(),
+          min: EtatParametres.minimumTelechargementsSimultanes.toDouble(),
+          max: EtatParametres.maximumTelechargementsSimultanes.toDouble(),
+          divisions:
+              EtatParametres.maximumTelechargementsSimultanes -
+              EtatParametres.minimumTelechargementsSimultanes,
+          label: '${etat.telechargementsSimultanes}',
+          onChanged: etat.estEnEnregistrementSimultanes
+              ? null
+              : (valeur) =>
+                    etat.previsualiserTelechargementsSimultanes(valeur.round()),
+          onChangeEnd: (valeur) =>
+              _modifierSimultanes(context, etat, valeur.round()),
+        ),
+        Text(
+          Textes.explicationTelechargementsSimultanes,
+          style: theme.textTheme.bodySmall,
         ),
         const Divider(),
         Text(

@@ -30,6 +30,7 @@ import '../widgets/section_sites_titre.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
 import 'ecran_lecteur.dart';
+import 'ecran_navigateur.dart';
 
 /// Actions du menu de la fiche.
 enum _ActionTitre { toutLu, toutNonLu, supprimer }
@@ -519,7 +520,21 @@ class _EnTete extends StatelessWidget {
             ],
           ),
           const SizedBox(height: espacementGrand),
-          SectionSitesTitre(etat: etat),
+          SectionSitesTitre(
+            etat: etat,
+            // « Lire dans l'application » seulement là où le navigateur
+            // intégré existe (Windows, Android).
+            surLireDansApplication: EcranNavigateur.estDisponible(context)
+                ? (url) async {
+                    await EcranNavigateur.ouvrir(
+                      context,
+                      url,
+                      idTitre: etat.idTitre,
+                    );
+                    await etat.charger();
+                  }
+                : null,
+          ),
           const SizedBox(height: espacementGrand),
           _SectionLanguesTitre(etat: etat),
         ],
@@ -1098,6 +1113,9 @@ class _LigneChapitre extends StatelessWidget {
     EtatHorsLigne horsLigne,
   ) async {
     final nomSite = etat.nomSiteExterneDe(chapitre);
+    // Navigateur intégré : Windows (et Android) seulement ; ailleurs, les
+    // liens s'ouvrent comme avant dans le navigateur du système.
+    final avecNavigateur = EcranNavigateur.estDisponible(context);
     final action = await showModalBottomSheet<_ActionChapitre>(
       context: context,
       showDragHandle: true,
@@ -1127,21 +1145,40 @@ class _LigneChapitre extends StatelessWidget {
               ),
             // Chapitre externe : seul le site de l'éditeur permet de le lire,
             // la page MangaDex n'y ferait que renvoyer.
-            if (nomSite != null)
+            if (nomSite != null) ...<Widget>[
               ListTile(
                 leading: const Icon(iconeLienExterne),
                 title: Text(Textes.lireSur(nomSite)),
                 onTap: () =>
                     Navigator.of(contexteMenu)
                         .pop(_ActionChapitre.lireSurSiteExterne),
-              )
-            else
+              ),
+              // « Lire sur … » ouvre le navigateur intégré : le navigateur
+              // du système reste proposé à part.
+              if (avecNavigateur)
+                ListTile(
+                  leading: const Icon(Icons.open_in_new),
+                  title: const Text(Textes.ouvrirNavigateurExterne),
+                  onTap: () =>
+                      Navigator.of(contexteMenu)
+                          .pop(_ActionChapitre.ouvrirExterneNavigateur),
+                ),
+            ] else ...<Widget>[
+              if (avecNavigateur)
+                ListTile(
+                  leading: const Icon(Icons.public),
+                  title: const Text(Textes.lireEnLigne),
+                  onTap: () =>
+                      Navigator.of(contexteMenu)
+                          .pop(_ActionChapitre.lireEnLigne),
+                ),
               ListTile(
                 leading: const Icon(Icons.open_in_new),
                 title: const Text(Textes.ouvrirSurLeSite),
                 onTap: () =>
                     Navigator.of(contexteMenu).pop(_ActionChapitre.ouvrirSite),
               ),
+            ],
             ListTile(
               leading: Icon(estLu ? Icons.remove_done : Icons.done),
               title: Text(estLu ? Textes.marquerNonLu : Textes.marquerLu),
@@ -1175,6 +1212,11 @@ class _LigneChapitre extends StatelessWidget {
         await ouvrirLienExterne(context, chapitre.urlChapitre);
       case _ActionChapitre.lireSurSiteExterne:
         await _lireSurSiteExterne(context);
+      case _ActionChapitre.ouvrirExterneNavigateur:
+        final url = chapitre.urlExterne;
+        if (url != null) await ouvrirLienExterne(context, url);
+      case _ActionChapitre.lireEnLigne:
+        await _lireDansNavigateur(context, chapitre.urlChapitre);
       case _ActionChapitre.basculerLu:
         final resultat = await surBasculerLu();
         if (context.mounted) afficherResultat(context, resultat);
@@ -1190,12 +1232,20 @@ class _LigneChapitre extends StatelessWidget {
     }
   }
 
-  /// Ouvre un chapitre externe sur le site de l'éditeur (son application si
-  /// elle est installée, sinon le navigateur).
+  /// Ouvre un chapitre externe sur le site de l'éditeur : navigateur intégré
+  /// sous Windows (et Android), sinon navigateur du système.
   Future<void> _lireSurSiteExterne(BuildContext context) async {
     final url = chapitre.urlExterne;
     if (url == null) return;
-    await ouvrirLienExterne(context, url);
+    await _lireDansNavigateur(context, url);
+  }
+
+  /// Ouvre [url] dans le navigateur intégré, puis relit la fiche au retour
+  /// (chapitres lus ou enregistrés depuis le navigateur).
+  Future<void> _lireDansNavigateur(BuildContext context, String url) async {
+    final integre = EcranNavigateur.estDisponible(context);
+    await EcranNavigateur.ouvrir(context, url, idTitre: etat.idTitre);
+    if (integre) await etat.charger();
   }
 
   /// Bouton de la colonne hors-ligne : l'action dépend de l'état.
@@ -1576,6 +1626,8 @@ enum _ActionChapitre {
   telecharger,
   ouvrirSite,
   lireSurSiteExterne,
+  ouvrirExterneNavigateur,
+  lireEnLigne,
   basculerLu,
   lusJusquIci,
 }

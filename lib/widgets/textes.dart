@@ -4,6 +4,7 @@ library;
 
 import '../etat/description_erreur.dart';
 import '../etat/etat_bibliotheque.dart' show EtatFiltreCategorie;
+import '../etat/etat_navigateur.dart' show RefusEnregistrementWeb;
 import '../etat/etat_parametres.dart';
 import '../etat/outils_chapitres.dart';
 import '../modeles/source.dart';
@@ -2287,6 +2288,125 @@ abstract final class Textes {
         ? '$nombre chapitres marqués lus.'
         : '$nombre chapitres marqués non lus.';
   }
+
+  // ------------------------------------- Navigateur intégré (tâche N3)
+
+  /// Action d'un lien seul : l'ouvrir dans le navigateur intégré.
+  static const String lireDansApplication = "Lire dans l'application";
+
+  /// Action d'un chapitre : le lire sur son site, dans l'application.
+  static const String lireEnLigne = 'Lire en ligne';
+
+  /// Action : ouvrir la page dans le navigateur du système.
+  static const String ouvrirNavigateurExterne =
+      'Ouvrir dans le navigateur externe';
+
+  /// Info-bulle : fermer le navigateur intégré.
+  static const String fermerNavigateur = 'Fermer le navigateur';
+
+  /// Info-bulle : page précédente de l'historique.
+  static const String pagePrecedente = 'Page précédente';
+
+  /// Info-bulle : page suivante de l'historique.
+  static const String pageSuivante = 'Page suivante';
+
+  /// Info-bulle : recharger la page.
+  static const String rechargerPage = 'Recharger la page';
+
+  /// Info-bulle du menu des autres actions.
+  static const String autresActions = "Plus d'actions";
+
+  /// Libellé du champ d'adresse.
+  static const String champAdresse = 'Adresse de la page';
+
+  /// Adresse saisie invalide.
+  static const String adresseNavigateurInvalide =
+      'Adresse invalide : saisissez une adresse web, par exemple '
+      'https://exemple.com.';
+
+  /// Système sans navigateur intégré (Linux).
+  static const String navigateurIndisponible =
+      "Le navigateur intégré n'est pas disponible sur ce système.";
+
+  /// La page n'a pas pu être chargée.
+  static String erreurChargementPage(String description) =>
+      description.trim().isEmpty
+      ? "La page n'a pas pu être chargée."
+      : "La page n'a pas pu être chargée.\n${description.trim()}";
+
+  /// Repère du chapitre affiché : « Chapitre 12 de Solo Leveling (non lu) ».
+  static String repereChapitreWeb({
+    required double numero,
+    String? nomTitre,
+    required bool estLu,
+    bool estTelecharge = false,
+  }) {
+    final debut = nomTitre == null || nomTitre.trim().isEmpty
+        ? 'Chapitre ${formaterNumero(numero)}'
+        : 'Chapitre ${formaterNumero(numero)} de ${nomTitre.trim()}';
+    final etat = estLu ? 'lu' : 'non lu';
+    return estTelecharge ? '$debut ($etat, déjà enregistré)' : '$debut ($etat)';
+  }
+
+  /// Bandeau d'une page qui n'est pas un chapitre reconnu.
+  static const String pageNonReconnue =
+      "Cette page n'est pas reconnue comme un chapitre de votre "
+      'bibliothèque : « Enregistrer ce chapitre » ne fonctionne que sur la '
+      "page d'un chapitre d'un de vos titres.";
+
+  /// Action : enregistrer les images du chapitre affiché.
+  static const String enregistrerCeChapitre = 'Enregistrer ce chapitre';
+
+  /// Enregistrement : recherche des images dans la page.
+  static const String rechercheImagesPage = 'Recherche des images de la page…';
+
+  /// Enregistrement : avancement.
+  static String progressionEnregistrementWeb(int faites, int total) =>
+      'Enregistrement : page $faites sur $total';
+
+  /// Enregistrement réussi.
+  static const String chapitreWebEnregistre =
+      'Chapitre enregistré : il se lit maintenant hors ligne.';
+
+  /// Raison d'un enregistrement refusé par l'interface (rien n'est
+  /// enregistré).
+  static String refusEnregistrementWeb(RefusEnregistrementWeb refus) {
+    switch (refus) {
+      case RefusEnregistrementWeb.pageNonReconnue:
+        return pageNonReconnue;
+      case RefusEnregistrementWeb.dejaEnCours:
+        return 'Un enregistrement est déjà en cours.';
+      case RefusEnregistrementWeb.pagesNonChargees:
+        return "Certaines pages ne sont pas encore chargées : faites défiler "
+            "le chapitre jusqu'au bout, puis réessayez. Rien n'a été "
+            'enregistré.';
+      case RefusEnregistrementWeb.aucuneImage:
+        return "Aucune image de page n'a été trouvée sur cette page : rien à "
+            'enregistrer.';
+      case RefusEnregistrementWeb.tropDImages:
+        return "Cette page contient trop d'images pour un seul chapitre : "
+            "rien n'a été enregistré.";
+      case RefusEnregistrementWeb.imagesInaccessibles:
+        return 'Ce site ne laisse pas récupérer ses images depuis la page : '
+            "rien n'a été enregistré. Le chapitre reste lisible en ligne.";
+      case RefusEnregistrementWeb.pageChangee:
+        return "La page a changé pendant l'enregistrement : rien n'a été "
+            'enregistré.';
+      case RefusEnregistrementWeb.annule:
+        return "Enregistrement annulé : rien n'a été enregistré.";
+    }
+  }
+
+  // ---------------------------- Téléchargements simultanés (Paramètres)
+
+  /// Libellé de la jauge.
+  static String telechargementsSimultanes(int nombre) =>
+      'Téléchargements simultanés : $nombre';
+
+  /// Explication sous la jauge.
+  static const String explicationTelechargementsSimultanes =
+      'Un même site reçoit au plus une requête par seconde : le gain se voit '
+      'surtout avec plusieurs sites.';
 
   // ------------------------------------------------------------- Formatage
 

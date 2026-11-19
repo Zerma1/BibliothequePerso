@@ -1304,8 +1304,13 @@ class FauxServiceTelechargement implements ServiceTelechargement {
   @override
   Future<String?> lireTexte(int idChapitre) async => textes[idChapitre];
 
+  /// Appels à [lancerTraitement].
+  int nombreLancementsTraitement = 0;
+
   @override
-  Future<void> lancerTraitement() async {}
+  Future<void> lancerTraitement() async {
+    nombreLancementsTraitement++;
+  }
 
   /// Protections posées par le lecteur, par chapitre (compteur).
   final Map<int, int> protections = <int, int>{};
