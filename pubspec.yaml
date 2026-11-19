@@ -37,6 +37,13 @@ dependencies:
   workmanager: ^0.10.10
   # Ouverture d'un site dans le navigateur.
   url_launcher: ^6.3.3
+  # Navigateur intégré (lecture web) : Android (WebView) et Windows (WebView2).
+  # Version bêta : la 6.1.5 (dernière stable) ne compile pas avec AGP 9
+  # (getDefaultProguardFile('proguard-android.txt') refusé). Version exacte, sans ^.
+  # Windows : la compilation exige nuget.exe dans le PATH (dépendances WebView2).
+  # Linux : la bêta ajoute flutter_inappwebview_linux (WPE WebKit requis pour compiler) ;
+  # le code n'y crée jamais de vue web et garde url_launcher.
+  flutter_inappwebview: 6.2.0-beta.3
 
 dev_dependencies:
   flutter_test:
