@@ -52,6 +52,7 @@ import 'services/service_categories.dart';
 import 'services/service_export.dart';
 import 'services/service_import.dart';
 import 'services/service_journal.dart';
+import 'services/service_lecture_web.dart';
 import 'services/planification_mises_a_jour.dart';
 import 'services/service_mises_a_jour.dart';
 import 'services/service_parametres.dart';
@@ -108,7 +109,11 @@ class ServicesApplication {
     required this.serviceCategories,
     required this.serviceDossierChapitres,
     required this.serviceJournal,
+    required this.serviceLectureWeb,
   });
+
+  /// Lecture dans le navigateur intégré.
+  final ServiceLectureWeb serviceLectureWeb;
 
   /// Journal de l'application (export, journal détaillé).
   final ServiceJournal serviceJournal;
@@ -232,6 +237,21 @@ ServicesApplication assemblerServices(
     // Repère « déplacement des archives inachevé », contrôlé au démarrage.
     depotParametres: DepotParametres(base),
   );
+  final serviceDossierChapitres = ServiceDossierChapitres(
+    serviceTelechargement: serviceTelechargement,
+    depotParametres: DepotParametres(base),
+  );
+  // Navigateur intégré : chapitre reconnu, marqué lu, images enregistrées.
+  final serviceLectureWeb = ServiceLectureWeb(
+    depotChapitres: depotChapitres,
+    depotTitres: depotTitres,
+    depotTitresSources: depotTitresSources,
+    depotSources: depotSources,
+    stockage: stockage,
+    serviceTelechargement: serviceTelechargement,
+    estRedemarrageNecessaire: () =>
+        serviceDossierChapitres.redemarrageNecessaire,
+  );
   return ServicesApplication(
     base: base,
     client: clientUtilise,
@@ -277,10 +297,8 @@ ServicesApplication assemblerServices(
     // Catégories regroupées et filtres de la bibliothèque.
     serviceCategories: ServiceCategories.surBase(base),
     // Dossier des chapitres (Paramètres) et bandeau « dossier inaccessible ».
-    serviceDossierChapitres: ServiceDossierChapitres(
-      serviceTelechargement: serviceTelechargement,
-      depotParametres: DepotParametres(base),
-    ),
+    serviceDossierChapitres: serviceDossierChapitres,
+    serviceLectureWeb: serviceLectureWeb,
     // Journal (Paramètres → exporter, journal détaillé) : dossier de
     // l'application, jamais le NAS.
     serviceJournal: ServiceJournal(
