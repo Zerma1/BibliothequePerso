@@ -3,6 +3,7 @@
 /// vue web.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:bibliotheque_perso/etat/etat_navigateur.dart';
@@ -34,12 +35,19 @@ class FauxServiceLectureWeb implements ServiceLectureWeb {
   /// Erreur levée par [enregistrerImagesChapitre], si définie.
   Object? erreurEnregistrement;
 
+  /// Reconnaissances retenues (adresse → signal) : [reconnaitreChapitre]
+  /// attend le signal avant de répondre (simuler une reconnaissance lente).
+  final Map<String, Completer<void>> reconnaissancesRetenues =
+      <String, Completer<void>>{};
+
   @override
   Future<ChapitreReconnu?> reconnaitreChapitre(
     String url, {
     int? idTitre,
   }) async {
     journal.add('reconnaitre:$url');
+    final retenue = reconnaissancesRetenues[url];
+    if (retenue != null) await retenue.future;
     final chapitre = chapitresParAdresse[url];
     return chapitre == null ? null : ChapitreConnu(chapitre);
   }
@@ -72,7 +80,7 @@ class FauxServiceLectureWeb implements ServiceLectureWeb {
     nombreEnregistrements++;
     imagesRecues = images;
     pagesProtegeesRecues = pagesProtegees;
-    if (pagesProtegees) {
+    if (pagesProtegees || images.any((image) => image.estProtegee)) {
       throw const ErreurService(messageImagesProtegees);
     }
     final erreur = erreurEnregistrement;
@@ -82,15 +90,19 @@ class FauxServiceLectureWeb implements ServiceLectureWeb {
 }
 
 /// Chapitre de test.
-Chapitre chapitreDeTest(int id, double numero, {bool estLu = false}) =>
-    Chapitre(
-      id: id,
-      idTitre: 1,
-      urlChapitre: 'https://site.test/manga/titre/chapitre-$id',
-      nom: '',
-      numero: numero,
-      estLu: estLu,
-    );
+Chapitre chapitreDeTest(
+  int id,
+  double numero, {
+  bool estLu = false,
+  int idTitre = 1,
+}) => Chapitre(
+  id: id,
+  idTitre: idTitre,
+  urlChapitre: 'https://site.test/manga/titre/chapitre-$id',
+  nom: '',
+  numero: numero,
+  estLu: estLu,
+);
 
 /// Fausse page : simule les scripts de `EtatNavigateur` à partir d'images
 /// en mémoire, et les commandes de navigation.

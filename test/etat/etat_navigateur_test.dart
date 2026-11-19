@@ -86,6 +86,91 @@ void main() {
       expect(etat.chapitre?.id, 3);
     });
 
+    test('suivi par titre : A ch. 1 → B ch. 10 → A ch. 2 marque A ch. 1 lu, '
+        'B ch. 10 n\'est pas quitté pour un autre titre', () async {
+      const adresseB = 'https://autre.test/manga/b/chapitre-10';
+      service.chapitresParAdresse[adresseB] = chapitreDeTest(
+        10,
+        10,
+        idTitre: 2,
+      );
+      final etat = creer();
+      await etat.signalerAdresse(adresse1);
+      await etat.signalerAdresse(adresseB);
+      await etat.signalerAdresse(adresse2);
+
+      expect(service.sorties, <String>['1->2']);
+
+      // Retour au titre B : son dernier chapitre vu reste le 10.
+      const adresseB11 = 'https://autre.test/manga/b/chapitre-11';
+      service.chapitresParAdresse[adresseB11] = chapitreDeTest(
+        11,
+        11,
+        idTitre: 2,
+      );
+      await etat.signalerAdresse(adresseB11);
+      expect(service.sorties, <String>['1->2', '10->11']);
+    });
+
+    test('nouvelle adresse : l\'ancien chapitre est oublié avant la fin de '
+        'la reconnaissance, « Enregistrer » est inactif', () async {
+      final etat = creer();
+      await etat.signalerAdresse(adresse1);
+      expect(etat.peutEnregistrer, isTrue);
+      final retenue = Completer<void>();
+      service.reconnaissancesRetenues[adresse2] = retenue;
+
+      final examen = etat.signalerAdresse(adresse2);
+      // Aussitôt (avant toute réponse du service).
+      expect(etat.chapitre, isNull);
+      expect(etat.chapitreReconnu, isNull);
+      expect(etat.peutEnregistrer, isFalse);
+      final page = FaussePage()..images['https://img.test/4.png'] = octetsPng;
+      final refus = await etat.enregistrerChapitre(page);
+      expect(refus.refus, RefusEnregistrementWeb.pageNonReconnue);
+      expect(service.nombreEnregistrements, 0);
+      expect(page.lues, isEmpty);
+
+      retenue.complete();
+      await examen;
+      expect(etat.chapitre?.id, 2);
+      expect(etat.peutEnregistrer, isTrue);
+    });
+
+    test('début de chargement d\'une autre page : l\'ancien chapitre est '
+        'oublié ; un simple fragment le garde', () async {
+      final etat = creer();
+      await etat.signalerAdresse(adresse1);
+
+      etat.signalerDebutChargement('$adresse1#page-2');
+      expect(etat.chapitre?.id, 1);
+      expect(etat.peutEnregistrer, isTrue);
+
+      etat.signalerDebutChargement(adresse2);
+      expect(etat.chapitre, isNull);
+      expect(etat.peutEnregistrer, isFalse);
+      final resultat = await etat.enregistrerChapitre(FaussePage());
+      expect(resultat.refus, RefusEnregistrementWeb.pageNonReconnue);
+
+      // La nouvelle page est bien examinée ensuite.
+      await etat.signalerAdresse(adresse2);
+      expect(etat.chapitre?.id, 2);
+    });
+
+    test('un examen de l\'ancienne page qui finit après le début de la '
+        'nouvelle est ignoré', () async {
+      final etat = creer();
+      final retenue = Completer<void>();
+      service.reconnaissancesRetenues[adresse1] = retenue;
+      final examen = etat.signalerAdresse(adresse1);
+      etat.signalerDebutChargement(adresse2);
+      retenue.complete();
+      await examen;
+
+      expect(etat.chapitre, isNull);
+      expect(etat.peutEnregistrer, isFalse);
+    });
+
     test('adresse saisie : https ajouté, adresse invalide refusée', () {
       expect(
         EtatNavigateur.adresseDepuisSaisie('  exemple.com/page '),
@@ -175,6 +260,50 @@ void main() {
       expect(resultat.erreur?.detail, messageImagesProtegees);
       expect(service.pagesProtegeesRecues, isTrue);
       expect(page.lues, isEmpty);
+    });
+
+    test('images blob: ou data: : marquées protégées, jamais lues, refus '
+        'du service (images protégées)', () async {
+      final etat = creer();
+      await etat.signalerAdresse(adresse1);
+      final page = FaussePage()
+        ..images['https://img.test/1.png'] = octetsPng
+        ..images['blob:https://site.test/0b1c'] = octetsPng
+        ..images['data:image/png;base64,iVBORw0KGgo='] = octetsPng;
+
+      final resultat = await etat.enregistrerChapitre(page);
+
+      expect(resultat.erreur?.nature, NatureErreur.refus);
+      expect(resultat.erreur?.detail, messageImagesProtegees);
+      expect(page.lues, isEmpty);
+      expect(service.imagesRecues!.map((i) => i.estProtegee), <bool>[
+        false,
+        true,
+        true,
+      ]);
+      expect(etat.chapitre!.estTelecharge, isFalse);
+    });
+
+    test('page quittée puis revenue pendant la lecture (reconnaissance pas '
+        'finie) : rien n\'est confié au service', () async {
+      final etat = creer();
+      await etat.signalerAdresse(adresse1);
+      service.reconnaissancesRetenues[adresse1] = Completer<void>();
+      final page = FaussePage()
+        ..images['https://img.test/1.png'] = octetsPng
+        ..images['https://img.test/2.png'] = octetsPng;
+      page.avantLecture = (adresse) {
+        if (adresse.endsWith('2.png')) {
+          etat.signalerDebutChargement(adresse2);
+          etat.signalerDebutChargement(adresse1);
+          unawaited(etat.signalerAdresse(adresse1));
+        }
+      };
+
+      final resultat = await etat.enregistrerChapitre(page);
+
+      expect(resultat.refus, RefusEnregistrementWeb.pageChangee);
+      expect(service.nombreEnregistrements, 0);
     });
 
     test('pages pas encore chargées : refus, rien d\'enregistré', () async {

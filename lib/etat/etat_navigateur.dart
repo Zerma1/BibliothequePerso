@@ -197,7 +197,16 @@ class EtatNavigateur extends EtatNotifiant {
 
   /// La vue web commence à charger une page.
   void signalerDebutChargement(String? adresse) {
-    if (adresse != null && adresse.isNotEmpty) _adresse = adresse;
+    if (adresse != null && adresse.isNotEmpty) {
+      if (_sansFragment(adresse) != _sansFragment(_adresse)) {
+        // Nouvelle page : le chapitre de l'ancienne n'est plus affiché, et un
+        // examen en cours de l'ancienne adresse ne compte plus.
+        _oublierChapitreAffiche();
+        _adresseExaminee = null;
+        _numeroExamen++;
+      }
+      _adresse = adresse;
+    }
     _progression = 0;
     _erreurChargement = null;
     notifier();
@@ -258,9 +267,15 @@ class EtatNavigateur extends EtatNotifiant {
   ChapitreReconnu? _reconnu;
   Chapitre? _chapitre;
 
-  /// Dernier chapitre affiché (même si une page qui n'en est pas un a été
-  /// vue depuis) : c'est lui qui est « quitté » au chapitre suivant.
-  Chapitre? _dernierChapitre;
+  /// Adresse (sans fragment) de la page pour laquelle [_chapitre] a été
+  /// reconnu : « Enregistrer ce chapitre » n'est possible que si la page
+  /// affichée est toujours celle-là.
+  String? _adresseChapitre;
+
+  /// Dernier chapitre affiché de chaque titre, par identifiant de titre
+  /// (même si d'autres pages ont été vues depuis) : c'est lui qui est
+  /// « quitté » au chapitre suivant du même titre.
+  final Map<int, Chapitre> _derniersChapitres = <int, Chapitre>{};
 
   /// Adresse (sans fragment) déjà examinée : la vue web signale souvent deux
   /// fois la même page (historique puis fin de chargement).
@@ -277,8 +292,9 @@ class EtatNavigateur extends EtatNotifiant {
   /// (sert au repère pendant l'enregistrement), ou `null`.
   ChapitreReconnu? get chapitreReconnu => _reconnu;
 
-  /// Chapitre affiché, tel qu'en base, ou `null` si la page n'en est pas un.
-  Chapitre? get chapitre => _chapitre;
+  /// Chapitre affiché, tel qu'en base, ou `null` si la page n'en est pas un
+  /// (ou pendant la reconnaissance d'une nouvelle page).
+  Chapitre? get chapitre => _chapitreDeLaPage;
 
   /// Nom du titre du chapitre affiché, s'il est connu.
   String? get nomTitreChapitre {
@@ -286,9 +302,27 @@ class EtatNavigateur extends EtatNotifiant {
     return id == null ? null : _nomsTitres[id];
   }
 
-  /// `true` si « Enregistrer ce chapitre » est possible (page reconnue,
-  /// aucun enregistrement en cours).
-  bool get peutEnregistrer => _chapitre != null && !_estEnEnregistrement;
+  /// `true` si « Enregistrer ce chapitre » est possible (page affichée
+  /// reconnue, aucun enregistrement en cours).
+  bool get peutEnregistrer =>
+      _chapitreDeLaPage != null && !_estEnEnregistrement;
+
+  /// Chapitre reconnu pour la page affichée maintenant, ou `null` (page non
+  /// reconnue, ou reconnaissance de la nouvelle page pas encore finie).
+  Chapitre? get _chapitreDeLaPage {
+    final chapitre = _chapitre;
+    if (chapitre == null) return null;
+    if (_adresseChapitre != _sansFragment(_adresse)) return null;
+    return chapitre;
+  }
+
+  /// La page affichée change : son chapitre (et le repère) sont oubliés
+  /// avant tout examen de la nouvelle page.
+  void _oublierChapitreAffiche() {
+    _chapitre = null;
+    _reconnu = null;
+    _adresseChapitre = null;
+  }
 
   /// La vue web affiche [url] (changement d'historique ou fin de
   /// chargement) : reconnaît le chapitre, le note en base, et marque lu le
@@ -297,11 +331,15 @@ class EtatNavigateur extends EtatNotifiant {
   /// Ne lève jamais d'erreur (le service ne le fait pas non plus).
   Future<void> signalerAdresse(String url) async {
     if (url.isEmpty) return;
+    final cle = _sansFragment(url);
     if (url != _adresse) {
+      // Nouvelle page (hors simple fragment) : le chapitre de l'ancienne est
+      // oublié AVANT tout `await`, sinon « Enregistrer ce chapitre » resterait
+      // actif sur l'ancien chapitre pendant la reconnaissance.
+      if (cle != _sansFragment(_adresse)) _oublierChapitreAffiche();
       _adresse = url;
       notifier();
     }
-    final cle = _sansFragment(url);
     if (cle == _adresseExaminee) return;
     _adresseExaminee = cle;
     final numero = ++_numeroExamen;
@@ -311,6 +349,7 @@ class EtatNavigateur extends EtatNotifiant {
     _reconnu = reconnu;
     if (reconnu == null) {
       _chapitre = null;
+      _adresseChapitre = null;
       notifier();
       return;
     }
@@ -318,14 +357,19 @@ class EtatNavigateur extends EtatNotifiant {
     final chapitre = await _service.noterChapitreAffiche(url, idTitre: idTitre);
     if (numero != _numeroExamen || estLibere) return;
     _chapitre = chapitre;
-    if (chapitre != null) {
-      final precedent = _dernierChapitre;
+    _adresseChapitre = chapitre == null ? null : cle;
+    final idTitreChapitre = chapitre?.idTitre;
+    if (chapitre != null && idTitreChapitre != null) {
+      // Suivi par titre : A ch. 3 → B ch. 10 → A ch. 4 marque bien A ch. 3
+      // lu (et B ch. 10 n'est pas « quitté » pour un chapitre d'un autre
+      // titre).
+      final precedent = _derniersChapitres[idTitreChapitre];
       if (precedent != null && precedent.id != chapitre.id) {
         // Sans attendre : le marquage (et les règles de téléchargement qui
         // suivent) ne retardent pas le repère du nouveau chapitre.
         unawaited(_service.quitterChapitre(precedent, chapitre));
       }
-      _dernierChapitre = chapitre;
+      _derniersChapitres[idTitreChapitre] = chapitre;
     }
     notifier();
     await _chargerNomTitre(chapitre?.idTitre ?? reconnu.idTitre);
@@ -395,7 +439,9 @@ class EtatNavigateur extends EtatNotifiant {
   Future<ResultatEnregistrementWeb> enregistrerChapitre(
     PageNavigateur page,
   ) async {
-    final chapitre = _chapitre;
+    // Seul le chapitre reconnu pour la page affichée MAINTENANT compte : un
+    // chapitre resté d'une page précédente recevrait les images d'un autre.
+    final chapitre = _chapitreDeLaPage;
     if (chapitre == null) {
       return const ResultatEnregistrementWeb.refus(
         RefusEnregistrementWeb.pageNonReconnue,
@@ -412,6 +458,7 @@ class EtatNavigateur extends EtatNotifiant {
     _pagesFaites = 0;
     _pagesTotal = 0;
     notifier();
+    // Égale à _adresseChapitre (vérifié par _chapitreDeLaPage).
     final adresseDepart = _sansFragment(_adresse);
     try {
       final resultat = await _enregistrer(page, chapitre, adresseDepart);
@@ -420,8 +467,10 @@ class EtatNavigateur extends EtatNotifiant {
         // La page affiche toujours ce chapitre : le repère passe à
         // « téléchargé ».
         if (_chapitre?.id == enregistre.id) _chapitre = enregistre;
-        if (_dernierChapitre?.id == enregistre.id) {
-          _dernierChapitre = enregistre;
+        final idTitreEnregistre = enregistre.idTitre;
+        if (idTitreEnregistre != null &&
+            _derniersChapitres[idTitreEnregistre]?.id == enregistre.id) {
+          _derniersChapitres[idTitreEnregistre] = enregistre;
         }
       }
       return resultat;
@@ -467,7 +516,27 @@ class EtatNavigateur extends EtatNotifiant {
       return _confierAuService(
         chapitre,
         const <ImageRecue>[],
+        adresseDepart,
         pagesProtegees: true,
+      );
+    }
+    // Images `blob:` ou `data:` : typiquement des pages déchiffrées par le
+    // script de l'éditeur. Jamais lues ni enregistrées : elles sont confiées
+    // au service marquées protégées (sans octets), qui refuse avec son
+    // message des images protégées.
+    if (liste.adresses.any(_estImageEnMemoire)) {
+      return _confierAuService(
+        chapitre,
+        <ImageRecue>[
+          for (final adresseImage in liste.adresses)
+            ImageRecue(
+              const <int>[],
+              adresse: adresseImage,
+              estProtegee: _estImageEnMemoire(adresseImage),
+            ),
+        ],
+        adresseDepart,
+        pagesProtegees: false,
       );
     }
     if (liste.nombreNonChargees > 0) {
@@ -519,14 +588,37 @@ class EtatNavigateur extends EtatNotifiant {
     if (arret != null) return arret;
 
     // 3. Contrôle et écriture de l'archive par le service.
-    return _confierAuService(chapitre, images, pagesProtegees: false);
+    return _confierAuService(
+      chapitre,
+      images,
+      adresseDepart,
+      pagesProtegees: false,
+    );
+  }
+
+  /// `true` pour une image déjà en mémoire dans la page (`blob:`, `data:`),
+  /// considérée comme protégée.
+  static bool _estImageEnMemoire(String adresse) {
+    final debut = adresse.trimLeft().toLowerCase();
+    return debut.startsWith('blob:') || debut.startsWith('data:');
   }
 
   Future<ResultatEnregistrementWeb> _confierAuService(
     Chapitre chapitre,
-    List<ImageRecue> images, {
+    List<ImageRecue> images,
+    String adresseDepart, {
     required bool pagesProtegees,
   }) async {
+    // Dernière vérification avant l'écriture : la page affichée est toujours
+    // celle du chapitre (sinon les images iraient dans une autre archive).
+    final arret = _verifierArret(adresseDepart);
+    if (arret != null) return arret;
+    if (_chapitreDeLaPage?.id != chapitre.id ||
+        _adresseChapitre != adresseDepart) {
+      return const ResultatEnregistrementWeb.refus(
+        RefusEnregistrementWeb.pageChangee,
+      );
+    }
     try {
       final enregistre = await _service.enregistrerImagesChapitre(
         chapitre,
@@ -644,8 +736,9 @@ class EtatNavigateur extends EtatNotifiant {
     }
   }
 
-  /// Domaine d'une adresse d'image `http(s)`, ou `null` (image `data:` ou
-  /// `blob:` déjà en mémoire : aucune requête vers un site).
+  /// Domaine d'une adresse d'image `http(s)`, ou `null` (autre schéma :
+  /// aucune requête vers un site ; les images `data:` et `blob:` sont de
+  /// toute façon refusées avant d'être lues).
   static String? _hote(String adresse) {
     final uri = Uri.tryParse(adresse);
     if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
@@ -714,6 +807,14 @@ for (const c of Array.from(document.querySelectorAll("canvas"))) {
 }
 return { adresses: pages.map(function (i) { return i.adresse; }), nonChargees: nonChargees, canvas: canvas };
 ''';
+
+  // LIMITE : `fetch` depuis la page est soumis à CORS. Si les images sont
+  // servies par un autre domaine (CDN) sans en-tête
+  // `Access-Control-Allow-Origin`, la récupération échoue (« Failed to
+  // fetch ») même si l'image est affichée et en cache : l'enregistrement est
+  // alors refusé avec « Ce site ne laisse pas récupérer ses images »
+  // (RefusEnregistrementWeb.imagesInaccessibles). Aucun contournement
+  // (pas de mode `no-cors`, dont la réponse est opaque et vide).
 
   /// Script : récupère l'image `adresse` (cache du navigateur d'abord),
   /// garde son contenu base64 dans la page sous `cle`, et renvoie sa taille
