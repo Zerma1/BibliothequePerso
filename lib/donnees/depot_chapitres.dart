@@ -81,17 +81,25 @@ Future<bool> enregistrerArchiveChapitre(
 /// `id_source` : l'état de lecture n'est jamais perdu, et les archives
 /// suivent la règle des 24 h (couche services).
 ///
+/// [garderChapitresWeb] à `true` (passage d'un site en lien seul) : les
+/// chapitres enregistrés depuis le navigateur intégré
+/// ([OrigineChapitre.web]) sont aussi gardés, même non lus ; c'est
+/// justement sur un lien seul qu'ils servent. À `false` (retrait du site),
+/// ils suivent la même règle que les autres.
+///
 /// Requête servie par l'index `index_chapitres_titre_source` (migration 7).
 Future<int> supprimerChapitresNonConservesSource(
   DatabaseExecutor executeur,
   int idTitre,
-  int idSource,
-) {
+  int idSource, {
+  bool garderChapitresWeb = false,
+}) {
   return executeur.rawDelete(
     'DELETE FROM chapitres '
     'WHERE id_titre = ? AND id_source = ? '
     'AND est_lu = ? AND est_telecharge = ? AND nom_archive IS NULL '
     'AND est_garde = ? '
+    '${garderChapitresWeb ? 'AND origine != ? ' : ''}'
     'AND NOT EXISTS (SELECT 1 FROM telechargements d '
     'WHERE d.id_chapitre = chapitres.id AND d.statut = ?)',
     <Object?>[
@@ -100,10 +108,28 @@ Future<int> supprimerChapitresNonConservesSource(
       valeurSqlFaux,
       valeurSqlFaux,
       valeurSqlFaux,
+      if (garderChapitresWeb) OrigineChapitre.web.name,
       StatutTelechargement.enCours.valeurSql,
     ],
   );
 }
+
+/// Expression SQL qui normalise l'adresse contenue dans [colonne] comme
+/// [normaliserUrlChapitre] : espaces autour, fragment (`#…`) et `/` finaux
+/// retirés. NULL reste NULL.
+///
+/// [colonne] est toujours un nom de colonne écrit en dur dans ce fichier,
+/// jamais une valeur : la requête reste paramétrée.
+String _sqlUrlNormalisee(String colonne) =>
+    "rtrim(CASE WHEN instr(trim($colonne), '#') > 0 "
+    "THEN substr(trim($colonne), 1, instr(trim($colonne), '#') - 1) "
+    "ELSE trim($colonne) END, '/')";
+
+/// Numéro de chapitre sans zéros inutiles (`12`, `10.5`), pour le nom par
+/// défaut d'un chapitre enregistré depuis le web.
+String _texteNumero(double numero) => numero == numero.truncateToDouble()
+    ? numero.toInt().toString()
+    : numero.toString();
 
 /// Accès à la table `chapitres`.
 class DepotChapitres {
@@ -132,7 +158,13 @@ class DepotChapitres {
   /// Lève une [ErreurBaseDeDonnees] si un chapitre n'a pas de
   /// [Chapitre.idTitre], si ce titre n'existe pas, ou si sa source n'est pas
   /// l'un des sites du titre (`titres_sources`) ou est un lien seul
-  /// (migration 8) ; rien n'est alors écrit.
+  /// (migration 8) pour un chapitre d'origine [OrigineChapitre.site] ; rien
+  /// n'est alors écrit.
+  ///
+  /// Chapitres enregistrés depuis le web ([OrigineChapitre.web], voir
+  /// [enregistrerChapitreWeb]) : l'actualisation ne les supprime jamais (elle
+  /// ne supprime rien) et ne les modifie jamais (une adresse déjà connue est
+  /// ignorée, et le lien externe d'un chapitre web n'est pas réécrit).
   Future<int> enregistrerChapitres(
     List<Chapitre> chapitres, {
     DateTime? dateDetection,
@@ -154,6 +186,9 @@ class DepotChapitres {
     final idsTitres = <int>{};
     // Couples (titre, source) explicites, à vérifier dans titres_sources.
     final sitesAVerifier = <(int, int)>{};
+    // Couples ayant au moins un chapitre d'origine 'site' : ceux-là seuls
+    // sont refusés sur un lien seul (migration 13).
+    final sitesAvecChapitresSite = <(int, int)>{};
     for (final chapitre in aEnregistrer) {
       final idTitre = chapitre.idTitre;
       if (idTitre == null) {
@@ -166,6 +201,9 @@ class DepotChapitres {
       final idSourceChapitre = chapitre.idSource;
       if (idSourceChapitre != null) {
         sitesAVerifier.add((idTitre, idSourceChapitre));
+        if (chapitre.origine == OrigineChapitre.site) {
+          sitesAvecChapitresSite.add((idTitre, idSourceChapitre));
+        }
       }
     }
 
@@ -206,9 +244,11 @@ class DepotChapitres {
               "n°$idSourceChapitre n'est pas un site du titre n°$idTitre.",
             );
           }
-          // Un lien seul (migration 8) n'est jamais lu : aucun chapitre ne
-          // peut en venir.
-          if (liens.first['lien_seul'] == valeurSqlVrai) {
+          // Un lien seul (migration 8) n'est jamais lu : aucun chapitre
+          // d'origine 'site' ne peut en venir (les chapitres 'web' le
+          // peuvent, migration 13).
+          if (liens.first['lien_seul'] == valeurSqlVrai &&
+              sitesAvecChapitresSite.contains((idTitre, idSourceChapitre))) {
             throw ErreurBaseDeDonnees(
               "Impossible d'enregistrer les chapitres : la source "
               "n°$idSourceChapitre est un lien seul pour le titre n°$idTitre "
@@ -264,6 +304,8 @@ class DepotChapitres {
   /// qui vient d'être inséré, déjà à jour, n'est pas réécrit. La recherche
   /// passe par l'index UNIQUE de `url_chapitre` ; le filtre sur `id_titre`
   /// évite de modifier le chapitre d'un autre titre qui partagerait l'URL.
+  /// Un chapitre enregistré depuis le web ([OrigineChapitre.web]) n'est
+  /// jamais modifié par l'actualisation d'un site.
   Future<void> _mettreAJourUrlsExternes(
     Transaction txn,
     List<Chapitre> chapitres,
@@ -272,15 +314,235 @@ class DepotChapitres {
       final urlExterne = _normaliserUrlExterne(chapitre.urlExterne);
       await txn.rawUpdate(
         'UPDATE chapitres SET url_externe = ? '
-        'WHERE url_chapitre = ? AND id_titre = ? AND url_externe IS NOT ?',
+        'WHERE url_chapitre = ? AND id_titre = ? AND url_externe IS NOT ? '
+        'AND origine != ?',
         <Object?>[
           urlExterne,
           chapitre.urlChapitre,
           chapitre.idTitre,
           urlExterne,
+          OrigineChapitre.web.name,
         ],
       );
     }
+  }
+
+  /// Enregistre le chapitre que le client lit dans le navigateur intégré sur
+  /// le site [idSource] du titre [idTitre], et le renvoie (tel qu'en base).
+  ///
+  /// Sert surtout aux sites en « lien seul », que l'application ne sait pas
+  /// lire : le chapitre est enregistré avec [OrigineChapitre.web], accepté
+  /// sur un lien seul (migration 13) et jamais supprimé ni modifié par une
+  /// actualisation depuis le site. Le site doit être lié au titre
+  /// (`titres_sources`), en lien seul ou non.
+  ///
+  /// Idempotent : si le titre a déjà, pour ce site, un chapitre de même
+  /// adresse (`url_chapitre` ou `url_externe`, comparées après
+  /// [normaliserUrlChapitre]) ou, à défaut, de même [numero], ce chapitre
+  /// est renvoyé **sans modification** (quelle que soit son origine), et
+  /// rien n'est écrit. Le marquer lu ou enregistrer son archive se fait
+  /// ensuite avec [marquerLu] et [enregistrerArchive].
+  ///
+  /// Valeurs enregistrées pour un nouveau chapitre :
+  /// - `url_chapitre` : [url] sans espaces autour ni fragment (`#…`) ;
+  /// - `nom` : [titre] s'il n'est pas vide, sinon « Chapitre `numero` » ;
+  /// - `langue` : [langue] si elle n'est pas vide, sinon la langue par
+  ///   défaut de la source (PLAYBOOK.md section 5) ;
+  /// - `date_detection` : [dateDetection], par défaut maintenant.
+  ///
+  /// Lève une [ArgumentError] si [url] est vide ou si [numero] n'est pas un
+  /// nombre fini, une [ErreurBaseDeDonnees] si le titre n'existe pas, si le
+  /// site n'est pas lié au titre, si cette adresse est déjà celle d'un
+  /// chapitre d'un **autre** titre (`url_chapitre` est UNIQUE), ou si
+  /// l'écriture échoue.
+  Future<Chapitre> enregistrerChapitreWeb(
+    int idTitre,
+    int idSource, {
+    required double numero,
+    required String url,
+    String? titre,
+    String? langue,
+    DateTime? dateDetection,
+  }) async {
+    if (!numero.isFinite) {
+      throw ArgumentError.value(numero, 'numero', 'doit être un nombre fini');
+    }
+    final adresseNormalisee = normaliserUrlChapitre(url);
+    if (adresseNormalisee.isEmpty) {
+      throw ArgumentError.value(url, 'url', 'ne doit pas être vide');
+    }
+    var adresse = url.trim();
+    final diese = adresse.indexOf('#');
+    if (diese >= 0) {
+      adresse = adresse.substring(0, diese);
+    }
+    final detection = dateDetection ?? DateTime.now().toUtc();
+
+    try {
+      return await _baseDeDonnees.transaction((txn) async {
+        final titres = await txn.query(
+          'titres',
+          columns: <String>['id'],
+          where: 'id = ?',
+          whereArgs: <Object?>[idTitre],
+          limit: 1,
+        );
+        if (titres.isEmpty) {
+          throw ErreurBaseDeDonnees(
+            "Impossible d'enregistrer le chapitre : le titre n°$idTitre "
+            "n'existe pas.",
+          );
+        }
+        // Recherche servie par l'index UNIQUE (id_titre, id_source).
+        final liens = await txn.query(
+          'titres_sources',
+          columns: <String>['id'],
+          where: 'id_titre = ? AND id_source = ?',
+          whereArgs: <Object?>[idTitre, idSource],
+          limit: 1,
+        );
+        if (liens.isEmpty) {
+          throw ErreurBaseDeDonnees(
+            "Impossible d'enregistrer le chapitre : la source n°$idSource "
+            "n'est pas un site du titre n°$idTitre.",
+          );
+        }
+
+        // 1. Même adresse exacte, tous titres confondus (index UNIQUE de
+        //    url_chapitre) : un même chapitre, ou un conflit avec un autre
+        //    titre que la contrainte UNIQUE refuserait.
+        final memeAdresse = await txn.query(
+          'chapitres',
+          where: 'url_chapitre = ?',
+          whereArgs: <Object?>[adresse],
+          limit: 1,
+        );
+        if (memeAdresse.isNotEmpty) {
+          final existant = Chapitre.depuisMap(memeAdresse.first);
+          if (existant.idTitre == idTitre) {
+            return existant;
+          }
+          throw ErreurBaseDeDonnees(
+            "Impossible d'enregistrer le chapitre : l'adresse « $adresse » "
+            'est déjà celle d\'un chapitre du titre n°${existant.idTitre}.',
+          );
+        }
+
+        // 2. Même adresse normalisée, ou à défaut même numéro, parmi les
+        //    chapitres de ce site pour ce titre (index
+        //    index_chapitres_titre_source) ; l'adresse l'emporte sur le
+        //    numéro, puis le plus ancien.
+        final connus = await txn.rawQuery(
+          'SELECT * FROM chapitres '
+          'WHERE id_titre = ? AND id_source = ? '
+          'AND (${_sqlUrlNormalisee('url_chapitre')} = ? '
+          'OR ${_sqlUrlNormalisee('url_externe')} = ? OR numero = ?) '
+          'ORDER BY CASE WHEN ${_sqlUrlNormalisee('url_chapitre')} = ? '
+          'OR ${_sqlUrlNormalisee('url_externe')} = ? '
+          'THEN 0 ELSE 1 END, id '
+          'LIMIT 1',
+          <Object?>[
+            idTitre,
+            idSource,
+            adresseNormalisee,
+            adresseNormalisee,
+            numero,
+            adresseNormalisee,
+            adresseNormalisee,
+          ],
+        );
+        if (connus.isNotEmpty) {
+          return Chapitre.depuisMap(connus.first);
+        }
+
+        // 3. Nouveau chapitre.
+        var langueChapitre = langue?.trim() ?? '';
+        if (langueChapitre.isEmpty) {
+          final sources = await txn.query(
+            'sources',
+            columns: <String>['langue_par_defaut'],
+            where: 'id = ?',
+            whereArgs: <Object?>[idSource],
+            limit: 1,
+          );
+          final defaut = sources.isEmpty
+              ? null
+              : sources.first['langue_par_defaut'];
+          langueChapitre = defaut is String ? defaut.trim() : '';
+        }
+        final nomSaisi = titre?.trim() ?? '';
+        final chapitre = Chapitre(
+          idTitre: idTitre,
+          idSource: idSource,
+          urlChapitre: adresse,
+          nom: nomSaisi.isEmpty ? 'Chapitre ${_texteNumero(numero)}' : nomSaisi,
+          numero: numero,
+          langue: langueChapitre,
+          dateDetection: detection,
+          origine: OrigineChapitre.web,
+        );
+        final id = await txn.insert(
+          'chapitres',
+          chapitre.versMap()..remove('id'),
+        );
+        // Relu en base : les dates y sont arrondies à la milliseconde, le
+        // chapitre renvoyé est donc égal à celui que chargerChapitre donnera.
+        final lignes = await txn.query(
+          'chapitres',
+          where: 'id = ?',
+          whereArgs: <Object?>[id],
+          limit: 1,
+        );
+        return Chapitre.depuisMap(lignes.single);
+      });
+    } on DatabaseException catch (erreur) {
+      throw ErreurBaseDeDonnees(
+        "Impossible d'enregistrer le chapitre ${_texteNumero(numero)} lu sur "
+        'le web pour le titre n°$idTitre.',
+        cause: erreur,
+      );
+    }
+  }
+
+  /// Charge le chapitre dont l'adresse correspond à [url], ou `null` ; si
+  /// [idTitre] est donné, seulement parmi les chapitres de ce titre.
+  ///
+  /// Sert au navigateur intégré à reconnaître un chapitre déjà connu
+  /// (état lu, archive) à partir de la page affichée. Sont comparées
+  /// `url_chapitre` et `url_externe`, après [normaliserUrlChapitre] des deux
+  /// côtés (sans fragment, sans `/` final). Si plusieurs chapitres
+  /// correspondent, le plus ancien (plus petit `id`) est renvoyé.
+  ///
+  /// Une première recherche exacte (adresse normalisée, avec ou sans `/`
+  /// final) passe par l'index UNIQUE de `url_chapitre`. Sinon, la
+  /// comparaison normalisée parcourt les chapitres du titre (index
+  /// `index_chapitres_titre_lu`) ou, sans [idTitre], toute la table
+  /// (LIMITE : acceptable pour une recherche faite à chaque page, la table
+  /// restant de l'ordre de quelques dizaines de milliers de lignes).
+  Future<Chapitre?> chargerChapitreParUrl(String url, {int? idTitre}) async {
+    final adresse = normaliserUrlChapitre(url);
+    if (adresse.isEmpty) {
+      return null;
+    }
+    final filtreTitre = idTitre == null ? '' : ' AND id_titre = ?';
+    final exacts = await _baseDeDonnees.query(
+      'chapitres',
+      where: 'url_chapitre IN (?, ?)$filtreTitre',
+      whereArgs: <Object?>[adresse, '$adresse/', ?idTitre],
+      orderBy: 'id',
+      limit: 1,
+    );
+    if (exacts.isNotEmpty) {
+      return Chapitre.depuisMap(exacts.first);
+    }
+    final lignes = await _baseDeDonnees.rawQuery(
+      'SELECT * FROM chapitres '
+      'WHERE (${_sqlUrlNormalisee('url_chapitre')} = ? '
+      'OR ${_sqlUrlNormalisee('url_externe')} = ?)$filtreTitre '
+      'ORDER BY id LIMIT 1',
+      <Object?>[adresse, adresse, ?idTitre],
+    );
+    return lignes.isEmpty ? null : Chapitre.depuisMap(lignes.first);
   }
 
   /// Lien externe sans espaces autour, ou `null` s'il est absent ou vide

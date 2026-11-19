@@ -320,7 +320,8 @@ class DepotTitresSources {
   /// Passage en lien seul : les chapitres de ce site non lus, non
   /// téléchargés, non gardés et sans téléchargement en cours sont supprimés
   /// dans la même transaction (comme pour [retirerSourceSecondaire]) ; les
-  /// autres restent, avec leur état de lecture. Passage en site lisible :
+  /// autres restent, avec leur état de lecture, ainsi que tous les chapitres
+  /// enregistrés depuis le navigateur intégré (`OrigineChapitre.web`). Passage en site lisible :
   /// aucun chapitre n'est touché (renvoie 0). Ne fait rien (renvoie 0) si le
   /// site est déjà dans l'état demandé.
   ///
@@ -367,7 +368,14 @@ class DepotTitresSources {
           if (!lienSeul) {
             return 0;
           }
-          return supprimerChapitresNonConservesSource(txn, idTitre, idSource);
+          // Les chapitres enregistrés depuis le navigateur intégré restent :
+          // c'est justement sur un lien seul qu'ils servent (migration 13).
+          return supprimerChapitresNonConservesSource(
+            txn,
+            idTitre,
+            idSource,
+            garderChapitresWeb: true,
+          );
         },
       );
     } on DatabaseException catch (erreur) {

@@ -31,6 +31,7 @@ const List<Migration> migrations = <Migration>[
   _migration10,
   _migration11,
   _migration12,
+  _migration13,
 ];
 
 /// Version actuelle du schéma (nombre de migrations).
@@ -822,4 +823,77 @@ Future<void> _migration12(DatabaseExecutor executeur) async {
   await executeur.execute(
     'ALTER TABLE titres ADD COLUMN description_perso TEXT',
   );
+}
+
+/// Migration 13 (navigateur intégré) : chapitres enregistrés depuis le web.
+///
+/// Colonne `chapitres.origine` : `'site'` (chapitre lu par l'adaptateur du
+/// site, cas de tous les chapitres existants) ou `'web'` (chapitre enregistré
+/// pendant que le client le lisait dans le navigateur intégré, par exemple
+/// sur un site en « lien seul » que l'application ne sait pas lire).
+///
+/// Règle garantie par deux déclencheurs, quel que soit le chemin d'écriture
+/// (en plus des contrôles de `DepotChapitres`) : un chapitre d'origine
+/// `'site'` ne peut pas venir d'un site en lien seul ; un chapitre `'web'`
+/// le peut. La migration 8 n'avait mis aucun déclencheur sur `chapitres`
+/// (le refus était seulement dans le dépôt) : il n'y a donc rien à
+/// supprimer, seulement à créer. Les chapitres `'site'` déjà présents sur un
+/// lien seul (lus ou téléchargés, gardés lors du passage en lien seul)
+/// restent valables : les déclencheurs ne regardent que les insertions et
+/// les changements de titre, de site ou d'origine.
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration13(DatabaseExecutor executeur) async {
+  const instructions = <String>[
+    // Texte (valeurs de OrigineChapitre.name) plutôt qu'un booléen « est
+    // web » : une autre origine (import d'un fichier…) pourra s'ajouter sans
+    // changer le sens de la colonne. NOT NULL DEFAULT 'site' : les chapitres
+    // existants ont tous été lus sur leur site, et ADD COLUMN accepte NOT
+    // NULL grâce à la valeur par défaut. CHECK : seules les valeurs connues
+    // du modèle. Pas d'index : la colonne n'est jamais cherchée seule (elle
+    // filtre les chapitres d'un titre, déjà servis par
+    // index_chapitres_titre_source et index_chapitres_titre_lu).
+    "ALTER TABLE chapitres ADD COLUMN origine TEXT NOT NULL DEFAULT 'site' "
+        "CHECK (origine IN ('site', 'web'))",
+    // Insertion : un chapitre 'site' venant d'un lien seul est refusé. La
+    // recherche du lien passe par l'index UNIQUE (id_titre, id_source) de
+    // titres_sources. Un chapitre sans source (NULL, rempli ensuite par
+    // declencheur_chapitres_source avec le site principal) n'est jamais
+    // refusé : le site principal n'est jamais un lien seul (migration 8). Le
+    // texte d'erreur sert seulement au diagnostic : le dépôt vérifie avant
+    // d'écrire et donne un message clair.
+    '''
+    CREATE TRIGGER declencheur_chapitres_lien_seul_insertion
+    BEFORE INSERT ON chapitres
+    WHEN NEW.origine = 'site'
+      AND EXISTS (SELECT 1 FROM titres_sources ts
+                  WHERE ts.id_titre = NEW.id_titre
+                    AND ts.id_source = NEW.id_source
+                    AND ts.lien_seul = 1)
+    BEGIN
+      SELECT RAISE(ABORT, 'chapitre du site refuse sur un lien seul');
+    END
+    ''',
+    // Modification : même contrôle, seulement si le titre, le site ou
+    // l'origine change réellement (un chapitre 'site' gardé sur un lien
+    // seul peut toujours être marqué lu, téléchargé, gardé…).
+    '''
+    CREATE TRIGGER declencheur_chapitres_lien_seul_modification
+    BEFORE UPDATE OF origine, id_titre, id_source ON chapitres
+    WHEN NEW.origine = 'site'
+      AND (NEW.origine IS NOT OLD.origine
+        OR NEW.id_titre IS NOT OLD.id_titre
+        OR NEW.id_source IS NOT OLD.id_source)
+      AND EXISTS (SELECT 1 FROM titres_sources ts
+                  WHERE ts.id_titre = NEW.id_titre
+                    AND ts.id_source = NEW.id_source
+                    AND ts.lien_seul = 1)
+    BEGIN
+      SELECT RAISE(ABORT, 'chapitre du site refuse sur un lien seul');
+    END
+    ''',
+  ];
+  for (final instruction in instructions) {
+    await executeur.execute(instruction);
+  }
 }
