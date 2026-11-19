@@ -6,6 +6,24 @@
 > restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
 > chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
 
+## 0.2.4-test — version de test, Windows seulement (2026-11-19)
+
+Contient tout ce qu'apportent les 0.2.2-test et 0.2.3-test, plus :
+- **Navigateur intégré** (Windows, moteur WebView2) : « Lire dans l'application » sur un site en
+  simple lien, « Lire sur … » d'un chapitre externe, « Lire en ligne » d'un chapitre non
+  téléchargé. Barre : retour, avant, recharger, adresse, navigateur externe.
+- **Chapitre reconnu** d'après l'adresse affichée (« Chapitre N de <titre> (lu / non lu) ») ;
+  passer au chapitre suivant marque le chapitre quitté comme lu. Sur un site en simple lien
+  (ex. comix.to), les chapitres lus s'ajoutent à la fiche.
+- **« Enregistrer ce chapitre »** : range les images affichées dans une archive (lecture hors
+  ligne). Images dessinées dans un canvas, déchiffrées par le site (MANGA Plus) ou refusées par le
+  site : la tentative échoue avec un message, rien n'est enregistré.
+- **Téléchargements simultanés** : jauge de 1 à 32 (3 par défaut) dans Paramètres →
+  Téléchargements ; un même site reçoit toujours au plus une requête par seconde.
+- Corrigé : les images des sites autres que MangaDex étaient signalées à tort à MangaDex@Home ;
+  un téléchargement demandé à la fin de la file pouvait attendre.
+- Les versions de test ne livrent plus que Windows (décision du client).
+
 ## 0.2.3-test — version de test (2026-11-18)
 
 Contient tout ce qu'apporte la 0.2.2-test, plus :
