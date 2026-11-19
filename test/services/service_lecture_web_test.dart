@@ -1,33 +1,56 @@
 // Tests du navigateur intégré (tâche N3) : base en mémoire, archives dans un
 // dossier temporaire, faux service de téléchargement. Aucun appel réseau :
 // le service n'en fait jamais.
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:bibliotheque_perso/donnees/depot_chapitres.dart';
+import 'package:bibliotheque_perso/donnees/depot_listes.dart';
+import 'package:bibliotheque_perso/donnees/depot_parametres.dart';
 import 'package:bibliotheque_perso/donnees/depot_sources.dart';
+import 'package:bibliotheque_perso/donnees/depot_telechargements.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres.dart';
 import 'package:bibliotheque_perso/donnees/depot_titres_sources.dart';
 import 'package:bibliotheque_perso/donnees/stockage_telechargements.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/journal.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
+import 'package:bibliotheque_perso/modeles/telechargement.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
 import 'package:bibliotheque_perso/services/constantes_services.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/services/politique_telechargement.dart';
 import 'package:bibliotheque_perso/services/service_lecture_web.dart';
+import 'package:bibliotheque_perso/services/service_parametres.dart';
 import 'package:bibliotheque_perso/services/service_telechargement.dart';
 import 'package:bibliotheque_perso/sources/constantes_sources.dart';
 import 'package:bibliotheque_perso/sources/detection_image.dart';
+import 'package:bibliotheque_perso/sources/fabrique_sources.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../donnees/outils_tests_donnees.dart';
+import '../sources/outils_tests_sources.dart';
 
-/// Faux service de téléchargement : note les titres dont les règles sont
-/// appliquées.
-class _FauxServiceTelechargement extends Fake implements ServiceTelechargement {
+/// Vrai service de téléchargement (pause, changement de dossier, file en
+/// base) dont seules les règles sont remplacées : il note les titres dont
+/// les règles sont appliquées, sans lancer la file.
+class _ServiceTelechargementEspion extends ServiceTelechargement {
+  _ServiceTelechargementEspion({
+    required super.depotTelechargements,
+    required super.depotChapitres,
+    required super.depotTitres,
+    required super.depotListes,
+    required super.depotSources,
+    required super.stockage,
+    required super.fabriqueSources,
+    required super.client,
+    required super.serviceParametres,
+    required super.depotParametres,
+  });
+
   final List<int> titresAppliques = <int>[];
   bool echouer = false;
 
@@ -73,7 +96,10 @@ void main() {
   late DepotTitresSources depotTitresSources;
   late DepotSources depotSources;
   late StockageTelechargements stockage;
-  late _FauxServiceTelechargement telechargement;
+  late _ServiceTelechargementEspion telechargement;
+  late DepotTelechargements depotTelechargements;
+  late DepotParametres depotParametres;
+  late ServiceDossierChapitres dossiers;
   late ServiceLectureWeb service;
   late JournalMemoire journal;
   late Source siteA;
@@ -94,7 +120,31 @@ void main() {
     depotTitresSources = DepotTitresSources(base);
     depotSources = DepotSources(base);
     stockage = StockageTelechargements(dossier.path);
-    telechargement = _FauxServiceTelechargement();
+    depotTelechargements = DepotTelechargements(base);
+    depotParametres = DepotParametres(base);
+    // Aucune requête attendue : toute adresse répond 404.
+    final client = creerClientTest(
+      (requete) async => http.Response('introuvable', 404),
+      HorlogeFactice(),
+    );
+    telechargement = _ServiceTelechargementEspion(
+      depotTelechargements: depotTelechargements,
+      depotChapitres: depotChapitres,
+      depotTitres: depotTitres,
+      depotListes: DepotListes(base),
+      depotSources: depotSources,
+      stockage: stockage,
+      fabriqueSources: FabriqueSources(client),
+      client: client,
+      serviceParametres: ServiceParametres(depotParametres),
+      depotParametres: depotParametres,
+    );
+    addTearDown(telechargement.fermer);
+    dossiers = ServiceDossierChapitres(
+      serviceTelechargement: telechargement,
+      depotParametres: depotParametres,
+      cheminDossierParDefaut: () async => dossier.path,
+    );
     service = ServiceLectureWeb(
       depotChapitres: depotChapitres,
       depotTitres: depotTitres,
@@ -280,6 +330,38 @@ void main() {
     });
   });
 
+  group('morceauxLisiblesChemin', () {
+    test("garde le nom d'une œuvre sans le numéro ni l'extension", () {
+      expect(
+        ServiceLectureWeb.morceauxLisiblesChemin(
+          'https://s.example/manga/one-piece/chapter-3',
+        ),
+        <String>['one-piece'],
+      );
+      expect(
+        ServiceLectureWeb.morceauxLisiblesChemin(
+          'https://s.example/solo-leveling-chapitre-3.html',
+        ),
+        <String>['solo-leveling'],
+      );
+    });
+
+    test('ignore mots-clés, segments génériques et identifiants internes', () {
+      List<String> morceaux(String url) =>
+          ServiceLectureWeb.morceauxLisiblesChemin(url);
+      expect(morceaux('https://s.example/chapter/4815162'), isEmpty);
+      expect(morceaux('https://s.example/read/chapters/12'), isEmpty);
+      expect(
+        morceaux(
+          'https://s.example/chapter/ef4aae9e-eea8-4931-8435-9f907870f4d8',
+        ),
+        isEmpty,
+      );
+      expect(morceaux('https://s.example/x/a1b2c3d4/ep-2'), isEmpty);
+      expect(morceaux('https://s.example/one/ch-3'), isEmpty);
+    });
+  });
+
   group('validerImagesChapitre', () {
     test('renvoie le format de chaque image dans l\'ordre', () {
       expect(
@@ -332,6 +414,62 @@ void main() {
           pagesProtegees: true,
         ),
         refusProtege,
+      );
+    });
+
+    test('refuse une image blob:, data: ou servie par un éditeur protégé', () {
+      final refusProtege = throwsA(
+        isA<ErreurService>().having(
+          (e) => e.message,
+          'message',
+          messageImagesProtegees,
+        ),
+      );
+      for (final adresse in <String>[
+        'blob:https://site.example/4f1c-22aa',
+        'BLOB:https://site.example/4f1c-22aa',
+        'data:image/png;base64,iVBORw0KGgo=',
+        'https://mangaplus.shueisha.co.jp/page/1.jpg',
+        'https://jumpg-assets.mangaplus.shueisha.co.jp/page/1.jpg',
+      ]) {
+        expect(
+          () => ServiceLectureWeb.validerImagesChapitre(<ImageRecue>[
+            ImageRecue(_png, adresse: 'https://cdn.site.example/1.png'),
+            ImageRecue(_jpeg, adresse: adresse),
+          ]),
+          refusProtege,
+          reason: adresse,
+        );
+      }
+      // Un autre domaine qui finit pareil n'est pas un sous-domaine.
+      expect(
+        ServiceLectureWeb.validerImagesChapitre(<ImageRecue>[
+          ImageRecue(
+            _png,
+            adresse: 'https://faux-mangaplus.shueisha.co.jp.example/1.png',
+          ),
+        ]),
+        <FormatImage>[FormatImage.png],
+      );
+    });
+
+    test('refuse un chapitre au-delà de 300 Mo', () {
+      expect(tailleMaxTotaleChapitreWeb, 300 * 1024 * 1024);
+      final grosse = Uint8List(tailleMaxImageChapitreWeb);
+      grosse.setAll(0, _png);
+      final nombre =
+          tailleMaxTotaleChapitreWeb ~/ tailleMaxImageChapitreWeb + 1;
+      expect(
+        () => ServiceLectureWeb.validerImagesChapitre(
+          List<ImageRecue>.filled(nombre, ImageRecue(grosse)),
+        ),
+        throwsA(
+          isA<ErreurService>().having(
+            (e) => e.message,
+            'message',
+            contains('trop lourdes'),
+          ),
+        ),
       );
     });
 
@@ -440,6 +578,40 @@ void main() {
           idTitre: solo.id,
         );
         expect((reconnu! as ChapitreWebPossible).idTitre, solo.id);
+      },
+    );
+
+    test("avec un titre donné, n'attribue pas une adresse qui nomme une autre "
+        'œuvre', () async {
+      // One Piece n'est pas dans la bibliothèque : le chapitre ne doit pas
+      // être noté (puis marqué lu) sous Solo Leveling.
+      expect(
+        await service.reconnaitreChapitre(
+          '$_urlSiteA/manga/one-piece/chapter-3',
+          idTitre: solo.id,
+        ),
+        isNull,
+      );
+      expect(
+        await service.noterChapitreAffiche(
+          '$_urlSiteA/one-piece-chapitre-3.html',
+          idTitre: solo.id,
+        ),
+        isNull,
+      );
+      expect((await depotChapitres.chargerChapitres(solo.id!)).length, 1);
+    });
+
+    test(
+      'avec un titre donné, lui attribue une adresse à identifiant interne',
+      () async {
+        final reconnu = await service.reconnaitreChapitre(
+          '$_urlSiteA/chapter/ef4aae9e-eea8-4931-8435-9f907870f4d8/ch-12',
+          idTitre: solo.id,
+        );
+        final possible = reconnu! as ChapitreWebPossible;
+        expect(possible.idTitre, solo.id);
+        expect(possible.numero, 12);
       },
     );
 
@@ -770,6 +942,162 @@ void main() {
         );
       },
     );
+
+    test("refuse une image d'un domaine protégé sans rien écrire", () async {
+      await expectLater(
+        service.enregistrerImagesChapitre(chapitre2, <ImageRecue>[
+          ImageRecue(
+            _jpeg,
+            adresse: 'https://www.mangaplus.shueisha.co.jp/img/1.jpg',
+          ),
+        ]),
+        throwsA(
+          isA<ErreurService>().having(
+            (e) => e.message,
+            'message',
+            messageImagesProtegees,
+          ),
+        ),
+      );
+      final fichiers = await dossier.list(recursive: true).toList();
+      expect(fichiers.whereType<File>(), isEmpty);
+    });
+
+    test(
+      'retire de la file la ligne en attente du chapitre enregistré',
+      () async {
+        await depotTelechargements.ajouterEnFile(chapitre2.id!);
+        final enregistre = await service.enregistrerImagesChapitre(
+          chapitre2,
+          <ImageRecue>[ImageRecue(_png)],
+        );
+        expect(enregistre.estTelecharge, isTrue);
+        expect(
+          await depotTelechargements.chargerParChapitre(chapitre2.id!),
+          isNull,
+        );
+      },
+    );
+
+    test("laisse dans la file une ligne qui n'est pas en attente", () async {
+      final ligne = await depotTelechargements.ajouterEnFile(chapitre2.id!);
+      await depotTelechargements.enregistrerStatut(
+        ligne.id!,
+        StatutTelechargement.echec,
+        messageErreur: 'site en panne',
+      );
+      await service.enregistrerImagesChapitre(chapitre2, <ImageRecue>[
+        ImageRecue(_png),
+      ]);
+      expect(
+        (await depotTelechargements.chargerParChapitre(chapitre2.id!))!.statut,
+        StatutTelechargement.echec,
+      );
+    });
+
+    group('changement du dossier des chapitres', () {
+      late Directory autre;
+      late String nas;
+
+      setUp(() async {
+        // Hors du dossier actuel : le déplacement n'y copie pas ses propres
+        // fichiers.
+        autre = await Directory.systemTemp.createTemp('lecture_web_nas');
+        nas = await StockageTelechargements.validerDossier(
+          '${autre.path}${Platform.pathSeparator}nas',
+        );
+      });
+
+      tearDown(() async {
+        await autre.delete(recursive: true);
+      });
+
+      Matcher refus(String extrait) => throwsA(
+        isA<ErreurService>().having(
+          (e) => e.message,
+          'message',
+          contains(extrait),
+        ),
+      );
+
+      test('refuse un enregistrement pendant le changement puis jusqu\'au '
+          'redémarrage', () async {
+        final changement = dossiers.changerDossierChapitres(
+          nas,
+          deplacerArchives: false,
+        );
+        await expectLater(
+          service.enregistrerImagesChapitre(chapitre2, <ImageRecue>[
+            ImageRecue(_png),
+          ]),
+          refus('en train de changer'),
+        );
+        await changement;
+        await expectLater(
+          service.enregistrerImagesChapitre(chapitre2, <ImageRecue>[
+            ImageRecue(_png),
+          ]),
+          refus('redémarrez'),
+        );
+        final relu = (await depotChapitres.chargerChapitre(chapitre2.id!))!;
+        expect(relu.estTelecharge, isFalse);
+      });
+
+      test(
+        'refuse un changement avec déplacement pendant un enregistrement',
+        () async {
+          final ecriture = Completer<void>();
+          final enregistrement = telechargement.executerEnregistrementWeb(
+            () => ecriture.future,
+          );
+          // Le compteur est pris après une lecture en base.
+          await pumpEventQueue();
+          expect(telechargement.nombreEnregistrementsWebEnCours, 1);
+          await expectLater(
+            dossiers.changerDossierChapitres(nas),
+            refus('navigateur'),
+          );
+          // Pause gardée : aucun nouvel enregistrement ne commence.
+          expect(dossiers.estFileEnPause, isTrue);
+          await expectLater(
+            service.enregistrerImagesChapitre(chapitre2, <ImageRecue>[
+              ImageRecue(_png),
+            ]),
+            refus('en train de changer'),
+          );
+          ecriture.complete();
+          await enregistrement;
+          expect(telechargement.nombreEnregistrementsWebEnCours, 0);
+          // Le client réessaie : le changement aboutit.
+          final resultat = await dossiers.changerDossierChapitres(nas);
+          expect(resultat.redemarrageNecessaire, isTrue);
+        },
+      );
+
+      test('refuse un enregistrement si un déplacement est inachevé', () async {
+        await depotParametres.enregistrerTexte(
+          ServiceParametres.cleDeplacementDossierEnCours,
+          nas,
+        );
+        await expectLater(
+          service.enregistrerImagesChapitre(chapitre2, <ImageRecue>[
+            ImageRecue(_png),
+          ]),
+          refus('inachevé'),
+        );
+        expect(telechargement.nombreEnregistrementsWebEnCours, 0);
+      });
+
+      test('libère le compteur même si l\'écriture échoue', () async {
+        await expectLater(
+          telechargement.executerEnregistrementWeb<void>(
+            () async => throw StateError('disque plein'),
+          ),
+          throwsStateError,
+        );
+        expect(telechargement.nombreEnregistrementsWebEnCours, 0);
+      });
+    });
 
     test('refuse un chapitre non enregistré ou disparu', () async {
       await expectLater(

@@ -278,9 +278,13 @@ const int nombreMaxImagesChapitreWeb = 500;
 const int tailleMaxImageChapitreWeb = 30 * 1024 * 1024;
 
 /// Navigateur intégré : taille totale maximale (en octets) des images d'un
-/// chapitre enregistré, pour ne pas écrire une archive démesurée (les
-/// octets sont déjà en mémoire côté interface).
-const int tailleMaxTotaleChapitreWeb = 1024 * 1024 * 1024;
+/// chapitre enregistré. 300 Mo laissent une large marge à un long chapitre
+/// de webtoon (souvent 20 à 80 Mo) sans écrire d'archive démesurée.
+// LIMITE : toutes les images sont en mémoire avant l'écriture (reçues de la
+// page en base64 puis décodées, puis passées en bloc au service) ; la
+// mémoire réellement prise dépasse donc ce plafond pendant l'échange avec
+// la page. Plafond gardé bas pour les téléphones Android modestes.
+const int tailleMaxTotaleChapitreWeb = 300 * 1024 * 1024;
 
 /// Navigateur intégré : plus grand numéro de chapitre accepté quand il est
 /// tiré d'une adresse. Au-delà, le « numéro » est presque toujours un

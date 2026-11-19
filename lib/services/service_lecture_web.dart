@@ -158,8 +158,10 @@ class ServiceLectureWeb {
   /// a été changé pendant la session
   /// (`ServiceDossierChapitres.redemarrageNecessaire`) ; l'enregistrement
   /// d'images est alors refusé, comme la file de téléchargement est en
-  /// pause (l'archive serait écrite dans l'ancien dossier). Facultatif :
-  /// sans lui, ce contrôle n'est pas fait.
+  /// pause (l'archive serait écrite dans l'ancien dossier). Facultatif et
+  /// redondant : [serviceTelechargement] fait déjà ce contrôle (avec le
+  /// changement en cours) dans `executerEnregistrementWeb` ; gardé pour
+  /// les appelants existants.
   ServiceLectureWeb({
     required DepotChapitres depotChapitres,
     required DepotTitres depotTitres,
@@ -348,10 +350,22 @@ class ServiceLectureWeb {
         if (autre != null) {
           return avecSource(autre);
         }
-        // LIMITE : sans indice dans l'adresse (`/chapter/4815162`), le
-        // chapitre est attribué au titre depuis lequel le navigateur a été
-        // ouvert ; une autre œuvre de ce site absente de la bibliothèque
-        // serait notée sous ce titre si le client y navigue.
+        // Repli sur le titre depuis lequel le navigateur a été ouvert
+        // seulement si l'adresse ne nomme aucune œuvre (`/chapter/4815162`).
+        // Une adresse qui en nomme une autre (`/manga/one-piece/chapter-3`,
+        // œuvre absente de la bibliothèque) n'est pas notée : le chapitre
+        // serait sinon marqué lu sous la mauvaise œuvre.
+        // LIMITE : une autre œuvre de ce site dont l'adresse ne contient
+        // aucun nom lisible serait encore notée sous ce titre.
+        final identifiants = <String>{
+          for (final lien in liensTitre)
+            ?_identifiantLisibleTitre(lien.urlTitre),
+        };
+        final autresMorceaux = morceauxLisiblesChemin(adresse)
+            .where((morceau) => !identifiants.contains(morceau));
+        if (autresMorceaux.isNotEmpty) {
+          return null;
+        }
         return avecSource(liensTitre.first);
       }
       // Ce titre n'a pas ce site : recherche parmi tous les titres.
@@ -527,16 +541,8 @@ class ServiceLectureWeb {
       return 0;
     }
     final cheminChapitre = _decoder(chapitre.path).toLowerCase();
-    var cheminTitre = _decoder(titre.path).toLowerCase();
-    while (cheminTitre.endsWith('/')) {
-      cheminTitre = cheminTitre.substring(0, cheminTitre.length - 1);
-    }
-    final segments = cheminTitre
-        .split('/')
-        .where(
-          (s) => s.isNotEmpty && !segmentsGeneriquesAdresseTitre.contains(s),
-        )
-        .toList();
+    final cheminTitre = _cheminTitre(titre);
+    final segments = _segmentsPropresTitre(cheminTitre);
     if (segments.isEmpty) {
       // Fiche sans morceau propre (`/manga/`, ou paramètres seuls) : aucun
       // indice fiable.
@@ -545,19 +551,118 @@ class ServiceLectureWeb {
     if (cheminChapitre.startsWith('$cheminTitre/')) {
       return 2;
     }
-    final lettre = RegExp(r'\p{L}', unicode: true);
-    String? identifiant;
-    for (final segment in segments) {
-      if (segment.length >= longueurMinIdentifiantTitreWeb &&
-          lettre.hasMatch(segment) &&
-          (identifiant == null || segment.length > identifiant.length)) {
-        identifiant = segment;
-      }
-    }
+    final identifiant = _identifiantDesSegments(segments);
     if (identifiant != null && cheminChapitre.contains(identifiant)) {
       return 1;
     }
     return 0;
+  }
+
+  /// Chemin décodé, en minuscules et sans `/` final, de l'adresse d'un
+  /// titre.
+  static String _cheminTitre(Uri titre) {
+    var chemin = _decoder(titre.path).toLowerCase();
+    while (chemin.endsWith('/')) {
+      chemin = chemin.substring(0, chemin.length - 1);
+    }
+    return chemin;
+  }
+
+  /// Morceaux du chemin d'un titre qui ne sont pas génériques
+  /// ([segmentsGeneriquesAdresseTitre]).
+  static List<String> _segmentsPropresTitre(String cheminTitre) => cheminTitre
+      .split('/')
+      .where((s) => s.isNotEmpty && !segmentsGeneriquesAdresseTitre.contains(s))
+      .toList();
+
+  /// Plus long des [segments] qui contient une lettre et fait au moins
+  /// [longueurMinIdentifiantTitreWeb] caractères, ou `null`.
+  static String? _identifiantDesSegments(List<String> segments) {
+    String? identifiant;
+    for (final segment in segments) {
+      if (segment.length >= longueurMinIdentifiantTitreWeb &&
+          _lettre.hasMatch(segment) &&
+          (identifiant == null || segment.length > identifiant.length)) {
+        identifiant = segment;
+      }
+    }
+    return identifiant;
+  }
+
+  /// Identifiant lisible du titre d'adresse [urlTitre] (voir
+  /// [evaluerCorrespondanceTitre]), ou `null`.
+  static String? _identifiantLisibleTitre(String urlTitre) {
+    final titre = Uri.tryParse(normaliserUrlChapitre(urlTitre));
+    if (titre == null) return null;
+    return _identifiantDesSegments(_segmentsPropresTitre(_cheminTitre(titre)));
+  }
+
+  static final RegExp _lettre = RegExp(r'\p{L}', unicode: true);
+
+  /// Au moins trois lettres de suite : distingue un nom (`one-piece`,
+  /// `kaiju-n8`) d'un identifiant interne (`a1b2c3d4`).
+  static final RegExp _troisLettres = RegExp(r'\p{L}{3,}', unicode: true);
+
+  /// Identifiant hexadécimal ou UUID (`ef4aae9e-eea8-4931-…`) : jamais un
+  /// nom d'œuvre, même s'il contient trois lettres de suite (`eea`).
+  static final RegExp _identifiantHexadecimal = RegExp(
+    r'^(?=.*\d)[0-9a-f]+(?:[-_][0-9a-f]+)*$',
+  );
+
+  /// Extension finale d'un morceau d'adresse (`chapter-3.html`).
+  static final RegExp _extensionFinale = RegExp(r'\.(?:html?|php|aspx?|jsp)$');
+
+  /// Séparateurs en début ou en fin d'un morceau, une fois le numéro de
+  /// chapitre retiré (`solo-leveling-` → `solo-leveling`).
+  static final RegExp _separateursBords = RegExp(r'^[-_.\s]+|[-_.\s]+$');
+
+  /// Mots-clés de chapitre seuls (`/chapter/4815162`) : jamais un nom
+  /// d'œuvre.
+  static const Set<String> _motsClesChapitre = <String>{
+    'chapitre',
+    'chapitres',
+    'chapter',
+    'chapters',
+    'chap',
+    'episode',
+    'episodes',
+    'épisode',
+    'épisodes',
+  };
+
+  /// Morceaux « lisibles » du chemin de [url] : ceux qui peuvent nommer une
+  /// œuvre (`one-piece` dans `/manga/one-piece/chapter-3`).
+  ///
+  /// Pour chaque morceau du chemin (décodé, en minuscules), l'extension
+  /// finale (`.html`) et le numéro de chapitre (`chapter-3`,
+  /// `solo-leveling-ch-3` → `solo-leveling`) sont retirés ; ce qui reste est
+  /// lisible s'il fait au moins [longueurMinIdentifiantTitreWeb] caractères,
+  /// contient au moins trois lettres de suite, n'est ni générique
+  /// ([segmentsGeneriquesAdresseTitre]), ni un mot-clé de chapitre, ni un
+  /// identifiant hexadécimal (UUID).
+  ///
+  /// Sert à [reconnaitreChapitre] : une adresse sans indice du titre ouvert
+  /// ne lui est attribuée que si elle ne nomme aucune autre œuvre. Fonction
+  /// pure (ni base ni réseau).
+  static List<String> morceauxLisiblesChemin(String url) {
+    final uri = Uri.tryParse(normaliserUrlChapitre(url));
+    if (uri == null) return const <String>[];
+    final morceaux = <String>[];
+    for (final segment in _decoder(uri.path).toLowerCase().split('/')) {
+      final reste = segment
+          .replaceFirst(_extensionFinale, '')
+          .replaceAll(_motifNumeroParDefaut, ' ')
+          .replaceAll(_separateursBords, '');
+      if (reste.length < longueurMinIdentifiantTitreWeb ||
+          !_troisLettres.hasMatch(reste) ||
+          segmentsGeneriquesAdresseTitre.contains(reste) ||
+          _motsClesChapitre.contains(reste) ||
+          _identifiantHexadecimal.hasMatch(reste)) {
+        continue;
+      }
+      morceaux.add(reste);
+    }
+    return morceaux;
   }
 
   // ---------------------------------------------------------------------
@@ -707,8 +812,10 @@ class ServiceLectureWeb {
   /// l'enregistrement doit être refusé :
   /// - aucune image ;
   /// - [pagesProtegees] (l'interface a vu des pages en `canvas` ou
-  ///   chiffrées) ou une image marquée [ImageRecue.estProtegee] :
-  ///   [messageImagesProtegees] ;
+  ///   chiffrées), une image marquée [ImageRecue.estProtegee], une image
+  ///   d'adresse `blob:` ou `data:` (produite par un script de la page, le
+  ///   plus souvent une page déchiffrée par l'éditeur) ou servie par un
+  ///   domaine de [domainesImagesProtegees] : [messageImagesProtegees] ;
   /// - plus de [nombreMaxImagesChapitreWeb] images ;
   /// - une image vide, plus grande que [tailleMaxImageChapitreWeb], ou qui
   ///   n'est pas une image reconnue par ses octets (`detecterFormatImage` :
@@ -720,7 +827,10 @@ class ServiceLectureWeb {
     List<ImageRecue> images, {
     bool pagesProtegees = false,
   }) {
-    if (pagesProtegees || images.any((image) => image.estProtegee)) {
+    if (pagesProtegees ||
+        images.any(
+          (image) => image.estProtegee || _estAdresseImageProtegee(image),
+        )) {
       throw const ErreurService(messageImagesProtegees);
     }
     if (images.isEmpty) {
@@ -778,22 +888,28 @@ class ServiceLectureWeb {
   /// proposé : les images sont d'abord contrôlées ([validerImagesChapitre])
   /// et rien n'est écrit si l'une est refusée. Un site dont les images sont
   /// connues pour être brouillées ([domainesImagesProtegees], par exemple
-  /// MANGA Plus) est refusé même si les octets ressemblent à des images.
+  /// MANGA Plus), pour le chapitre ou pour l'une des images, est refusé
+  /// même si les octets ressemblent à des images.
+  ///
+  /// Refusé aussi pendant un changement du dossier des chapitres (en cours,
+  /// file en pause pour lui, déplacement inachevé) et jusqu'au redémarrage
+  /// qui suit un changement : voir
+  /// `ServiceTelechargement.executerEnregistrementWeb`. Pendant l'écriture,
+  /// un changement de dossier avec déplacement est refusé à son tour.
   ///
   /// L'archive a le même format et le même nom que celles de la file de
   /// téléchargement (`StockageTelechargements.ouvrirEcriture` : pages
   /// `img1.jpg`…, extension d'après les octets, `ch12.fr.2.zip` en cas de
   /// doublon) ; une archive déjà enregistrée pour ce chapitre est remplacée.
   /// Une langue vide est remplacée par la première langue du site, comme
-  /// dans la file.
+  /// dans la file. Si le chapitre attendait dans la file de téléchargement,
+  /// cette ligne « en attente » est retirée
+  /// (`ServiceTelechargement.retirerAttenteApresEnregistrementWeb`).
   ///
   /// Un second appel pour le même chapitre pendant l'enregistrement reçoit
   /// le même résultat (double clic). Lève une [ErreurService] (refus,
   /// chapitre disparu, dossier des chapitres changé), une `ErreurStockage`
   /// (disque) ou une `ErreurBaseDeDonnees` ; ces erreurs sont journalisées.
-  ///
-  /// LIMITE : si ce chapitre attend aussi dans la file de téléchargement, il
-  /// y reste ; la file le retéléchargera sous le même nom d'archive.
   Future<Chapitre> enregistrerImagesChapitre(
     Chapitre chapitre,
     List<ImageRecue> images, {
@@ -835,76 +951,25 @@ class ServiceLectureWeb {
           "l'application avant d'enregistrer un chapitre.",
         );
       }
-      // Relu en base : nom d'archive et état « téléchargé » à jour.
-      final chapitre = await _depotChapitres.chargerChapitre(id);
-      final idTitre = chapitre?.idTitre;
-      final titre = idTitre == null
-          ? null
-          : await _depotTitres.chargerTitre(idTitre);
-      if (chapitre == null || titre == null) {
-        throw const ErreurService("Ce chapitre n'existe plus.");
-      }
-      if (_estSiteProtege(chapitre)) {
-        throw const ErreurService(messageImagesProtegees);
-      }
-      final idSource = chapitre.idSource ?? titre.idSource;
-      final source = idSource == null
-          ? null
-          : await _depotSources.chargerSource(idSource);
-      // Même nom calculé que la file (ServiceTelechargement) : langue vide
-      // remplacée par la première langue du site.
-      final langues = ServiceBibliotheque.languesPreferees(source);
-      final chapitrePourChemin = chapitre.langue.isEmpty && langues.isNotEmpty
-          ? chapitre.copierAvec(langue: langues.first)
-          : chapitre;
-
-      // 2. Archive sur le disque (.zip.part puis .zip).
-      final ecriture = await _stockage.ouvrirEcriture(
-        titre,
-        chapitrePourChemin,
+      // Lectures et écritures comptées par le service de téléchargement :
+      // refusées pendant un changement du dossier des chapitres, et un
+      // changement demandé pendant l'écriture est refusé à son tour.
+      final enregistre = await _serviceTelechargement.executerEnregistrementWeb(
+        () => _ecrireArchive(id, images, formats, chrono),
       );
-      final String nomArchive;
+      // Le chapitre est téléchargé : sa ligne « en attente » de la file ne
+      // ferait que le retélécharger. Un échec ici ne remet pas en cause
+      // l'archive écrite (la file la réécrirait au pire sous le même nom).
       try {
-        for (var index = 0; index < images.length; index++) {
-          await ecriture.ajouterPage(
-            images[index].octets,
-            extension: formats[index].extension,
-          );
-        }
-        nomArchive = ecriture.nomArchive;
-        await ecriture.finaliser();
-      } catch (_) {
-        await ecriture.abandonner();
-        rethrow;
+        await _serviceTelechargement.retirerAttenteApresEnregistrementWeb(id);
+      } catch (erreur, pile) {
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Navigateur : chapitre n°$id laissé dans la file de téléchargement',
+          erreur: erreur,
+          pile: pile,
+        );
       }
-
-      // 3. Base. LIMITE : le disque et la base ne peuvent pas être écrits
-      // atomiquement ensemble ; si la base refuse, une archive neuve est
-      // effacée (sinon aucun chapitre ne la désignerait), une archive
-      // remplacée reste désignée par son chapitre.
-      final estArchiveNeuve =
-          chapitre.nomArchive == null && !chapitre.estTelecharge;
-      try {
-        if (!await _depotChapitres.enregistrerArchive(id, nomArchive)) {
-          throw const ErreurService("Ce chapitre n'existe plus.");
-        }
-      } catch (_) {
-        if (estArchiveNeuve) {
-          await _supprimerArchiveSansErreur(nomArchive);
-        }
-        rethrow;
-      }
-      final enregistre = await _depotChapitres.chargerChapitre(id);
-      if (enregistre == null) {
-        throw const ErreurService("Ce chapitre n'existe plus.");
-      }
-      Journal.actuel.info(
-        CategorieJournal.telechargement,
-        'Navigateur : chapitre n°$id (« ${titre.nom} » ch. '
-        '${_formaterNumero(chapitre.numero)}) enregistré depuis la page, '
-        '${images.length} image(s) (${_domainesImages(images)}) en '
-        '${chrono.elapsedMilliseconds} ms : $nomArchive',
-      );
       return enregistre;
     } on ErreurService catch (erreur) {
       Journal.actuel.avertissement(
@@ -924,21 +989,126 @@ class ServiceLectureWeb {
     }
   }
 
+  /// Écrit l'archive des [images] déjà contrôlées (de formats [formats]) du
+  /// chapitre [id], puis l'enregistre en base ; renvoie le chapitre relu.
+  /// Pour [_enregistrer], dans `executerEnregistrementWeb`.
+  Future<Chapitre> _ecrireArchive(
+    int id,
+    List<ImageRecue> images,
+    List<FormatImage> formats,
+    Stopwatch chrono,
+  ) async {
+    // Relu en base : nom d'archive et état « téléchargé » à jour.
+    final chapitre = await _depotChapitres.chargerChapitre(id);
+    final idTitre = chapitre?.idTitre;
+    final titre = idTitre == null
+        ? null
+        : await _depotTitres.chargerTitre(idTitre);
+    if (chapitre == null || titre == null) {
+      throw const ErreurService("Ce chapitre n'existe plus.");
+    }
+    if (_estSiteProtege(chapitre, images)) {
+      throw const ErreurService(messageImagesProtegees);
+    }
+    final idSource = chapitre.idSource ?? titre.idSource;
+    final source = idSource == null
+        ? null
+        : await _depotSources.chargerSource(idSource);
+    // Même nom calculé que la file (ServiceTelechargement) : langue vide
+    // remplacée par la première langue du site.
+    final langues = ServiceBibliotheque.languesPreferees(source);
+    final chapitrePourChemin = chapitre.langue.isEmpty && langues.isNotEmpty
+        ? chapitre.copierAvec(langue: langues.first)
+        : chapitre;
+
+    // 2. Archive sur le disque (.zip.part puis .zip).
+    final ecriture = await _stockage.ouvrirEcriture(titre, chapitrePourChemin);
+    final String nomArchive;
+    try {
+      for (var index = 0; index < images.length; index++) {
+        await ecriture.ajouterPage(
+          images[index].octets,
+          extension: formats[index].extension,
+        );
+      }
+      nomArchive = ecriture.nomArchive;
+      await ecriture.finaliser();
+    } catch (_) {
+      await ecriture.abandonner();
+      rethrow;
+    }
+
+    // 3. Base. LIMITE : le disque et la base ne peuvent pas être écrits
+    // atomiquement ensemble ; si la base refuse, une archive neuve est
+    // effacée (sinon aucun chapitre ne la désignerait), une archive
+    // remplacée reste désignée par son chapitre.
+    final estArchiveNeuve =
+        chapitre.nomArchive == null && !chapitre.estTelecharge;
+    try {
+      if (!await _depotChapitres.enregistrerArchive(id, nomArchive)) {
+        throw const ErreurService("Ce chapitre n'existe plus.");
+      }
+    } catch (_) {
+      if (estArchiveNeuve) {
+        await _supprimerArchiveSansErreur(nomArchive);
+      }
+      rethrow;
+    }
+    final enregistre = await _depotChapitres.chargerChapitre(id);
+    if (enregistre == null) {
+      throw const ErreurService("Ce chapitre n'existe plus.");
+    }
+    Journal.actuel.info(
+      CategorieJournal.telechargement,
+      'Navigateur : chapitre n°$id (« ${titre.nom} » ch. '
+      '${_formaterNumero(chapitre.numero)}) enregistré depuis la page, '
+      '${images.length} image(s) (${_domainesImages(images)}) en '
+      '${chrono.elapsedMilliseconds} ms : $nomArchive',
+    );
+    return enregistre;
+  }
+
   /// `true` si le chapitre se lit sur un site dont les images sont
-  /// brouillées par l'éditeur ([domainesImagesProtegees]).
-  static bool _estSiteProtege(Chapitre chapitre) {
+  /// brouillées par l'éditeur ([domainesImagesProtegees]), ou si l'une des
+  /// [images] est protégée ([_estAdresseImageProtegee]).
+  static bool _estSiteProtege(Chapitre chapitre, List<ImageRecue> images) {
     for (final adresse in <String?>[
       chapitre.urlChapitre,
       chapitre.urlExterne,
     ]) {
-      if (adresse == null) continue;
-      final hote = Uri.tryParse(adresse.trim())?.host.toLowerCase() ?? '';
-      final domaine = hote.startsWith('www.') ? hote.substring(4) : hote;
-      if (domainesImagesProtegees.contains(domaine)) {
+      if (adresse != null && _estDomaineProtege(adresse)) {
         return true;
       }
     }
-    return false;
+    return images.any(_estAdresseImageProtegee);
+  }
+
+  /// `true` si l'adresse de [image] montre une page protégée :
+  /// - `blob:` ou `data:` : l'image n'a pas été servie telle quelle par le
+  ///   site mais fabriquée par un script de la page, typiquement après
+  ///   déchiffrement par le lecteur de l'éditeur (PLAYBOOK.md section 10 :
+  ///   jamais de contournement) ;
+  /// - domaine (ou sous-domaine) de [domainesImagesProtegees].
+  ///
+  /// Une image sans adresse connue n'est jugée que par ses octets.
+  static bool _estAdresseImageProtegee(ImageRecue image) {
+    final adresse = image.adresse?.trim().toLowerCase();
+    if (adresse == null || adresse.isEmpty) return false;
+    if (adresse.startsWith('blob:') || adresse.startsWith('data:')) {
+      return true;
+    }
+    return _estDomaineProtege(adresse);
+  }
+
+  /// `true` si l'hôte de [adresse] est un domaine de
+  /// [domainesImagesProtegees] ou l'un de ses sous-domaines (serveurs
+  /// d'images de l'éditeur).
+  static bool _estDomaineProtege(String adresse) {
+    final hote = Uri.tryParse(adresse.trim())?.host.toLowerCase() ?? '';
+    if (hote.isEmpty) return false;
+    return domainesImagesProtegees.any(
+      (domaine) => hote == domaine || hote.endsWith('.$domaine'),
+    );
   }
 
   Future<void> _supprimerArchiveSansErreur(String nomArchive) async {

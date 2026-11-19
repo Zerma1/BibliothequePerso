@@ -50,6 +50,11 @@ import 'verrou_telechargement.dart';
 // la même bibliothèque. Sans nouveau membre public ici, les faux
 // `ServiceTelechargement` des tests de l'interface restent valables.
 part 'service_dossier_chapitres.dart';
+// Même raison pour les enregistrements faits depuis le navigateur intégré :
+// ils consultent la pause et le changement de dossier, et ce dernier compte
+// les enregistrements en cours. Extension plutôt que nouveaux membres
+// publics, pour la même compatibilité avec les faux services.
+part 'enregistrements_web_telechargement.dart';
 
 /// Chapitre avec son titre et sa source, tels qu'il faut les passer au
 /// stockage (la langue vide est remplacée par la langue de la source pour que
@@ -191,6 +196,19 @@ class ServiceTelechargement {
 
   /// Traitement de la file en cours, partagé si on le redemande.
   Future<void>? _traitement;
+
+  /// `true` si [lancerTraitement] a été appelé pendant un traitement après
+  /// sa dernière recherche d'un chapitre en attente : le traitement refait
+  /// alors un passage avant de se terminer. Sans lui, un chapitre mis en
+  /// file pendant la fin d'un traitement (file vue vide, suppressions
+  /// échues, libération du verrou) attendrait la relance suivante.
+  bool _relanceDemandee = false;
+
+  /// Enregistrements de chapitres en cours depuis le navigateur intégré
+  /// (`executerEnregistrementWeb`) : un changement du dossier des chapitres
+  /// avec déplacement est refusé tant qu'il y en a un, comme pendant un
+  /// téléchargement.
+  int _enregistrementsWebEnCours = 0;
 
   /// Réveil de la boucle de la file pendant qu'elle attend la fin d'un
   /// chapitre : complété par [lancerTraitement] (chapitre ajouté, réglage du
@@ -1533,6 +1551,9 @@ class ServiceTelechargement {
   Future<void> lancerTraitement() {
     final enCours = _traitement;
     if (enCours != null) {
+      // Demande notée même si la boucle est en train de finir : elle sera
+      // servie par un nouveau passage ([_traiterFileTantQueDemande]).
+      _relanceDemandee = true;
       _reveiller();
       return enCours;
     }
@@ -1541,12 +1562,28 @@ class ServiceTelechargement {
     }
     _relance?.cancel();
     _relance = null;
-    final nouveau = _traiterFile().whenComplete(() {
+    final nouveau = _traiterFileTantQueDemande().whenComplete(() {
       _traitement = null;
       _signaler();
     });
     _traitement = nouveau;
     return nouveau;
+  }
+
+  /// Traite la file, puis la retraite tant que [lancerTraitement] a été
+  /// appelé pendant la fin du passage précédent ([_relanceDemandee]).
+  ///
+  /// Relance faite dans le même `Future` plutôt qu'après sa fin : celui qui
+  /// attend [lancerTraitement] attend aussi le chapitre ajouté au dernier
+  /// moment. Toujours borné : un passage de plus n'a lieu que si un appel
+  /// est arrivé pendant le précédent (le drapeau est remis à `false` à
+  /// chaque recherche d'un chapitre en attente), jamais en boucle seule.
+  Future<void> _traiterFileTantQueDemande() async {
+    do {
+      _relanceDemandee = false;
+      await _traiterFile();
+    } while (_relanceDemandee && !_enPause && !_changements.isClosed);
+    _relanceDemandee = false;
   }
 
   Future<void> _traiterFile() async {
@@ -1617,6 +1654,10 @@ class ServiceTelechargement {
     var dossierPerdu = false;
     try {
       while (!_changements.isClosed) {
+        // Les demandes arrivées jusqu'ici sont servies par le remplissage
+        // qui suit (il relit la file) : seules les suivantes demandent un
+        // nouveau passage.
+        _relanceDemandee = false;
         // Remplissage des emplacements libres.
         while (!arret && enCours.length < limite) {
           // Pause demandée pendant le traitement (changement du dossier) :

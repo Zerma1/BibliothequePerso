@@ -182,6 +182,9 @@ class ServiceDossierChapitres {
   /// - chapitre en cours de téléchargement : la file est **laissée en
   ///   pause** pour s'arrêter après ce chapitre, le client réessaie un
   ///   instant plus tard (ou appelle [reprendreFile] s'il renonce) ;
+  /// - chapitre en cours d'enregistrement depuis le navigateur intégré
+  ///   (`ServiceLectureWeb.enregistrerImagesChapitre`) : même règle, pause
+  ///   gardée ;
   /// - file tenue par la tâche de fond Android ;
   /// - autre déplacement inachevé vers un autre dossier ;
   /// - copie interrompue : les fichiers déjà déplacés restent dans le
@@ -312,6 +315,17 @@ class ServiceDossierChapitres {
             'Un chapitre est en cours de téléchargement : la file est mise '
             "en pause et s'arrêtera à la fin de ce chapitre. Réessayez dans "
             'un instant.',
+          );
+        }
+        // Même règle pour un chapitre enregistré depuis le navigateur : son
+        // archive s'écrit dans l'ancien dossier et ne serait pas déplacée.
+        // Les nouveaux enregistrements sont déjà refusés (changement en
+        // cours, puis pause gardée) : réessayer un instant plus tard aboutit.
+        if (service._enregistrementsWebEnCours > 0) {
+          garderPause = true;
+          throw const ErreurService(
+            "Un chapitre est en cours d'enregistrement depuis le navigateur : "
+            'réessayez dans un instant.',
           );
         }
         bilan = await _deplacer(valide, surProgression);
