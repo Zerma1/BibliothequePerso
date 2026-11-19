@@ -103,6 +103,11 @@ cause et solution). Toute erreur inattendue ou récurrente est confiée à `anal
   Un essai réel d'image vérifie le type des octets, pas seulement leur présence.
 - `dart format` seulement sur les fichiers qu'on a modifiés, jamais sur un dossier entier
   (sinon des fichiers d'autres agents sont reformatés : E12).
-- Le cache pub réel est `C:\Users\bapti\AppData\Local\Pub\Cache` (et non `D:\dev\pub-cache`
-  comme l'indique le README). Le projet étant sur D:, le cache Kotlin incrémental plante entre
-  les deux disques : d'où `kotlin.incremental=false` dans `android/gradle.properties`.
+- Le cache pub utilisé est `D:\dev\pub-cache` (vérifié dans `.dart_tool/package_config.json`
+  le 2026-11-19). Le cache Kotlin incrémental plantait entre deux disques : d'où
+  `kotlin.incremental=false` dans `android/gradle.properties` (à garder).
+- `flutter build windows` exige `nuget.exe` dans le PATH depuis le navigateur intégré
+  (installé par winget : `C:\Users\bapti\AppData\Local\Microsoft\WinGet\Links`).
+- Navigateur intégré (`flutter_inappwebview`, bêta épinglée) : jamais de vue web sous Linux
+  (paquet local vide `paquets/flutter_inappwebview_linux_vide` via `dependency_overrides`) ;
+  tester `Platform.isAndroid || Platform.isWindows` avant de créer `InAppWebView`.

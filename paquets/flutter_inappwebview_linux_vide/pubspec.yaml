@@ -1,0 +1,32 @@
+# Remplaçant VIDE de flutter_inappwebview_linux (branché par dependency_overrides dans le
+# pubspec.yaml de l'application).
+#
+# Pourquoi : flutter_inappwebview 6.2.0-beta.3 tire flutter_inappwebview_linux, dont la
+# compilation exige WPE WebKit (FATAL_ERROR CMake sinon) et dont l'exécutable dépendrait de
+# libwpewebkit sur le poste. Le client a choisi : pas de navigateur intégré sous Linux.
+#
+# Ce paquet porte le même nom et se déclare comme implémentation Linux « Dart seulement »
+# (dartPluginClass, sans pluginClass) : aucun code natif n'est compilé pour Linux et
+# registerWith() n'enregistre rien. Sous Linux, InAppWebViewPlatform.instance reste nul :
+# le code ne doit jamais construire de vue web (test Platform.isAndroid ||
+# Platform.isWindows) et garde url_launcher.
+#
+# À retirer (avec le dependency_overrides) si un jour on veut le navigateur intégré sous Linux.
+name: flutter_inappwebview_linux
+description: "Remplaçant vide de flutter_inappwebview_linux : aucun navigateur intégré sous Linux."
+version: 0.1.0-beta.1
+publish_to: 'none'
+
+environment:
+  sdk: ^3.14.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    implements: flutter_inappwebview
+    platforms:
+      linux:
+        dartPluginClass: LinuxInAppWebViewPlatform
