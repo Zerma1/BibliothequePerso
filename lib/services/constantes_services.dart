@@ -66,6 +66,32 @@ const int largeurBlocIdentifiantVerrou = 8;
 /// deux pages, sans écrire en base à chaque page.
 const int fractionRenouvellementVerrou = 3;
 
+/// Téléchargements de chapitres simultanés tant que le client n'a rien
+/// choisi (Paramètres). Trois chapitres avancent en même temps : de quoi
+/// profiter de plusieurs sites à la fois sans multiplier les archives
+/// partielles en cas d'interruption.
+const int telechargementsSimultanesParDefaut = 3;
+
+/// Minimum du réglage des téléchargements simultanés : un chapitre à la fois
+/// (comportement des versions précédentes).
+const int telechargementsSimultanesMinimum = 1;
+
+/// Maximum du réglage des téléchargements simultanés (demande du client).
+/// Le rythme des requêtes vers un même site ne change pas pour autant :
+/// `ClientHttpPoli` garde 1 s entre deux requêtes **par domaine**, partagé
+/// par tous les chapitres en cours. Le parallélisme ne fait gagner du temps
+/// que lorsque les chapitres viennent de sites différents.
+const int telechargementsSimultanesMaximum = 32;
+
+/// Plafond des téléchargements simultanés dans la tâche de fond Android
+/// (décision du 2026-11-19). Android l'interrompt au bout d'environ
+/// 10 minutes : chaque chapitre coupé laisse une archive partielle et une
+/// ligne « en cours », reprises de zéro une durée de verrou plus tard. Avec
+/// 32 chapitres ouverts, une interruption gâcherait jusqu'à 32 chapitres de
+/// requêtes déjà faites (PLAYBOOK.md section 10) ; 4 limite cette perte tout
+/// en avançant sur plusieurs sites à la fois.
+const int telechargementsSimultanesTacheDeFond = 4;
+
 /// Marge ajoutée à l'expiration d'un verrou avant un nouvel essai : on
 /// réessaie juste **après** l'expiration, pas pile dessus (sinon le verrou
 /// serait encore considéré comme pris).

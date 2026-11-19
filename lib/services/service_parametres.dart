@@ -208,6 +208,60 @@ class ServiceParametres {
     _journaliser('« Archive complète » ${active ? 'activée' : 'désactivée'}');
   }
 
+  /// Clé : nombre de chapitres téléchargés en même temps (jauge des
+  /// Paramètres, de [minimumTelechargementsSimultanes] à
+  /// [maximumTelechargementsSimultanes]).
+  static const String cleTelechargementsSimultanes =
+      'telechargement.simultanes';
+
+  /// Téléchargements simultanés tant que le client n'a rien choisi.
+  static const int telechargementsSimultanesParDefautClient =
+      telechargementsSimultanesParDefaut;
+
+  /// Borne basse de la jauge : un chapitre à la fois.
+  static const int minimumTelechargementsSimultanes =
+      telechargementsSimultanesMinimum;
+
+  /// Borne haute de la jauge (demande du client).
+  static const int maximumTelechargementsSimultanes =
+      telechargementsSimultanesMaximum;
+
+  /// Nombre de chapitres téléchargés en même temps
+  /// ([telechargementsSimultanesParDefautClient] si rien n'est enregistré ou
+  /// si la valeur est hors bornes).
+  ///
+  /// Relu par `ServiceTelechargement` au début de chaque traitement de la
+  /// file et à chaque relance (`lancerTraitement`) : pas de cache à
+  /// invalider, la tâche de fond Android voit aussi le choix du client.
+  Future<int> chargerTelechargementsSimultanes() async {
+    final valeur = await _depot.chargerEntier(cleTelechargementsSimultanes);
+    // Une valeur hors bornes (écrite à la main, base abîmée) est ignorée
+    // plutôt que ramenée à la borne : 1000 deviendrait sinon 32 sans que le
+    // client l'ait choisi.
+    if (valeur == null ||
+        valeur < minimumTelechargementsSimultanes ||
+        valeur > maximumTelechargementsSimultanes) {
+      return telechargementsSimultanesParDefautClient;
+    }
+    return valeur;
+  }
+
+  /// Enregistre le nombre de téléchargements simultanés (ramené entre
+  /// [minimumTelechargementsSimultanes] et
+  /// [maximumTelechargementsSimultanes]).
+  ///
+  /// Pour qu'un traitement déjà en cours en tienne compte tout de suite,
+  /// l'appelant relance ensuite `ServiceTelechargement.lancerTraitement` (qui
+  /// relit le réglage sans lancer de second traitement).
+  Future<void> enregistrerTelechargementsSimultanes(int nombre) async {
+    final borne = nombre.clamp(
+      minimumTelechargementsSimultanes,
+      maximumTelechargementsSimultanes,
+    );
+    await _depot.enregistrerEntier(cleTelechargementsSimultanes, borne);
+    _journaliser('téléchargement : $borne chapitre(s) en même temps');
+  }
+
   /// Nombre de recherches de mises à jour par jour (2 par défaut : 00:00 et
   /// 12:00 UTC).
   Future<int> chargerVerificationsParJour() async {

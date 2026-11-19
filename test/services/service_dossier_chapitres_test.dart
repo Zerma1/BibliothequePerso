@@ -539,6 +539,10 @@ void main() {
     test('un chapitre en cours de téléchargement fait refuser le '
         'déplacement ; la file s\'arrête après lui et la demande suivante '
         'aboutit', () async {
+      // Un chapitre à la fois : le second ne doit pas être commencé avant
+      // la pause (le cas de plusieurs chapitres en cours est testé dans
+      // service_telechargement_parallele_test.dart).
+      await parametres.enregistrerTelechargementsSimultanes(1);
       final ancien = p.join(temporaire.path, 'ancien');
       final service = creerService(StockageTelechargements(ancien));
       final dossiers = creerDossiers(service);

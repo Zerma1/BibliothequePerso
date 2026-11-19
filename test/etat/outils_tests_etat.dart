@@ -1657,6 +1657,22 @@ class FauxServiceParametres implements ServiceParametres {
     archiveComplete = active;
   }
 
+  /// Nombre de téléchargements simultanés « enregistré ».
+  int telechargementsSimultanes =
+      ServiceParametres.telechargementsSimultanesParDefautClient;
+
+  @override
+  Future<int> chargerTelechargementsSimultanes() async =>
+      telechargementsSimultanes;
+
+  @override
+  Future<void> enregistrerTelechargementsSimultanes(int nombre) async {
+    telechargementsSimultanes = nombre.clamp(
+      ServiceParametres.minimumTelechargementsSimultanes,
+      ServiceParametres.maximumTelechargementsSimultanes,
+    );
+  }
+
   /// Verrou de la file « enregistré ».
   VerrouTelechargement? verrou;
 
