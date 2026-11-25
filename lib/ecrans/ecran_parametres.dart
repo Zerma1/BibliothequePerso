@@ -63,6 +63,9 @@ class EcranParametres extends StatelessWidget {
               // Réglage rare, en bas avec les sections générales plutôt
               // qu'entre les réglages de lecture.
               _SectionApparence(),
+              // Autre réglage général et rare, à côté de l'apparence ; absent
+              // hors de Windows.
+              _SectionDemarrage(),
               // Juste avant « À propos » : on vient y chercher le journal à
               // joindre à un retour de test, comme la version.
               SectionJournal(),
@@ -801,6 +804,93 @@ class _SectionApparence extends StatelessWidget {
         ),
         const SizedBox(height: espacementPetit),
         Text(Textes.explicationTheme, style: theme.textTheme.bodySmall),
+      ],
+    );
+  }
+}
+
+// ------------------------------------------------------------------ Démarrage
+
+/// « Démarrer avec Windows » : Off, Pleine fenêtre ou Icône masquée,
+/// enregistré et appliqué aussitôt. Absente hors de Windows.
+class _SectionDemarrage extends StatelessWidget {
+  const _SectionDemarrage();
+
+  Future<void> _choisir(
+    BuildContext context,
+    EtatParametres etat,
+    ModeDemarrage mode,
+  ) async {
+    final resultat = await etat.modifierModeDemarrage(mode);
+    if (!context.mounted) return;
+    if (resultat.donnee == false) {
+      afficherMessage(
+        context,
+        Textes.demarrageRefuseParWindows,
+        estErreur: true,
+      );
+      return;
+    }
+    // Une réussite se voit sur le bouton : seule une erreur est signalée.
+    afficherResultat(context, resultat);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final etat = context.watch<EtatParametres>();
+    if (!etat.demarrageAvecWindowsDisponible) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    return SectionPliable(
+      identifiant: 'parametres.demarrage',
+      titre: Textes.sectionDemarrage,
+      icone: Icons.power_settings_new_outlined,
+      resume: etat.estCharge
+          ? Textes.resumeDemarrage(etat.modeDemarrage)
+          : null,
+      enfants: <Widget>[
+        _ContenuReglages(
+          etat: etat,
+          contenu: () => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Text(
+                Textes.libelleDemarrerAvecWindows,
+                style: theme.textTheme.titleSmall,
+              ),
+              const SizedBox(height: espacementPetit),
+              // Même présentation que le choix du thème : trois boutons
+              // côte à côte, le choix actif visible d'un coup d'œil.
+              SegmentedButton<ModeDemarrage>(
+                segments: <ButtonSegment<ModeDemarrage>>[
+                  for (final mode in ModeDemarrage.values)
+                    ButtonSegment<ModeDemarrage>(
+                      value: mode,
+                      label: Text(Textes.nomModeDemarrage(mode)),
+                      icon: Icon(switch (mode) {
+                        ModeDemarrage.desactive => Icons.block_outlined,
+                        ModeDemarrage.pleineFenetre =>
+                          Icons.open_in_full_outlined,
+                        ModeDemarrage.iconeMasquee =>
+                          Icons.visibility_off_outlined,
+                      }),
+                    ),
+                ],
+                selected: <ModeDemarrage>{etat.modeDemarrage},
+                showSelectedIcon: false,
+                onSelectionChanged: etat.estEnEnregistrementDemarrage
+                    ? null
+                    : (choix) => _choisir(context, etat, choix.first),
+              ),
+              const SizedBox(height: espacementPetit),
+              // L'explication suit le choix actif : le client sait ce qui se
+              // passera à la prochaine ouverture de session.
+              Text(
+                Textes.explicationModeDemarrage(etat.modeDemarrage),
+                style: theme.textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }

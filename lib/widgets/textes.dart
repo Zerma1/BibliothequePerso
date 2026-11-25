@@ -2542,6 +2542,61 @@ abstract final class Textes {
   static String resumeApparence(ModeTheme mode) =>
       'Thème : ${nomModeTheme(mode)}';
 
+  // ------------------------------------------------------------- Démarrage
+
+  /// Section « Démarrage » (Paramètres, Windows seulement).
+  static const String sectionDemarrage = 'Démarrage';
+
+  /// Libellé du choix du lancement avec Windows.
+  static const String libelleDemarrerAvecWindows = 'Démarrer avec Windows';
+
+  /// Nom d'un mode de démarrage (bouton et résumé de la section).
+  static String nomModeDemarrage(ModeDemarrage mode) => switch (mode) {
+    ModeDemarrage.desactive => 'Off',
+    ModeDemarrage.pleineFenetre => 'Pleine fenêtre',
+    ModeDemarrage.iconeMasquee => 'Icône masquée',
+  };
+
+  /// Phrase d'explication du mode de démarrage choisi.
+  static String explicationModeDemarrage(ModeDemarrage mode) => switch (mode) {
+    ModeDemarrage.desactive =>
+      "L'application ne se lance pas toute seule à l'ouverture de "
+          'votre session Windows.',
+    ModeDemarrage.pleineFenetre =>
+      "L'application se lance à l'ouverture de votre session Windows, "
+          'fenêtre affichée.',
+    ModeDemarrage.iconeMasquee =>
+      "L'application se lance à l'ouverture de votre session Windows, "
+          'sans fenêtre : seule son icône apparaît dans la zone de '
+          'notification, et les nouveaux chapitres sont recherchés et '
+          'téléchargés en arrière-plan.',
+  };
+
+  /// Résumé de la section « Démarrage », visible section repliée.
+  static String resumeDemarrage(ModeDemarrage mode) =>
+      '$libelleDemarrerAvecWindows : ${nomModeDemarrage(mode)}';
+
+  /// Windows a refusé l'inscription au démarrage.
+  static const String demarrageRefuseParWindows =
+      "Windows a refusé de modifier le lancement au démarrage : l'ancien "
+      'réglage est conservé.';
+
+  // -------------------------------------------- Zone de notification (Windows)
+
+  /// Info-bulle de l'icône de la zone de notification.
+  static const String infoBulleZoneNotification =
+      'Bibliothèque perso (continue en arrière-plan)';
+
+  /// Menu de l'icône : afficher la fenêtre.
+  static const String menuZoneNotificationOuvrir = 'Ouvrir Bibliothèque perso';
+
+  /// Menu de l'icône : recherche manuelle des nouveaux chapitres.
+  static const String menuZoneNotificationRechercher =
+      'Rechercher les nouveaux chapitres';
+
+  /// Menu de l'icône : vraie fermeture de l'application.
+  static const String menuZoneNotificationQuitter = 'Quitter';
+
   // ------------------------------------------------------------- Formatage
 
   /// Date au format français `jj/mm/aaaa`, en heure locale.

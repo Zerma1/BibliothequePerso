@@ -58,6 +58,7 @@ Future<void> deplierParametres(WidgetTester tester) async {
   for (final titre in <String>[
     Textes.sectionAPropos,
     Textes.sectionJournal,
+    Textes.sectionDemarrage,
     Textes.sectionApparence,
     Textes.sectionSauvegardeExport,
     Textes.sectionSites,

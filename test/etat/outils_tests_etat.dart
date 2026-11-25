@@ -2587,6 +2587,8 @@ Widget envelopper(
   Future<List<String>> Function()? listerExports,
   bool verifierMisesAJourAuDemarrage = false,
   DateTime Function()? maintenant,
+  bool estWindows = false,
+  InscriptionDemarrage? surChangementModeDemarrage,
 }) {
   final serviceTelechargement =
       telechargement ?? FauxServiceTelechargement(bibliotheque);
@@ -2648,6 +2650,10 @@ Widget envelopper(
           serviceParametres,
           serviceTelechargement,
           serviceBibliotheque: bibliotheque,
+          // Fixé plutôt que lu sur la machine : les tests donnent le même
+          // écran sous Windows et sous Linux.
+          estWindows: estWindows,
+          surChangementModeDemarrage: surChangementModeDemarrage,
         )..charger(),
       ),
       // Section « Apparence » des Paramètres (thème lu dans le faux service).

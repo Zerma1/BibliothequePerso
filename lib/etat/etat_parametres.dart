@@ -1,9 +1,11 @@
 /// État de l'écran Paramètres, sections « Mes langues » (langues de lecture),
 /// « Téléchargements » (limites des règles de conservation des favoris et
-/// suivis) et « Mises à jour » (nombre de recherches par jour).
+/// suivis), « Mises à jour » (nombre de recherches par jour) et
+/// « Démarrage » (lancement avec Windows).
 library;
 
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import '../modeles/journal.dart';
 import '../services/planification_mises_a_jour.dart';
@@ -12,6 +14,12 @@ import '../services/service_bibliotheque.dart';
 import '../services/service_parametres.dart';
 import '../services/service_telechargement.dart';
 import 'description_erreur.dart';
+
+export '../services/service_parametres.dart' show ModeDemarrage;
+
+/// Inscription au démarrage du système pour [mode], faite par la plateforme
+/// (`main.dart`). Renvoie `false` si le système l'a refusée.
+typedef InscriptionDemarrage = Future<bool> Function(ModeDemarrage mode);
 
 /// Une des quatre limites réglables.
 enum LimiteTelechargement {
@@ -39,15 +47,25 @@ class EtatParametres extends EtatNotifiant {
   /// [serviceBibliotheque] sert à recalculer la liste « En attente » quand
   /// les langues changent (sans lui, elle l'est à la prochaine recherche de
   /// nouveaux chapitres).
+  ///
+  /// [surChangementModeDemarrage] inscrit (ou désinscrit) l'application au
+  /// démarrage de Windows après l'enregistrement du réglage ; sans lui, le
+  /// choix est seulement enregistré. [estWindows] (par défaut
+  /// `Platform.isWindows`, injectable pour les tests) décide si le réglage
+  /// « Démarrer avec Windows » est proposé.
   EtatParametres(
     this._serviceParametres,
     this._serviceTelechargement, {
     this._serviceBibliotheque,
-  });
+    this._surChangementModeDemarrage,
+    bool? estWindows,
+  }) : _estWindows = estWindows ?? Platform.isWindows;
 
   final ServiceParametres _serviceParametres;
   final ServiceTelechargement _serviceTelechargement;
   final ServiceBibliotheque? _serviceBibliotheque;
+  final InscriptionDemarrage? _surChangementModeDemarrage;
+  final bool _estWindows;
 
   /// Valeur maximale d'une limite (même borne que le service).
   static const int limiteMaximale = ServiceParametres.limiteMaximale;
@@ -536,6 +554,80 @@ class EtatParametres extends EtatNotifiant {
     }
   }
 
+  // ------------------------------------------------- Démarrer avec Windows
+
+  ModeDemarrage _modeDemarrage = ServiceParametres.modeDemarrageParDefaut;
+  bool _estEnEnregistrementDemarrage = false;
+
+  /// `true` si le réglage « Démarrer avec Windows » est proposé (Windows
+  /// seulement).
+  bool get demarrageAvecWindowsDisponible => _estWindows;
+
+  /// Lancement à l'ouverture de la session choisi par le client.
+  ModeDemarrage get modeDemarrage => _modeDemarrage;
+
+  /// `true` pendant l'enregistrement et l'inscription du mode de démarrage.
+  bool get estEnEnregistrementDemarrage => _estEnEnregistrementDemarrage;
+
+  /// Enregistre [mode] puis demande l'inscription au démarrage de Windows
+  /// (`surChangementModeDemarrage`).
+  ///
+  /// Résultat réussi avec `true` : choix appliqué. Réussi avec `false` :
+  /// Windows a refusé l'inscription ; l'ancien mode est enregistré de nouveau
+  /// (le réglage affiché reste ce que Windows applique réellement). Échec :
+  /// le choix n'a pas pu être enregistré.
+  Future<ResultatAction<bool>> modifierModeDemarrage(ModeDemarrage mode) async {
+    final ancien = _modeDemarrage;
+    if (mode == ancien) return const ResultatAction<bool>.reussite(true);
+    _estEnEnregistrementDemarrage = true;
+    // Le choix est affiché aussitôt (pas d'attente visible sur le bouton).
+    _modeDemarrage = mode;
+    notifier();
+    try {
+      await _serviceParametres.enregistrerModeDemarrage(mode);
+      final accepte = await _inscrireDemarrage(mode);
+      if (!accepte) {
+        _modeDemarrage = ancien;
+        try {
+          await _serviceParametres.enregistrerModeDemarrage(ancien);
+        } catch (erreur, pile) {
+          // LIMITE : le nouveau mode reste enregistré ; il sera de nouveau
+          // proposé à Windows au prochain lancement de l'application.
+          Journal.actuel.avertissement(
+            CategorieJournal.parametres,
+            'Ancien mode de démarrage non rétabli après un refus de Windows',
+            erreur: erreur,
+            pile: pile,
+          );
+        }
+      }
+      return ResultatAction<bool>.reussite(accepte);
+    } catch (erreur, pile) {
+      _modeDemarrage = ancien;
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnEnregistrementDemarrage = false;
+      notifier();
+    }
+  }
+
+  /// Appelle le rappel d'inscription ; une exception vaut un refus.
+  Future<bool> _inscrireDemarrage(ModeDemarrage mode) async {
+    final rappel = _surChangementModeDemarrage;
+    if (rappel == null) return true;
+    try {
+      return await rappel(mode);
+    } catch (erreur, pile) {
+      Journal.actuel.avertissement(
+        CategorieJournal.parametres,
+        'Inscription au démarrage de Windows en erreur',
+        erreur: erreur,
+        pile: pile,
+      );
+      return false;
+    }
+  }
+
   /// Lit les réglages enregistrés.
   Future<void> charger() async {
     _estEnChargement = true;
@@ -552,6 +644,7 @@ class EtatParametres extends EtatNotifiant {
       _telechargementsSimultanes = await _serviceParametres
           .chargerTelechargementsSimultanes();
       _delaiSuppression = await _serviceParametres.chargerDelaiSuppression();
+      _modeDemarrage = await _serviceParametres.chargerModeDemarrage();
       _enregistres = reglages;
       _brouillon = reglages;
       _estCharge = true;

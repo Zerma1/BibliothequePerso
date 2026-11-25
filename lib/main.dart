@@ -738,22 +738,6 @@ const String nomEntreeDemarrageWindows = 'Bibliotheque perso';
 /// Logo de l'icône de la zone de notification (déclaré dans `pubspec.yaml`).
 const String cheminIconeZoneNotification = 'assets/logo/logo.ico';
 
-// LIMITE : textes affichés hors de lib/widgets/textes.dart (scope de
-// l'intégrateur) ; à déplacer dans `Textes` par developpeur-interface.
-
-/// Info-bulle de l'icône de la zone de notification.
-const String texteInfoBulleZoneNotification =
-    'Bibliothèque perso (continue en arrière-plan)';
-
-/// Menu de l'icône : afficher la fenêtre.
-const String texteMenuOuvrir = 'Ouvrir Bibliothèque perso';
-
-/// Menu de l'icône : recherche manuelle des nouveaux chapitres.
-const String texteMenuRechercher = 'Rechercher les nouveaux chapitres';
-
-/// Menu de l'icône : vraie fermeture de l'application.
-const String texteMenuQuitter = 'Quitter';
-
 /// `true` si l'application a été lancée par Windows en mode « icône masquée »
 /// ([argumentDemarrageMasque]).
 bool _demarrageMasque = false;
@@ -910,7 +894,7 @@ Future<bool> installerZoneNotification() async {
       throw StateError('Logo illisible : $cheminIconeZoneNotification');
     }
     icone.icon = image;
-    icone.setTooltip(texteInfoBulleZoneNotification);
+    icone.setTooltip(Textes.infoBulleZoneNotification);
 
     final menu = zone.Menu.create();
     if (menu == null) {
@@ -928,13 +912,16 @@ Future<bool> installerZoneNotification() async {
       return item;
     }
 
-    final ouvrir = element(texteMenuOuvrir, () => unawaited(afficherFenetre()));
+    final ouvrir = element(
+      Textes.menuZoneNotificationOuvrir,
+      () => unawaited(afficherFenetre()),
+    );
     final rechercher = element(
-      texteMenuRechercher,
+      Textes.menuZoneNotificationRechercher,
       _rechercherNouveauxChapitres,
     );
     final quitter = element(
-      texteMenuQuitter,
+      Textes.menuZoneNotificationQuitter,
       () => unawaited(quitterApplication()),
     );
     menu.addItem(ouvrir);
@@ -1202,6 +1189,14 @@ Future<void> demarrer() async {
       serviceJournal: services.serviceJournal,
       serviceLectureWeb: services.serviceLectureWeb,
       modeTheme: modeTheme,
+      // Inscription au démarrage de Windows quand le client change le réglage
+      // (jamais dans les tests, qui ne passent pas ce rappel).
+      surChangementModeDemarrage: Platform.isWindows
+          ? (mode) => appliquerDemarrageAvecWindows(
+              actif: mode != ModeDemarrage.desactive,
+              masque: mode == ModeDemarrage.iconeMasquee,
+            )
+          : null,
     );
   } catch (erreur, pile) {
     Journal.actuel.erreur(
@@ -1278,6 +1273,7 @@ Widget construireApplication({
   ServiceJournal? serviceJournal,
   ServiceLectureWeb? serviceLectureWeb,
   ModeTheme? modeTheme,
+  InscriptionDemarrage? surChangementModeDemarrage,
 }) {
   // Les états sont fournis au-dessus de MaterialApp : les écrans ouverts par
   // Navigator et les boîtes de dialogue y ont accès.
@@ -1361,6 +1357,7 @@ Widget construireApplication({
           serviceParametres,
           serviceTelechargement,
           serviceBibliotheque: serviceBibliotheque,
+          surChangementModeDemarrage: surChangementModeDemarrage,
         )..charger(),
       ),
       // Sur ordinateur, vérification au démarrage si une échéance a été
