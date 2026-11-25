@@ -159,6 +159,7 @@ class _IntertitreSuppressions extends StatelessWidget {
   Widget build(BuildContext context) {
     final etat = context.watch<EtatTelechargements>();
     final theme = Theme.of(context);
+    final rouge = couleurSuppressionPrevue(theme.colorScheme);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -166,7 +167,7 @@ class _IntertitreSuppressions extends StatelessWidget {
           texte: Textes.sectionSuppressionsPrevues(
             etat.suppressionsPrevues.length,
           ),
-          couleur: couleurSuppressionPrevue(theme.colorScheme),
+          couleur: rouge,
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(
@@ -180,8 +181,65 @@ class _IntertitreSuppressions extends StatelessWidget {
             style: theme.textTheme.bodySmall,
           ),
         ),
+        // Sous l'explication (et non à droite de l'intertitre) : le libellé
+        // est long et doit rester lisible sur un téléphone étroit.
+        if (etat.suppressionsPrevues.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              espacementPetit,
+              0,
+              espacementMoyen,
+              espacementPetit,
+            ),
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                style: TextButton.styleFrom(foregroundColor: rouge),
+                icon: const Icon(Icons.delete_sweep_outlined),
+                label: const Text(Textes.supprimerToutesSuppressionsPrevues),
+                onPressed: () => _supprimerTout(context, etat),
+              ),
+            ),
+          ),
       ],
     );
+  }
+
+  /// Demande confirmation (suppression définitive), puis supprime toutes
+  /// les archives prévues et affiche le résultat.
+  Future<void> _supprimerTout(
+    BuildContext context,
+    EtatTelechargements etat,
+  ) async {
+    final nombre = etat.suppressionsPrevues.length;
+    final confirme = await showDialog<bool>(
+      context: context,
+      builder: (contexteDialogue) => AlertDialog(
+        title: const Text(Textes.titreSupprimerToutesSuppressionsPrevues),
+        content: Text(
+          Textes.confirmationSupprimerToutesSuppressionsPrevues(nombre),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(contexteDialogue).pop(false),
+            child: const Text(Textes.annuler),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(contexteDialogue).pop(true),
+            child: const Text(Textes.supprimer),
+          ),
+        ],
+      ),
+    );
+    if (confirme != true || !context.mounted) return;
+    final resultat = await etat.supprimerToutesSuppressionsPrevues();
+    if (context.mounted) {
+      afficherResultat(
+        context,
+        resultat,
+        succes: Textes.suppressionsPrevuesFaites(resultat.donnee ?? 0),
+      );
+    }
   }
 }
 

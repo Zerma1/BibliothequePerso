@@ -1061,6 +1061,65 @@ void main() {
       },
     );
 
+    test("supprimer toutes les suppressions prévues efface tout de suite les "
+        "archives, sauf celle d'un chapitre ouvert dans le lecteur", () async {
+      await bloquerFile();
+      final ids = <int>[];
+      for (final numero in <int>[5, 6, 7]) {
+        final id = (await chapitre(numero)).id!;
+        await depotChapitres.marquerTelecharge(id);
+        await depotChapitres.planifierSuppression(
+          id,
+          DateTime.now().toUtc().add(const Duration(hours: 20)),
+        );
+        ids.add(id);
+      }
+      // Chapitre non prévu : jamais touché.
+      final autre = (await chapitre(8)).id!;
+      await depotChapitres.marquerTelecharge(autre);
+      service.protegerChapitre(ids[2]);
+      var signalements = 0;
+      final abonnement = service.changements.listen((_) => signalements++);
+      addTearDown(abonnement.cancel);
+
+      expect(await service.supprimerToutesSuppressionsPrevues(), 2);
+
+      for (final id in ids.take(2)) {
+        final relu = (await depotChapitres.chargerChapitre(id))!;
+        expect(relu.estTelecharge, isFalse);
+        expect(relu.dateSuppressionPrevue, isNull);
+      }
+      final ouvert = (await depotChapitres.chargerChapitre(ids[2]))!;
+      expect(ouvert.estTelecharge, isTrue);
+      expect(ouvert.dateSuppressionPrevue, isNotNull);
+      expect(
+        (await depotChapitres.chargerChapitre(autre))!.estTelecharge,
+        isTrue,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(signalements, greaterThan(0));
+
+      // Une fois le lecteur fermé, il est supprimé à son tour.
+      service.libererChapitre(ids[2]);
+      expect(await service.supprimerToutesSuppressionsPrevues(), 1);
+      expect(await service.chargerSuppressionsPrevues(), isEmpty);
+    });
+
+    test("deux demandes simultanées de suppression groupée n'en font "
+        "qu'une", () async {
+      final id = await preparerChapitre5HorsRegles();
+      final premiere = service.supprimerToutesSuppressionsPrevues();
+      final seconde = service.supprimerToutesSuppressionsPrevues();
+      expect(identical(premiere, seconde), isTrue);
+      expect(await premiere, 1);
+      expect(
+        (await depotChapitres.chargerChapitre(id))!.estTelecharge,
+        isFalse,
+      );
+      // Sans suppression prévue : rien à faire, sans erreur.
+      expect(await service.supprimerToutesSuppressionsPrevues(), 0);
+    });
+
     test(
       'supprimer un chapitre gardé retire aussi le choix « Garder »',
       () async {

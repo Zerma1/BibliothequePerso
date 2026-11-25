@@ -22,10 +22,19 @@ constexpr char kMethodeDemanderFermeture[] = "demanderFermeture";
 constexpr UINT_PTR kMinuteurFermeture = 0xB1B1;
 constexpr UINT kDelaiMaxFermetureMs = 5000;
 
+// Methodes appelees par Dart (zone de notification, lib/main.dart) :
+// cacher la fenetre (croix), l'afficher (clic sur l'icone, menu « Ouvrir ») et
+// demander la vraie fermeture (menu « Quitter », qui repasse par
+// kMethodeDemanderFermeture pour vider le journal).
+constexpr char kMethodeCacher[] = "cacher";
+constexpr char kMethodeAfficher[] = "afficher";
+constexpr char kMethodeQuitter[] = "quitter";
+
 }  // namespace
 
-FlutterWindow::FlutterWindow(const flutter::DartProject& project)
-    : project_(project) {}
+FlutterWindow::FlutterWindow(const flutter::DartProject& project,
+                             bool demarrage_masque)
+    : project_(project), demarrage_masque_(demarrage_masque) {}
 
 FlutterWindow::~FlutterWindow() {}
 
@@ -59,9 +68,20 @@ bool FlutterWindow::OnCreate() {
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
           flutter_controller_->engine()->messenger(), kNomCanalFenetre,
           &flutter::StandardMethodCodec::GetInstance());
+  canal_fenetre_->SetMethodCallHandler(
+      [this](const auto& appel, auto resultat) {
+        TraiterAppelDart(appel, std::move(resultat));
+      });
+
+  message_afficher_ = ::RegisterWindowMessage(kMessageAfficherFenetre);
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
+    // Demarrage avec Windows en mode « icone masquee » : la fenetre reste
+    // cachee, Dart installe l'icone de la zone de notification (et rappelle
+    // « afficher » s'il n'y parvient pas).
+    if (!demarrage_masque_) {
+      this->Show();
+    }
   });
 
   // Flutter can complete the first frame before the "show window" callback is
@@ -129,6 +149,48 @@ void FlutterWindow::DemanderFermeture(HWND hwnd) {
                                std::move(resultat));
 }
 
+void FlutterWindow::AfficherFenetre(HWND hwnd) {
+  if (::IsIconic(hwnd)) {
+    ::ShowWindow(hwnd, SW_RESTORE);
+  } else {
+    ::ShowWindow(hwnd, SW_SHOW);
+  }
+  // Le clic sur l'icone de la zone de notification (ou la deuxieme instance,
+  // via AllowSetForegroundWindow) donne a ce processus le droit de passer au
+  // premier plan.
+  ::SetForegroundWindow(hwnd);
+  if (flutter_controller_) {
+    // Fenetre jamais affichee (demarrage masque) : une image est redemandee
+    // pour ne pas montrer une surface vide.
+    flutter_controller_->ForceRedraw();
+  }
+}
+
+void FlutterWindow::TraiterAppelDart(
+    const flutter::MethodCall<flutter::EncodableValue>& appel,
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> resultat) {
+  HWND hwnd = GetHandle();
+  if (!hwnd) {
+    resultat->Error("fenetre_absente", "Fenetre deja detruite");
+    return;
+  }
+  const std::string& methode = appel.method_name();
+  if (methode == kMethodeCacher) {
+    ::ShowWindow(hwnd, SW_HIDE);
+    resultat->Success();
+  } else if (methode == kMethodeAfficher) {
+    AfficherFenetre(hwnd);
+    resultat->Success();
+  } else if (methode == kMethodeQuitter) {
+    // Meme chemin que la croix : WM_CLOSE -> DemanderFermeture -> Dart
+    // (qui sait que l'on quitte vraiment et vide le journal).
+    ::PostMessage(hwnd, WM_CLOSE, 0, 0);
+    resultat->Success();
+  } else {
+    resultat->NotImplemented();
+  }
+}
+
 void FlutterWindow::FermerMaintenant(HWND hwnd) {
   fermeture_en_cours_ = false;
   fermeture_confirmee_ = true;
@@ -153,6 +215,12 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   if (message == WM_TIMER && wparam == kMinuteurFermeture) {
     // Pas de reponse de Dart a temps : on ferme quand meme.
     FermerMaintenant(hwnd);
+    return 0;
+  }
+  if (message_afficher_ != 0 && message == message_afficher_) {
+    // Deuxieme lancement du meme executable (raccourci, menu Demarrer)
+    // pendant que l'application tourne dans la zone de notification.
+    AfficherFenetre(hwnd);
     return 0;
   }
 

@@ -1424,6 +1424,24 @@ class FauxServiceTelechargement implements ServiceTelechargement {
   }
 
   @override
+  Future<int> supprimerToutesSuppressionsPrevues() async {
+    journal.add('supprimerToutes');
+    final refus = erreurSuppression;
+    if (refus != null) throw refus;
+    // Comme le vrai service : un chapitre ouvert dans le lecteur est épargné.
+    final ids = <int>[
+      for (final chapitre in await chargerSuppressionsPrevues())
+        if (chapitre.id != null && !estProtege(chapitre.id!)) chapitre.id!,
+    ];
+    for (final id in ids) {
+      await supprimerTelechargement(id, signalerChangement: false);
+      planifierSuppressionDeTest(id, null);
+    }
+    if (ids.isNotEmpty) signaler();
+    return ids.length;
+  }
+
+  @override
   Future<void> annulerSuppression(int idChapitre) async {
     journal.add('garder:$idChapitre');
     gardes.add(idChapitre);
@@ -1688,6 +1706,17 @@ class FauxServiceParametres implements ServiceParametres {
   @override
   Future<void> enregistrerModeTheme(ModeTheme mode) async {
     modeTheme = mode;
+  }
+
+  /// Lancement à l'ouverture de session « enregistré ».
+  ModeDemarrage modeDemarrage = ServiceParametres.modeDemarrageParDefaut;
+
+  @override
+  Future<ModeDemarrage> chargerModeDemarrage() async => modeDemarrage;
+
+  @override
+  Future<void> enregistrerModeDemarrage(ModeDemarrage mode) async {
+    modeDemarrage = mode;
   }
 
   /// Durée de conservation avant suppression « enregistrée ».
@@ -2558,6 +2587,8 @@ Widget envelopper(
   Future<List<String>> Function()? listerExports,
   bool verifierMisesAJourAuDemarrage = false,
   DateTime Function()? maintenant,
+  bool estWindows = false,
+  InscriptionDemarrage? surChangementModeDemarrage,
 }) {
   final serviceTelechargement =
       telechargement ?? FauxServiceTelechargement(bibliotheque);
@@ -2619,6 +2650,10 @@ Widget envelopper(
           serviceParametres,
           serviceTelechargement,
           serviceBibliotheque: bibliotheque,
+          // Fixé plutôt que lu sur la machine : les tests donnent le même
+          // écran sous Windows et sous Linux.
+          estWindows: estWindows,
+          surChangementModeDemarrage: surChangementModeDemarrage,
         )..charger(),
       ),
       // Section « Apparence » des Paramètres (thème lu dans le faux service).

@@ -781,6 +781,78 @@ void main() {
       );
     });
 
+    test("supprimer toutes les suppressions prévues est refusé avec un "
+        "message clair pendant un déplacement inachevé", () async {
+      final ancien = p.join(temporaire.path, 'ancien');
+      final stockage = StockageTelechargements(ancien);
+      final premier = await chapitre(1);
+      final nomArchive = await ecrireArchive(stockage, premier);
+      await depotChapitres.planifierSuppression(
+        premier.id!,
+        DateTime.now().toUtc().add(const Duration(hours: 3)),
+      );
+      await depotParametres.enregistrerTexte(
+        ServiceParametres.cleDeplacementDossierEnCours,
+        p.join(temporaire.path, 'nas'),
+      );
+      final service = creerService(stockage);
+
+      await expectLater(
+        service.supprimerToutesSuppressionsPrevues(),
+        throwsA(
+          isA<ErreurService>().having(
+            (e) => e.message,
+            'message',
+            contains('en cours de déplacement'),
+          ),
+        ),
+      );
+      final relu = await chapitre(1);
+      expect(relu.estTelecharge, isTrue);
+      expect(relu.dateSuppressionPrevue, isNotNull);
+      expect(await File(cheminArchive(ancien, nomArchive)).exists(), isTrue);
+    });
+
+    test("supprimer toutes les suppressions prévues, NAS éteint, ne touche "
+        "à rien et l'explique", () async {
+      final nas = await preparerNas();
+      final stockage = await stockageNas(nas);
+      final premier = await chapitre(1);
+      final nomArchive = await ecrireArchive(stockage, premier);
+      await depotChapitres.planifierSuppression(
+        premier.id!,
+        DateTime.now().toUtc().add(const Duration(hours: 3)),
+      );
+      final service = creerService(stockage);
+      await eteindre(nas);
+
+      await expectLater(
+        service.supprimerToutesSuppressionsPrevues(),
+        throwsA(
+          isA<ErreurService>().having(
+            (e) => e.message,
+            'message',
+            allOf(
+              contains("Aucun chapitre n'a été supprimé"),
+              contains('inaccessible'),
+            ),
+          ),
+        ),
+      );
+      final relu = await chapitre(1);
+      expect(relu.estTelecharge, isTrue);
+      expect(relu.nomArchive, nomArchive);
+      expect(relu.dateSuppressionPrevue, isNotNull);
+
+      // Le NAS revient : la suppression se fait.
+      await rallumer(nas);
+      expect(await service.supprimerToutesSuppressionsPrevues(), 1);
+      expect(await File(cheminArchive(nas, nomArchive)).exists(), isFalse);
+      expect((await chapitre(1)).estTelecharge, isFalse);
+      // Le retour du NAS relance la file (vide ici) : on attend sa fin.
+      await service.lancerTraitement();
+    });
+
     test('pendant le changement de dossier lui-même, aucune archive n\'est '
         'supprimée (même sans repère lisible par ce service)', () async {
       final ancien = p.join(temporaire.path, 'ancien');

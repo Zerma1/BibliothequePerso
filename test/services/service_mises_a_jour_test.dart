@@ -439,6 +439,43 @@ void main() {
       expect(bibliotheque.ordreAppels, <String>['en attente']);
     });
 
+    test("après une mise en veille, l'échéance manquée est rattrapée une "
+        "seule fois d'après l'heure réelle", () async {
+      // Application cachée dans la zone de notification, ordinateur endormi
+      // de 11:00 à 14:00 : aucun minuteur ne s'est déclenché à 12:00. Le
+      // service compare la dernière vérification enregistrée à la dernière
+      // échéance passée, sans rien attendre de l'interface.
+      final parametres = ServiceParametres(DepotParametres(base));
+      var maintenant = DateTime.utc(2026, 11, 16, 11);
+      final avecReglages = ServiceMisesAJour(
+        depotTitres: depotTitres,
+        depotListes: depotListes,
+        depotSources: depotSources,
+        serviceBibliotheque: bibliotheque,
+        serviceParametres: parametres,
+        maintenant: () => maintenant,
+      );
+      final source = await creerSource('a.test');
+      final lisible = await creerTitre(source, 'lisible');
+      await ajouterChapitreFr(lisible);
+      await parametres.enregistrerDerniereVerification(maintenant);
+      await parametres.enregistrerDerniereVerificationEnAttente(maintenant);
+      expect(await avecReglages.verifierSiEcheancePassee(), isNull);
+
+      maintenant = DateTime.utc(2026, 11, 16, 14);
+      final rattrapage = await avecReglages.verifierSiEcheancePassee();
+      expect(rattrapage!.estEnAttenteSeulement, isFalse);
+      expect(bibliotheque.ordreAppels, <String>['lisible']);
+
+      // Un second contrôle (minuteur, retour au premier plan) ne refait rien.
+      expect(await avecReglages.verifierSiEcheancePassee(), isNull);
+      expect(bibliotheque.ordreAppels, <String>['lisible']);
+      expect(
+        await avecReglages.chargerProchaineEcheance(maintenant),
+        DateTime.utc(2026, 11, 17),
+      );
+    });
+
     test('une vérification complète demandée pendant une vérification « En '
         'attente » démarre juste après', () async {
       final source = await creerSource('a.test');

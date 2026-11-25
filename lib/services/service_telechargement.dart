@@ -1235,6 +1235,91 @@ class ServiceTelechargement {
   Future<void> supprimerMaintenant(int idChapitre) =>
       supprimerTelechargement(idChapitre);
 
+  /// Suppression groupée en cours : un double clic (ou un second écran)
+  /// attend la même au lieu d'en lancer une seconde.
+  Future<int>? _suppressionGroupeeEnCours;
+
+  /// Supprime tout de suite les archives de **toutes** les suppressions
+  /// prévues (bouton « Supprimer tous les chapitres à supprimer » de
+  /// l'onglet Téléchargements) et renvoie le nombre d'archives supprimées.
+  ///
+  /// Mêmes règles que [supprimerMaintenant] pour chaque chapitre, avec en
+  /// plus :
+  /// - un chapitre ouvert dans le lecteur ([protegerChapitre]) est épargné :
+  ///   sa suppression reste prévue et sera faite plus tard ;
+  /// - rien n'est supprimé, et une [ErreurService] au message clair est
+  ///   levée, si un déplacement des archives est en cours ou inachevé, si
+  ///   le dossier vient d'être changé (redémarrage demandé) ou si le dossier
+  ///   des chapitres est inaccessible (NAS éteint) ;
+  /// - un chapitre en erreur est journalisé et n'empêche pas les autres ;
+  ///   si aucun n'a pu être supprimé, la première erreur est levée.
+  ///
+  /// Un second appel pendant la suppression partage la même.
+  Future<int> supprimerToutesSuppressionsPrevues() =>
+      _suppressionGroupeeEnCours ??= _supprimerToutesSuppressionsPrevues()
+          .whenComplete(() => _suppressionGroupeeEnCours = null);
+
+  Future<int> _supprimerToutesSuppressionsPrevues() async {
+    // Contrôles avant toute écriture : en cas de refus, aucune archive n'est
+    // touchée (pas de suppression à moitié faite).
+    _verifierArchivesSurPlace();
+    await _verifierAucunDeplacement();
+    // NAS éteint : chaque effacement échouerait l'un après l'autre (attente
+    // réseau à chaque fois). Le bandeau du dossier est mis à jour au passage.
+    final acces = await _actualiserAcces();
+    if (!acces.estAccessible) {
+      throw ErreurService(
+        "Aucun chapitre n'a été supprimé. ${acces.message ?? ''}".trim(),
+      );
+    }
+    final prevues = await _depotChapitres.chargerSuppressionsPrevues();
+    var nombre = 0;
+    var epargnes = 0;
+    var echecs = 0;
+    Object? premiereErreur;
+    StackTrace? premierePile;
+    // Boucle bornée par la liste lue (aucune requête réseau : disque et base
+    // seulement).
+    for (final chapitre in prevues) {
+      final id = chapitre.id;
+      if (id == null) continue;
+      // Chapitre lu en ce moment : l'effacer ferait échouer les pages
+      // suivantes du lecteur. Sa date reste : il sera supprimé plus tard.
+      if (estProtege(id)) {
+        epargnes++;
+        continue;
+      }
+      try {
+        await supprimerTelechargement(id, signalerChangement: false);
+        nombre++;
+      } catch (erreur, pile) {
+        echecs++;
+        premiereErreur ??= erreur;
+        premierePile ??= pile;
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Suppression immédiate du chapitre n°$id impossible',
+          erreur: erreur,
+        );
+        // Dossier perdu en cours de route (NAS éteint entre deux
+        // chapitres) : inutile d'essayer les suivants un par un.
+        if (!(await _actualiserAcces()).estAccessible) break;
+      }
+    }
+    Journal.actuel.info(
+      CategorieJournal.telechargement,
+      'Suppression de toutes les suppressions prévues : $nombre archive(s) '
+      'supprimée(s), $epargnes épargnée(s) (chapitre ouvert), $echecs '
+      'échec(s) sur ${prevues.length}',
+    );
+    if (nombre > 0 || echecs > 0) _signaler();
+    final erreur = premiereErreur;
+    if (nombre == 0 && erreur != null) {
+      Error.throwWithStackTrace(erreur, premierePile ?? StackTrace.current);
+    }
+    return nombre;
+  }
+
   /// Annule la suppression prévue d'un chapitre (bouton « Garder ») : les
   /// règles ne le suppriment plus jamais automatiquement ; seul le client
   /// peut encore le supprimer. Sans effet visible si aucune suppression
