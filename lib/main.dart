@@ -130,7 +130,7 @@ Future<String?> chargerDossierBibliothequeInstallation({
     if (texte.isNotEmpty && texte.codeUnitAt(0) == 0xFEFF) {
       texte = texte.substring(1);
     }
-    final donnees = jsonDecode(texte);
+    final Object? donnees = jsonDecode(texte);
     if (donnees is! Map<String, Object?>) return null;
     final valeur = donnees[cleDossierBibliothequeInstallation];
     if (valeur is! String) return null;
@@ -400,6 +400,7 @@ Future<ServicesApplication> construireServices({
       await ServiceDossierChapitres.appliquerDossierInstallation(
         DepotParametres(base),
         await chargerDossierBibliothequeInstallation(),
+        depotChapitres: DepotChapitres(base),
       );
     }
     // Chapitres : dossier choisi par le client (Paramètres), sinon défaut.
@@ -840,6 +841,9 @@ Future<void> demarrer() async {
             }),
       );
     }
+    // Thème lu avant l'affichage (pas d'éclair du thème du système) ; une
+    // erreur ne bloque jamais le démarrage : thème du système.
+    final modeTheme = await chargerModeThemeInitial(services.serviceParametres);
     application = construireApplication(
       serviceBibliotheque: services.serviceBibliotheque,
       serviceAjoutSite: services.serviceAjoutSite,
@@ -853,6 +857,7 @@ Future<void> demarrer() async {
       serviceDossierChapitres: services.serviceDossierChapitres,
       serviceJournal: services.serviceJournal,
       serviceLectureWeb: services.serviceLectureWeb,
+      modeTheme: modeTheme,
     );
   } catch (erreur, pile) {
     Journal.actuel.erreur(
@@ -871,10 +876,31 @@ Future<void> demarrer() async {
   runApp(application);
 }
 
+/// Thème enregistré par le client, lu avant le premier affichage.
+///
+/// Ne lève jamais : en cas d'erreur (base illisible…), l'erreur est
+/// journalisée et le thème par défaut (système) est renvoyé.
+Future<ModeTheme> chargerModeThemeInitial(
+  ServiceParametres serviceParametres,
+) async {
+  try {
+    return await serviceParametres.chargerModeTheme();
+  } catch (erreur, pile) {
+    Journal.actuel.avertissement(
+      CategorieJournal.parametres,
+      'Thème enregistré illisible au démarrage : thème du système',
+      erreur: erreur,
+      pile: pile,
+    );
+    return ServiceParametres.modeThemeParDefaut;
+  }
+}
+
 /// Application complète branchée sur les services donnés.
 ///
 /// Séparée de [demarrer] pour que les tests puissent fournir de faux
-/// services sans base ni réseau.
+/// services sans base ni réseau. [modeTheme] : thème déjà lu au démarrage
+/// (par défaut, celui du service, puis le choix enregistré une fois lu).
 Widget construireApplication({
   required ServiceBibliotheque serviceBibliotheque,
   required ServiceAjoutSite serviceAjoutSite,
@@ -888,6 +914,7 @@ Widget construireApplication({
   ServiceDossierChapitres? serviceDossierChapitres,
   ServiceJournal? serviceJournal,
   ServiceLectureWeb? serviceLectureWeb,
+  ModeTheme? modeTheme,
 }) {
   // Les états sont fournis au-dessus de MaterialApp : les écrans ouverts par
   // Navigator et les boîtes de dialogue y ont accès.
@@ -961,7 +988,8 @@ Widget construireApplication({
         ),
       // Thème choisi dans Paramètres → Apparence (suivi par la racine).
       ChangeNotifierProvider<EtatTheme>(
-        create: (_) => EtatTheme(serviceParametres)..charger(),
+        create: (_) =>
+            EtatTheme(serviceParametres, modeInitial: modeTheme)..charger(),
       ),
       ChangeNotifierProvider<EtatParametres>(
         create: (_) => EtatParametres(

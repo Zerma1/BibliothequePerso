@@ -9,12 +9,17 @@
 ;   (local, disque réseau ou NAS), écrit dans {app}\installation.json, que
 ;   l'application lit au premier démarrage (lib/main.dart,
 ;   chargerDossierBibliothequeInstallation).
+; - Mise à jour (installation.json déjà présent dans le dossier d'installation) :
+;   cette page est sautée et installation.json n'est pas modifié ; le dossier de
+;   la bibliothèque se change dans l'application (Paramètres > Dossier des
+;   chapitres).
 ; - La désinstallation ne retire que les fichiers du programme : jamais la base
 ;   (%APPDATA%) ni les chapitres téléchargés.
 ;
 ; Paramètres de la ligne de commande (en plus de ceux d'Inno Setup) :
 ;   /BIBLIOTHEQUE="D:\Mes chapitres"   dossier de la bibliothèque (installation
-;                                      silencieuse ou valeur proposée).
+;                                      silencieuse ou valeur proposée) ;
+;                                      ignoré lors d'une mise à jour.
 ; Mise à jour silencieuse avec l'application ouverte : ajouter /CLOSEAPPLICATIONS.
 
 #ifndef Version
@@ -102,6 +107,8 @@ const
 var
   PageBibliotheque: TInputDirWizardPage;
   PageConservation: TOutputMsgWizardPage;
+  // Figé dans PrepareToInstall (avant la copie des fichiers).
+  MiseAJourEnCours: Boolean;
 
 // Échappe une chaîne pour l'écrire entre guillemets dans du JSON.
 function EchapperJson(const Texte: String): String;
@@ -241,6 +248,38 @@ begin
       'dossier d''installation du programme. Choisissez un autre dossier.';
 end;
 
+// Mise à jour : installation.json est déjà présent dans le dossier
+// d'installation choisi. Le dossier de la bibliothèque n'est alors plus
+// demandé (il se change dans l'application) et installation.json est gardé tel
+// quel.
+function EstMiseAJour: Boolean;
+begin
+  Result := FileExists(AddBackslash(WizardDirValue) + NomFichierInstallation);
+end;
+
+// Texte de la page « Vos données sont conservées » (nouvelle installation ou
+// mise à jour).
+function TexteConservation(const MiseAJour: Boolean): String;
+begin
+  if MiseAJour then
+    Result := 'Mise à jour de {#NomApplication} : seuls les fichiers du ' +
+      'programme sont remplacés. Votre bibliothèque et ses réglages ne sont ' +
+      'pas touchés :' + #13#10#13#10 +
+      '  - la base (titres, sources, listes, réglages) ;' + #13#10 +
+      '  - le dossier de votre bibliothèque (chapitres téléchargés).' + #13#10#13#10 +
+      'Le dossier de la bibliothèque ne se choisit pas ici : pour le changer, ' +
+      'ouvrez l''application, Paramètres > Dossier des chapitres.' + #13#10#13#10 +
+      'L''installateur ferme l''application si elle est ouverte.'
+  else
+    Result := 'La désinstallation de {#NomApplication} ne supprime jamais vos données :' + #13#10#13#10 +
+      '  - la base (titres, sources, listes, réglages) ;' + #13#10 +
+      '  - le dossier de votre bibliothèque (chapitres téléchargés).' + #13#10#13#10 +
+      'Seuls les fichiers du programme sont retirés. Pour mettre à jour, il suffit ' +
+      'de relancer un installateur plus récent : il remplace seulement les ' +
+      'fichiers du programme, sans toucher à votre bibliothèque ni à ses ' +
+      'réglages, et ferme l''application si elle est ouverte.';
+end;
+
 procedure InitializeWizard;
 begin
   PageBibliotheque := CreateInputDirPage(wpSelectDir,
@@ -249,23 +288,38 @@ begin
     'Les chapitres téléchargés pour la lecture hors-ligne (et les couvertures) ' +
     'seront enregistrés dans ce dossier. Il peut se trouver sur un autre disque, ' +
     'un disque réseau ou un NAS (par exemple \\nas\partage\Bibliothèque).' + #13#10#13#10 +
-    'Vous pourrez le changer plus tard dans les Paramètres de l''application.',
+    'Vous pourrez le changer plus tard dans l''application : Paramètres > ' +
+    'Dossier des chapitres.',
     False, '');
   PageBibliotheque.Add('');
   // Le dossier d'installation proposé est déjà celui de l'installation
   // précédente (UsePreviousAppDir) : on y relit installation.json.
   PageBibliotheque.Values[0] := DossierBibliothequePropose(WizardForm.DirEdit.Text);
 
+  // Texte définitif choisi à l'affichage (CurPageChanged) : le dossier
+  // d'installation, donc le type d'installation, peut encore changer.
   PageConservation := CreateOutputMsgPage(PageBibliotheque.ID,
     'Vos données sont conservées',
     'Désinstallation et mises à jour',
-    'La désinstallation de {#NomApplication} ne supprime jamais vos données :' + #13#10#13#10 +
-    '  - la base (titres, sources, listes, réglages) ;' + #13#10 +
-    '  - le dossier de votre bibliothèque (chapitres téléchargés).' + #13#10#13#10 +
-    'Seuls les fichiers du programme sont retirés. Pour mettre à jour, il suffit ' +
-    'de relancer un installateur plus récent : il reprend le même dossier ' +
-    'd''installation et le même dossier de bibliothèque, et ferme ' +
-    'l''application si elle est ouverte.');
+    TexteConservation(False));
+end;
+
+// Mise à jour : la page du dossier de la bibliothèque est sautée.
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = PageBibliotheque.ID) and EstMiseAJour;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID = PageConservation.ID then
+  begin
+    if EstMiseAJour then
+      PageConservation.Description := 'Mise à jour'
+    else
+      PageConservation.Description := 'Désinstallation et mises à jour';
+    PageConservation.MsgLabel.Caption := TexteConservation(EstMiseAJour);
+  end;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -288,9 +342,19 @@ end;
 
 // Toujours appelé, y compris en mode silencieux : dernière vérification avant
 // de copier quoi que ce soit (une chaîne non vide annule l'installation).
+// Le type d'installation est figé ici, avant la copie des fichiers.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  Result := VerifierDossierBibliotheque(PageBibliotheque.Values[0], WizardDirValue);
+  MiseAJourEnCours := EstMiseAJour;
+  if MiseAJourEnCours then
+  begin
+    // installation.json gardé tel quel (paramètre /BIBLIOTHEQUE= ignoré).
+    Log('Mise à jour : ' + NomFichierInstallation + ' conservé, dossier de ' +
+      'la bibliothèque inchangé.');
+    Result := '';
+  end
+  else
+    Result := VerifierDossierBibliotheque(PageBibliotheque.Values[0], WizardDirValue);
 end;
 
 // Écrit {app}\installation.json : {"dossierBibliotheque": "<chemin>"}, en
@@ -310,12 +374,22 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if CurStep = ssPostInstall then
+  // Mise à jour : installation.json n'est jamais réécrit.
+  if (CurStep = ssPostInstall) and not MiseAJourEnCours then
     EcrireInstallationJson;
 end;
 
 procedure RegisterPreviousData(PreviousDataKey: Integer);
+var
+  Dossier: String;
 begin
-  SetPreviousData(PreviousDataKey, ClePreviousData,
-    RemoveBackslashUnlessRoot(Trim(PageBibliotheque.Values[0])));
+  // Mise à jour : la valeur mémorisée suit installation.json, inchangé.
+  if MiseAJourEnCours then
+    Dossier := Trim(LireDossierInstallationJson(
+      ExpandConstant('{app}\' + NomFichierInstallation)))
+  else
+    Dossier := Trim(PageBibliotheque.Values[0]);
+  if Dossier <> '' then
+    SetPreviousData(PreviousDataKey, ClePreviousData,
+      RemoveBackslashUnlessRoot(Dossier));
 end;
