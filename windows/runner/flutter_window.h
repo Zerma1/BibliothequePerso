@@ -10,11 +10,24 @@
 
 #include "win32_window.h"
 
+// Argument de ligne de commande du demarrage avec Windows en mode « icone
+// masquee » : la fenetre n'est pas affichee, l'application reste dans la zone
+// de notification (meme valeur que argumentDemarrageMasque dans lib/main.dart).
+constexpr wchar_t kArgumentDemarrageMasque[] = L"--demarrage-masque";
+
+// Message enregistre (RegisterWindowMessage) envoye par une deuxieme instance
+// du meme executable a la fenetre de la premiere : « affiche-toi », puis la
+// deuxieme instance se termine (voir main.cpp).
+constexpr wchar_t kMessageAfficherFenetre[] =
+    L"BibliothequePerso.AfficherFenetre";
+
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
  public:
   // Creates a new FlutterWindow hosting a Flutter view running |project|.
-  explicit FlutterWindow(const flutter::DartProject& project);
+  // |demarrage_masque| : la fenetre reste cachee apres la premiere image
+  // (demarrage avec Windows en mode « icone masquee »).
+  FlutterWindow(const flutter::DartProject& project, bool demarrage_masque);
   virtual ~FlutterWindow();
 
  protected:
@@ -31,6 +44,20 @@ class FlutterWindow : public Win32Window {
 
   // Ferme la fenetre sans redemander a Dart (WM_CLOSE reposte).
   void FermerMaintenant(HWND hwnd);
+
+  // Affiche la fenetre (meme cachee ou reduite) et la met au premier plan.
+  void AfficherFenetre(HWND hwnd);
+
+  // Repond aux appels de Dart sur le canal (cacher, afficher, quitter).
+  void TraiterAppelDart(
+      const flutter::MethodCall<flutter::EncodableValue>& appel,
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> resultat);
+
+  // Fenetre gardee cachee au demarrage (voir le constructeur).
+  bool demarrage_masque_ = false;
+
+  // Identifiant du message kMessageAfficherFenetre (0 si non enregistre).
+  UINT message_afficher_ = 0;
 
   // The project to run.
   flutter::DartProject project_;
