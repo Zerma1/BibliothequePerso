@@ -1168,6 +1168,26 @@ Future<void> demarrer() async {
     // Thème lu avant l'affichage (pas d'éclair du thème du système) ; une
     // erreur ne bloque jamais le démarrage : thème du système.
     final modeTheme = await chargerModeThemeInitial(services.serviceParametres);
+    // Démarrage avec Windows : réinscrit à chaque lancement pour garder le
+    // chemin de l'exécutable à jour (après une mise à jour ou un déplacement).
+    if (Platform.isWindows) {
+      try {
+        final mode = await services.serviceParametres.chargerModeDemarrage();
+        if (mode != ModeDemarrage.desactive) {
+          await appliquerDemarrageAvecWindows(
+            actif: true,
+            masque: mode == ModeDemarrage.iconeMasquee,
+          );
+        }
+      } catch (erreur, pile) {
+        Journal.actuel.avertissement(
+          CategorieJournal.demarrage,
+          'Démarrage avec Windows non vérifié',
+          erreur: erreur,
+          pile: pile,
+        );
+      }
+    }
     application = construireApplication(
       serviceBibliotheque: services.serviceBibliotheque,
       serviceAjoutSite: services.serviceAjoutSite,
@@ -1318,6 +1338,8 @@ Widget construireApplication({
         )..charger(),
       ),
       ChangeNotifierProvider<EtatTelechargements>(
+        // Créé tout de suite (suppressions différées, même fenêtre cachée).
+        lazy: false,
         create: (_) =>
             EtatTelechargements(serviceTelechargement, serviceBibliotheque)
               ..charger(),
@@ -1346,6 +1368,9 @@ Widget construireApplication({
       // sur Android, c'est la tâche workmanager qui s'en charge : l'état sert
       // au bouton manuel et réenregistre la tâche quand le réglage change.
       ChangeNotifierProvider<EtatMisesAJour>(
+        // Créé tout de suite : avec un démarrage dans la zone de notification,
+        // aucun écran ne le lirait et les vérifications ne démarreraient pas.
+        lazy: false,
         create: (_) => EtatMisesAJour(
           serviceMisesAJour,
           planifier: Platform.isWindows || Platform.isLinux,
