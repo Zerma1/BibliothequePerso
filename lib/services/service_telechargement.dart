@@ -7,21 +7,25 @@ library;
 // ignore_for_file: prefer_initializing_formals
 
 import 'dart:async';
-import 'dart:io' show Directory;
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as chemins;
 
 import '../donnees/depot_chapitres.dart';
 import '../donnees/depot_listes.dart';
+import '../donnees/depot_parametres.dart';
 import '../donnees/depot_sources.dart';
 import '../donnees/depot_telechargements.dart';
 import '../donnees/depot_titres.dart';
+import '../donnees/depot_titres_sources.dart';
 import '../donnees/erreur_stockage.dart';
+import '../donnees/journal_fichier.dart';
 import '../donnees/stockage_telechargements.dart';
 import '../modeles/chapitre.dart';
 import '../modeles/constantes.dart';
 import '../modeles/contenu_chapitre.dart';
+import '../modeles/journal.dart';
 import '../modeles/source.dart';
 import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
@@ -32,12 +36,25 @@ import '../sources/fabrique_sources.dart';
 import '../sources/signalement_mangadex.dart';
 import '../sources/source_mangadex.dart';
 import '../sources/source_site.dart';
-import 'erreur_service.dart';
-import 'politique_telechargement.dart';
 import 'constantes_services.dart';
+import 'dossier_chapitres.dart';
+import 'erreur_service.dart';
+import 'extension_image.dart';
+import 'politique_telechargement.dart';
 import 'service_bibliotheque.dart';
 import 'service_parametres.dart';
 import 'verrou_telechargement.dart';
+
+// Le changement du dossier des chapitres a besoin de la pause et du verrou
+// de la file, qui restent privés : `ServiceDossierChapitres` est donc dans
+// la même bibliothèque. Sans nouveau membre public ici, les faux
+// `ServiceTelechargement` des tests de l'interface restent valables.
+part 'service_dossier_chapitres.dart';
+// Même raison pour les enregistrements faits depuis le navigateur intégré :
+// ils consultent la pause et le changement de dossier, et ce dernier compte
+// les enregistrements en cours. Extension plutôt que nouveaux membres
+// publics, pour la même compatibilité avec les faux services.
+part 'enregistrements_web_telechargement.dart';
 
 /// Chapitre avec son titre et sa source, tels qu'il faut les passer au
 /// stockage (la langue vide est remplacée par la langue de la source pour que
@@ -65,11 +82,20 @@ class _VerrouPerdu implements Exception {
 /// File de téléchargement persistante, lecture des archives et règles de
 /// conservation (favoris / suivis).
 ///
-/// Un seul chapitre est téléchargé à la fois : les images d'un chapitre
-/// viennent du même serveur, et le délai par domaine de `ClientHttpPoli`
-/// rendrait de toute façon le parallélisme inutile.
+/// Jusqu'à N chapitres sont téléchargés en même temps (réglage du client,
+/// `ServiceParametres.chargerTelechargementsSimultanes`, 1 à 32). Le rythme
+/// des requêtes reste celui de `ClientHttpPoli` : 1 s entre deux requêtes
+/// vers un même domaine, créneau partagé par tous les chapitres en cours.
+/// Plusieurs chapitres d'un même site avancent donc en alternance, sans
+/// jamais solliciter ce site plus vite qu'avec un seul chapitre ; le gain
+/// vient des chapitres de sites différents.
 class ServiceTelechargement {
   /// Crée le service.
+  ///
+  /// [plafondTelechargementsSimultanes] : nombre maximal de chapitres en
+  /// même temps quel que soit le réglage du client (tâche de fond Android :
+  /// [telechargementsSimultanesTacheDeFond]). `null` : plafond déduit de
+  /// l'isolat (voir [_plafondEffectif]).
   ServiceTelechargement({
     required DepotTelechargements depotTelechargements,
     required DepotChapitres depotChapitres,
@@ -84,7 +110,17 @@ class ServiceTelechargement {
     String? identifiantVerrou,
     Duration dureeVerrou = dureeVerrouParDefaut,
     DateTime Function()? horloge,
-  }) : _identifiantVerrou = identifiantVerrou ?? _genererIdentifiant(),
+    DepotTitresSources? depotTitresSources,
+    DepotParametres? depotParametres,
+    int? plafondTelechargementsSimultanes,
+  }) : _plafondSimultanes = plafondTelechargementsSimultanes,
+       _depotTitresSources = depotTitresSources,
+       _depotParametres = depotParametres,
+       _accesDossier = AccesDossierChapitres.accessible(
+         stockage.dossierRacine,
+         estPersonnalise: stockage.estPersonnalise,
+       ),
+       _identifiantVerrou = identifiantVerrou ?? _genererIdentifiant(),
        _dureeVerrou = dureeVerrou,
        _horloge = horloge ?? DateTime.now,
        _depotTelechargements = depotTelechargements,
@@ -109,6 +145,44 @@ class ServiceTelechargement {
   final ServiceParametres _serviceParametres;
   final SignalementMangaDex _signalement;
 
+  /// Sites de chaque titre (étape 8). Facultatif pour ne pas casser les
+  /// appelants existants : sans lui, tous les chapitres sont considérés
+  /// comme venant d'un site lié, et seul le site principal est connu.
+  final DepotTitresSources? _depotTitresSources;
+
+  /// Paramètres bruts, pour savoir si un déplacement des archives est resté
+  /// inachevé ([ServiceParametres.cleDeplacementDossierEnCours]).
+  /// Facultatif pour ne pas casser les appelants existants : sans lui, ce
+  /// contrôle n'est pas fait.
+  final DepotParametres? _depotParametres;
+
+  /// Dernier état connu du dossier des chapitres (bandeau de l'interface,
+  /// via `ServiceDossierChapitres.accesDossier`).
+  AccesDossierChapitres _accesDossier;
+
+  /// File en pause : aucun chapitre n'est commencé (celui en cours se
+  /// termine). Posée par le changement du dossier des chapitres.
+  // LIMITE : en mémoire, propre à cet isolat ; la tâche de fond Android est
+  // tenue à l'écart pendant un déplacement par le verrou de la file.
+  bool _enPause = false;
+
+  /// `true` une fois le dossier des chapitres changé pendant cette session :
+  /// le nouveau dossier ne s'applique qu'au prochain démarrage, et d'ici là
+  /// la file reste en pause et le contrôle des archives manquantes ne fait
+  /// rien (il comparerait la base à l'ancien dossier).
+  bool _dossierChange = false;
+
+  /// `true` si, en plus, les archives ont été déplacées : l'ancien dossier
+  /// ne les contient plus, lecture et suppression sont refusées jusqu'au
+  /// redémarrage (elles chercheraient au mauvais endroit).
+  bool _archivesDeplacees = false;
+
+  /// `true` pendant un changement du dossier des chapitres demandé dans
+  /// cette session (`ServiceDossierChapitres.changerDossierChapitres`) :
+  /// aucune archive n'est supprimée pendant ce temps (elle peut être en
+  /// cours de copie vers le nouveau dossier).
+  bool _changementDossierEnCours = false;
+
   final String _identifiantVerrou;
   final Duration _dureeVerrou;
   final DateTime Function() _horloge;
@@ -116,8 +190,38 @@ class ServiceTelechargement {
   final StreamController<void> _changements =
       StreamController<void>.broadcast();
 
+  /// Plafond des téléchargements simultanés imposé à la construction (voir
+  /// le constructeur), ou `null`.
+  final int? _plafondSimultanes;
+
   /// Traitement de la file en cours, partagé si on le redemande.
   Future<void>? _traitement;
+
+  /// `true` si [lancerTraitement] a été appelé pendant un traitement après
+  /// sa dernière recherche d'un chapitre en attente : le traitement refait
+  /// alors un passage avant de se terminer. Sans lui, un chapitre mis en
+  /// file pendant la fin d'un traitement (file vue vide, suppressions
+  /// échues, libération du verrou) attendrait la relance suivante.
+  bool _relanceDemandee = false;
+
+  /// Enregistrements de chapitres en cours depuis le navigateur intégré
+  /// (`executerEnregistrementWeb`) : un changement du dossier des chapitres
+  /// avec déplacement est refusé tant qu'il y en a un, comme pendant un
+  /// téléchargement.
+  int _enregistrementsWebEnCours = 0;
+
+  /// Réveil de la boucle de la file pendant qu'elle attend la fin d'un
+  /// chapitre : complété par [lancerTraitement] (chapitre ajouté, réglage du
+  /// nombre de téléchargements simultanés changé) pour qu'un emplacement
+  /// libre soit rempli sans attendre la fin des chapitres en cours.
+  Completer<void>? _reveil;
+
+  /// `true` dès que le verrou de la file a été repris par l'autre isolat
+  /// pendant le traitement en cours : tous les chapitres en cours
+  /// s'arrêtent à leur page suivante (et pas seulement celui qui l'a vu), et
+  /// aucun autre n'est commencé. Remis à `false` au début de chaque
+  /// traitement.
+  bool _verrouPerdu = false;
 
   /// Nouvel essai prévu quand le verrou était tenu par un autre isolat.
   Timer? _relance;
@@ -136,6 +240,14 @@ class ServiceTelechargement {
   // attente sur un chapitre que les règles ne veulent pas peut être retirée
   // de la file à la prochaine application des règles de ce titre.
   final Set<int> _demandesManuelles = <int>{};
+
+  /// Valeur du réglage « Archive complète » lors du dernier
+  /// [appliquerReglesATous] de cette session (`null` avant le premier) :
+  /// sert à reconnaître une désactivation.
+  // LIMITE : en mémoire ; une désactivation suivie d'un arrêt de
+  // l'application avant l'application des règles n'est pas reconnue au
+  // démarrage suivant (les téléchargements en trop restent alors en file).
+  bool? _archiveCompleteAppliquee;
 
   /// Nombre d'échecs par chapitre pendant cette session.
   // LIMITE : en mémoire ; sur Android, chaque passage de la tâche de fond
@@ -186,8 +298,8 @@ class ServiceTelechargement {
 
   /// À appeler au démarrage : contrôle que chaque chapitre marqué téléchargé
   /// a bien son archive ([reparerArchivesManquantes]), applique les règles
-  /// (ce qui supprime aussi les archives dont la suppression prévue est
-  /// échue) puis traite la file.
+  /// (ce qui reprend aussi les anciens chapitres gardés et supprime les
+  /// archives dont la suppression prévue est échue) puis traite la file.
   ///
   /// La reprise des téléchargements interrompus (statut « en cours » remis
   /// en attente, archives partielles effacées) se fait au début de chaque
@@ -200,66 +312,438 @@ class ServiceTelechargement {
     } catch (erreur, pile) {
       // Le contrôle sera refait au prochain démarrage ; il ne doit pas
       // empêcher la file de tourner.
-      debugPrint('Contrôle des archives impossible : $erreur\n$pile');
+      Journal.actuel.erreur(
+        CategorieJournal.stockage,
+        'Contrôle des archives impossible',
+        erreur: erreur,
+        pile: pile,
+      );
     }
     await appliquerReglesATous();
   }
 
   /// Remet à « non téléchargé » les chapitres marqués téléchargés dont
   /// l'archive n'est plus sur le disque (fichier effacé à la main, chemin
-  /// enregistré invalide) et renvoie leur nombre. Si le dossier racine
-  /// lui-même est absent (support démonté), rien n'est modifié.
+  /// enregistré invalide) et renvoie leur nombre.
+  ///
+  /// Rien n'est modifié si le dossier des chapitres est inaccessible (NAS
+  /// éteint, lecteur réseau déconnecté, support démonté), s'il le devient
+  /// pendant le contrôle, si le dossier a été changé pendant cette session
+  /// ou si un déplacement des archives est resté inachevé : un dossier
+  /// injoignable n'est pas une archive manquante.
   ///
   /// Sans cela, le lecteur proposerait une lecture hors-ligne impossible et
   /// les règles ne retéléchargeraient jamais ces chapitres. Aucun réseau :
   /// une vérification d'existence de fichier par chapitre.
   Future<int> reparerArchivesManquantes() async {
-    // Dossier racine absent : support amovible démonté, carte SD retirée,
-    // dossier réglé momentanément inaccessible. Toutes les archives
-    // sembleraient perdues alors qu'elles reviendront avec le support : on
-    // ne touche à rien (sinon tous les chapitres seraient retéléchargés).
-    if (!await Directory(_stockage.dossierRacine).exists()) {
+    // Dossier changé pendant cette session : la base serait comparée à
+    // l'ancien dossier, qui ne contient plus (ou plus pour longtemps) les
+    // archives.
+    if (_dossierChange) return 0;
+    // Déplacement inachevé : une partie des archives est dans le nouveau
+    // dossier ; elles seraient vues comme perdues ici.
+    if (await _deplacementInacheve()) return 0;
+    // Dossier racine injoignable : support amovible démonté, NAS éteint,
+    // partage réseau déconnecté. Toutes les archives sembleraient perdues
+    // alors qu'elles reviendront avec le support : on ne touche à rien
+    // (sinon tous les chapitres seraient retéléchargés). Pour un dossier
+    // choisi par le client, le fichier repère doit aussi être présent (un
+    // point de montage vide n'est pas le NAS).
+    if (!await _stockage.estDossierRacineAccessible()) {
+      await _actualiserAcces();
       return 0;
     }
     final telecharges = await _depotChapitres.chargerChapitresTelecharges();
+    // Dossier choisi par le client (lecteur réseau, NAS) : un partage
+    // instable peut répondre « fichier absent » par moments. Les chapitres
+    // manquants d'affilée y sont donc mis en attente, et écrits seulement
+    // quand une archive présente plus loin prouve que le partage répond ; une
+    // trop longue suite de manquants arrête tout sans rien écrire.
+    final personnalise = _stockage.estPersonnalise;
+    final enAttente = <int>[];
     var nombre = 0;
+    // `false` si le contrôle a été interrompu (dossier perdu, trop de
+    // manquants d'affilée) : les chapitres en attente ne sont pas écrits.
+    var termine = true;
     for (final chapitre in telecharges) {
       final id = chapitre.id;
       if (id == null) continue;
       try {
         final contexte = await _chargerContexte(id);
         if (contexte == null) continue;
-        bool existe;
-        try {
-          existe = await _stockage.estTelecharge(
-            contexte.titre,
-            contexte.chapitre,
-          );
-        } on ErreurStockage {
-          // Chemin enregistré invalide : l'archive est introuvable.
-          existe = false;
+        var existe = await _archivePresente(contexte);
+        if (existe == null) {
+          termine = false;
+          break;
         }
-        if (!existe) {
-          await _depotChapitres.enregistrerArchive(id, null);
-          // Une ligne « terminé » restée dans la file empêcherait les règles
-          // de remettre ce chapitre en file (elles ne relancent qu'un
-          // échec) : on la retire pour qu'il soit retéléchargé s'il est
-          // voulu.
-          final ligne = await _depotTelechargements.chargerParChapitre(id);
-          if (ligne?.id != null &&
-              ligne!.statut == StatutTelechargement.termine) {
-            await _depotTelechargements.supprimerTelechargement(ligne.id!);
+        // Nouveau contrôle juste avant d'écrire : pour le dossier par défaut,
+        // `estTelecharge` ne distingue pas un fichier absent d'un support
+        // retiré à l'instant.
+        if (!existe && !await _stockage.estDossierRacineAccessible()) {
+          await _actualiserAcces();
+          termine = false;
+          break;
+        }
+        // Partage réseau : second contrôle de l'archive (le repère du
+        // dossier vient d'être revérifié juste au-dessus).
+        if (!existe && personnalise) {
+          existe = await _archivePresente(contexte);
+          if (existe == null) {
+            termine = false;
+            break;
           }
-          nombre++;
+        }
+        if (!personnalise) {
+          if (!existe) {
+            await _marquerArchiveManquante(id);
+            nombre++;
+          }
+          continue;
+        }
+        if (existe) {
+          // Le partage répond : les manquants précédents sont bien perdus.
+          nombre += await _marquerArchivesManquantes(enAttente);
+          enAttente.clear();
+          continue;
+        }
+        enAttente.add(id);
+        if (enAttente.length > nombreMaximalArchivesManquantesDAffilee) {
+          Journal.actuel.avertissement(
+            CategorieJournal.stockage,
+            'Contrôle des archives arrêté : plus de '
+            '$nombreMaximalArchivesManquantesDAffilee archives manquantes '
+            "d'affilée sur ${_stockage.dossierRacine} (partage instable ?)",
+          );
+          termine = false;
+          break;
         }
       } catch (erreur) {
         // Un chapitre illisible ne doit pas empêcher le contrôle des autres.
-        debugPrint('Contrôle de l\'archive du chapitre n°$id : $erreur');
+        Journal.actuel.avertissement(
+          CategorieJournal.stockage,
+          "Contrôle de l'archive du chapitre n°$id impossible",
+          erreur: erreur,
+        );
       }
+    }
+    // LIMITE : sur un dossier personnalisé, plus de
+    // [nombreMaximalArchivesManquantesDAffilee] archives réellement effacées
+    // à la main d'affilée ne sont pas réparées (contrôle arrêté à chaque
+    // démarrage) ; le lecteur signale alors ces chapitres illisibles.
+    if (termine) {
+      nombre += await _marquerArchivesManquantes(enAttente);
+    }
+    if (nombre > 0) {
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        '$nombre archive(s) manquante(s) : chapitres remis à « non '
+        'téléchargé »',
+      );
+      _signaler();
+    }
+    return nombre;
+  }
+
+  /// `true` si l'archive du chapitre est présente, `false` si elle manque
+  /// (ou si son chemin enregistré est invalide), `null` si le dossier des
+  /// chapitres a disparu pendant le contrôle (NAS éteint entre deux
+  /// chapitres) : il faut alors arrêter tout le contrôle sans rien modifier.
+  Future<bool?> _archivePresente(_ContexteChapitre contexte) async {
+    try {
+      return await _stockage.estTelecharge(contexte.titre, contexte.chapitre);
+    } on ErreurStockage catch (erreur) {
+      if (erreur.estDossierInaccessible) {
+        await _actualiserAcces(nature: erreur.nature);
+        return null;
+      }
+      // Chemin enregistré invalide : l'archive est introuvable.
+      return false;
+    }
+  }
+
+  /// Remet à « non téléchargé » les chapitres [ids] dont l'archive manque
+  /// (voir [_marquerArchiveManquante]) et renvoie le nombre de réussites.
+  Future<int> _marquerArchivesManquantes(List<int> ids) async {
+    var nombre = 0;
+    for (final id in ids) {
+      try {
+        await _marquerArchiveManquante(id);
+        nombre++;
+      } catch (erreur) {
+        Journal.actuel.avertissement(
+          CategorieJournal.stockage,
+          'Archive manquante du chapitre n°$id non notée',
+          erreur: erreur,
+        );
+      }
+    }
+    return nombre;
+  }
+
+  /// Remet un chapitre dont l'archive manque à « non téléchargé ».
+  Future<void> _marquerArchiveManquante(int id) async {
+    await _depotChapitres.enregistrerArchive(id, null);
+    // Une ligne « terminé » restée dans la file empêcherait les règles de
+    // remettre ce chapitre en file (elles ne relancent qu'un échec) : on la
+    // retire pour qu'il soit retéléchargé s'il est voulu.
+    final ligne = await _depotTelechargements.chargerParChapitre(id);
+    if (ligne?.id != null && ligne!.statut == StatutTelechargement.termine) {
+      await _depotTelechargements.supprimerTelechargement(ligne.id!);
+    }
+  }
+
+  /// Après un déplacement avec conflits : remet à « non téléchargé » les
+  /// chapitres dont l'archive est restée dans l'ancien dossier parce qu'un
+  /// fichier **différent** occupait déjà son nom dans le nouveau
+  /// ([cheminsEnConflit], chemins relatifs comme `nom_archive`). Sans cela,
+  /// au prochain démarrage, le lecteur ouvrirait ce fichier étranger.
+  /// Renvoie le nombre de chapitres remis à zéro.
+  ///
+  /// Une fois `nom_archive` effacé, le prochain téléchargement choisit un
+  /// nom libre (`ch1.fr.2.zip`…) : le fichier étranger n'est jamais
+  /// remplacé. Les couvertures en conflit ne concernent aucun chapitre.
+  /// Lève l'erreur de la base : l'appelant ne doit pas enregistrer le
+  /// nouveau dossier tant que ces chapitres pointent vers le fichier
+  /// étranger.
+  Future<int> _oublierArchivesEnConflit(List<String> cheminsEnConflit) async {
+    if (cheminsEnConflit.isEmpty) return 0;
+    final conflits = cheminsEnConflit.toSet();
+    var nombre = 0;
+    for (final chapitre
+        in await _depotChapitres.chargerChapitresTelecharges()) {
+      final id = chapitre.id;
+      if (id == null) continue;
+      var nom = chapitre.nomArchive;
+      if (nom == null) {
+        // Chapitre téléchargé avant la migration 4 : nom calculé.
+        final contexte = await _chargerContexte(id);
+        if (contexte == null) continue;
+        nom = StockageTelechargements.nomArchiveDuChapitre(
+          contexte.titre,
+          contexte.chapitre,
+        );
+      }
+      if (!conflits.contains(nom)) continue;
+      await _marquerArchiveManquante(id);
+      nombre++;
     }
     if (nombre > 0) _signaler();
     return nombre;
   }
+
+  /// `true` si un déplacement des archives est en cours (changement de
+  /// dossier demandé dans cette session) ou resté inachevé (repère en base,
+  /// posé par cet isolat ou par l'autre) : aucune archive ne doit alors être
+  /// supprimée, ni aucun chapitre téléchargé, dans l'ancien dossier.
+  Future<bool> _deplacementEnCours() async =>
+      _changementDossierEnCours || await _deplacementInacheve();
+
+  /// Message des suppressions manuelles refusées pendant un déplacement.
+  static const String _messageDeplacementEnCours =
+      'Les chapitres sont en cours de déplacement vers un autre dossier : '
+      'terminez (ou abandonnez) ce déplacement dans les Paramètres avant de '
+      'supprimer des chapitres téléchargés.';
+
+  /// Refuse une suppression manuelle d'archive pendant un déplacement
+  /// ([_deplacementEnCours]) : l'archive est peut-être déjà copiée dans le
+  /// nouveau dossier, l'effacer de l'ancien ne la supprimerait pas vraiment
+  /// et marquerait à tort le chapitre « non téléchargé ».
+  Future<void> _verifierAucunDeplacement() async {
+    if (await _deplacementEnCours()) {
+      throw const ErreurService(_messageDeplacementEnCours);
+    }
+  }
+
+  /// `true` si le dossier des chapitres enregistré dans les réglages n'est
+  /// plus celui de cette instance : le dossier a été changé depuis sa
+  /// création (tâche de fond Android lancée juste avant le changement, ou
+  /// autre isolat). Ses téléchargements iraient alors dans l'ancien
+  /// dossier. Sans dépôt des paramètres, ce contrôle n'est pas fait. En cas
+  /// de doute (base illisible), répond `true` : la file attendra.
+  Future<bool> _dossierRegleChange() async {
+    final depot = _depotParametres;
+    if (depot == null) return false;
+    try {
+      final regle =
+          (await depot.chargerTexte(ServiceParametres.cleDossierChapitres))
+              ?.trim() ??
+          '';
+      if (regle.isEmpty) return _stockage.estPersonnalise;
+      return !_stockage.estPersonnalise ||
+          !chemins.equals(
+            chemins.normalize(regle),
+            chemins.normalize(_stockage.dossierRacine.trim()),
+          );
+    } catch (erreur) {
+      Journal.actuel.avertissement(
+        CategorieJournal.parametres,
+        'Dossier des chapitres réglé illisible',
+        erreur: erreur,
+      );
+      return true;
+    }
+  }
+
+  /// Avant chaque chapitre de la file : `false` si le dossier réglé a
+  /// changé ([_dossierRegleChange]) ou si un déplacement est en cours
+  /// ([_deplacementEnCours]). La file s'arrête alors sans échec ni nouvel
+  /// essai : le prochain démarrage (ou l'abandon du déplacement) la relance
+  /// sur le bon dossier.
+  Future<bool> _dossierStablePourLaFile() async {
+    if (await _deplacementEnCours()) return false;
+    return !await _dossierRegleChange();
+  }
+
+  /// `true` si un déplacement des archives vers un autre dossier a commencé
+  /// sans se terminer ([ServiceParametres.cleDeplacementDossierEnCours]).
+  /// En cas de doute (base illisible), répond `true` : mieux vaut sauter un
+  /// contrôle que remettre à tort des chapitres à « non téléchargé ».
+  Future<bool> _deplacementInacheve() async {
+    final depot = _depotParametres;
+    if (depot == null) return false;
+    try {
+      final cible = await depot.chargerTexte(
+        ServiceParametres.cleDeplacementDossierEnCours,
+      );
+      return cible != null && cible.trim().isNotEmpty;
+    } catch (erreur) {
+      Journal.actuel.avertissement(
+        CategorieJournal.parametres,
+        'Repère de déplacement des archives illisible',
+        erreur: erreur,
+      );
+      return true;
+    }
+  }
+
+  // --------------------------------------------- Accès au dossier des chapitres
+
+  /// `true` si le dossier des chapitres, **choisi par le client**, est
+  /// injoignable en ce moment. Le dossier par défaut n'est jamais considéré
+  /// comme injoignable : il est créé à la première écriture.
+  Future<bool> _dossierInjoignable() async =>
+      _stockage.estPersonnalise &&
+      !await _stockage.estDossierRacineAccessible();
+
+  /// Contrôle le dossier des chapitres, met à jour [_accesDossier] et
+  /// prévient l'interface s'il a changé. Quand le dossier redevient
+  /// accessible, la file est relancée (reprise normale des téléchargements).
+  ///
+  /// [nature] : nature connue du problème (erreur d'une écriture), sinon
+  /// déduite du chemin. Ne lève jamais.
+  Future<AccesDossierChapitres> _actualiserAcces({
+    NatureErreurStockage? nature,
+  }) async {
+    bool injoignable;
+    try {
+      injoignable = await _dossierInjoignable();
+    } catch (erreur) {
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        'Contrôle du dossier des chapitres impossible',
+        erreur: erreur,
+      );
+      injoignable = _stockage.estPersonnalise;
+    }
+    final ancien = _accesDossier;
+    final nouveau = injoignable
+        ? AccesDossierChapitres.inaccessible(
+            _stockage.dossierRacine,
+            estPersonnalise: _stockage.estPersonnalise,
+            nature: _natureInaccessible(nature ?? ancien.nature),
+          )
+        : AccesDossierChapitres.accessible(
+            _stockage.dossierRacine,
+            estPersonnalise: _stockage.estPersonnalise,
+          );
+    _accesDossier = nouveau;
+    if (nouveau != ancien) {
+      // Seuls les changements d'état sont notés : le contrôle est refait
+      // avant chaque chapitre et toutes les 2 minutes quand le NAS est
+      // éteint, une ligne à chaque fois noierait le journal.
+      if (nouveau.estAccessible) {
+        Journal.actuel.info(
+          CategorieJournal.stockage,
+          'Dossier des chapitres accessible : ${nouveau.chemin}',
+        );
+      } else {
+        Journal.actuel.avertissement(
+          CategorieJournal.stockage,
+          'Dossier des chapitres inaccessible (${nouveau.nature?.name}) : '
+          '${nouveau.chemin}, téléchargements en pause',
+        );
+      }
+      _signaler();
+      // Retour du NAS : les téléchargements en attente repartent sans
+      // attendre la prochaine action du client.
+      if (nouveau.estAccessible && !_changements.isClosed) {
+        unawaited(lancerTraitement());
+      }
+    }
+    return nouveau;
+  }
+
+  /// Nature à afficher pour un dossier injoignable : celle de l'erreur si
+  /// elle décrit une absence du dossier, sinon « partage réseau » pour un
+  /// chemin réseau (`\\nas\…`) et « dossier introuvable » pour le reste.
+  NatureErreurStockage _natureInaccessible(NatureErreurStockage? connue) {
+    if (connue == NatureErreurStockage.dossierInaccessible ||
+        connue == NatureErreurStockage.reseauIndisponible) {
+      return connue!;
+    }
+    final chemin = _stockage.dossierRacine;
+    return chemin.startsWith(r'\\') || chemin.startsWith('//')
+        ? NatureErreurStockage.reseauIndisponible
+        : NatureErreurStockage.dossierInaccessible;
+  }
+
+  /// Avant de commencer un chapitre : `false` si le dossier des chapitres
+  /// est injoignable. La file s'arrête alors sans toucher aux
+  /// téléchargements en attente (ni échec, ni compteur) et un seul nouvel
+  /// essai est prévu ([attenteNouvelEssaiDossierInaccessible]) : un simple
+  /// contrôle du disque, sans requête vers les sites.
+  Future<bool> _dossierPretPourLaFile() async {
+    final acces = await _actualiserAcces();
+    if (acces.estAccessible) return true;
+    _planifierNouvelEssai(attenteNouvelEssaiDossierInaccessible);
+    return false;
+  }
+
+  /// Refuse la lecture et la suppression d'archives quand elles ont été
+  /// déplacées vers un autre dossier pendant cette session : les services
+  /// pointent encore sur l'ancien dossier jusqu'au redémarrage.
+  void _verifierArchivesSurPlace() {
+    if (_archivesDeplacees) {
+      throw const ErreurService(_messageRedemarrage);
+    }
+  }
+
+  /// Reprise des chapitres gardés mémorisés avant la migration 5 (faite une
+  /// fois par service, partagée si on la redemande).
+  Future<void>? _repriseGardes;
+
+  /// Reprend dans `chapitres.est_garde` les chapitres gardés que l'ancienne
+  /// version mémorisait dans `parametres`, puis supprime cette clé. Ne lève
+  /// jamais : en cas d'échec, la clé reste et la reprise sera refaite au
+  /// prochain démarrage (elle est idempotente).
+  Future<void> _reprendreAnciensGardes() => _repriseGardes ??= () async {
+    try {
+      final anciens = await _serviceParametres.chargerChapitresGardes();
+      if (anciens.isEmpty) return;
+      // Base d'abord, clé ensuite : un arrêt entre les deux refait
+      // seulement la reprise (sans effet la seconde fois).
+      await _depotChapitres.marquerGardes(anciens);
+      await _serviceParametres.supprimerChapitresGardes();
+    } catch (erreur, pile) {
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Reprise des chapitres gardés impossible',
+        erreur: erreur,
+        pile: pile,
+      );
+      _repriseGardes = null;
+    }
+  }();
 
   /// Libère le service (annule le nouvel essai prévu).
   Future<void> fermer() {
@@ -297,20 +781,20 @@ class ServiceTelechargement {
   /// protection en mémoire.
   Future<void> _repousserSuppressionPrevue(int idChapitre) async {
     try {
-      final chapitre = await _depotChapitres.chargerChapitre(idChapitre);
-      if (chapitre?.dateSuppressionPrevue == null) return;
-      // LIMITE : lecture puis écriture sans transaction ; si le client
-      // choisit « Garder » entre les deux, la date est reposée, mais le
-      // chapitre étant gardé, aucune suppression n'est faite et la date est
-      // retirée à la prochaine application des règles.
-      await _depotChapitres.planifierSuppression(
+      // Une seule requête conditionnelle (date existante et plus proche) :
+      // pas de course avec « Garder » ni avec l'autre isolat, et une
+      // suppression jamais créée pour un chapitre qui n'en avait pas.
+      if (await _depotChapitres.repousserSuppressionPrevue(
         idChapitre,
         _maintenant().add(delaiSuppressionDifferee),
-      );
-      _signaler();
+      )) {
+        _signaler();
+      }
     } catch (erreur) {
-      debugPrint(
-        'Suppression prévue du chapitre n°$idChapitre non repoussée : $erreur',
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Suppression prévue du chapitre n°$idChapitre non repoussée',
+        erreur: erreur,
       );
     }
   }
@@ -333,32 +817,82 @@ class ServiceTelechargement {
 
   // ------------------------------------------------- Règles de conservation
 
-  /// Applique les règles à tous les titres favoris et suivis, puis lance le
-  /// traitement de la file (sans l'attendre).
+  /// Applique les règles à tous les titres favoris et suivis (à **tous** les
+  /// titres de la bibliothèque si « Archive complète » est activée,
+  /// `ServiceParametres.chargerArchiveComplete`), puis lance le traitement
+  /// de la file (sans l'attendre).
   ///
   /// Un titre en erreur est journalisé et n'empêche pas les autres ; la file
   /// est lancée même si la lecture des listes échoue (l'erreur remonte alors
   /// à l'appelant).
+  ///
+  /// À appeler après un changement du réglage « Archive complète » : à
+  /// l'activation, tous les chapitres manquants sont mis en file et les
+  /// suppressions prévues annulées ; à la désactivation, les archives que
+  /// les règles ordinaires ne veulent plus passent en suppression différée,
+  /// et, une seule fois, toute la bibliothèque est recalculée pour retirer
+  /// de la file les téléchargements automatiques qui ne sont plus voulus
+  /// (titres sans liste ou des seules listes du client).
   Future<void> appliquerReglesATous() async {
+    // Avant les règles : un chapitre gardé avec l'ancienne version ne doit
+    // pas recevoir de suppression prévue.
+    await _reprendreAnciensGardes();
     try {
       final ids = <int>{};
+      final archiveComplete = await _serviceParametres.chargerArchiveComplete();
+      // Désactivation dans cette session : les titres ni favoris ni suivis
+      // gardaient en file tous leurs chapitres ; sans ce recalcul, la file
+      // les téléchargerait quand même (des centaines de requêtes non
+      // voulues, PLAYBOOK.md section 10). Les demandes manuelles de la
+      // session restent (`_demandesManuelles`).
+      final vientDEtreDesactivee =
+          _archiveCompleteAppliquee == true && !archiveComplete;
+      if (archiveComplete || vientDEtreDesactivee) {
+        // Archive complète : toute la bibliothèque, y compris les titres
+        // sans liste et ceux des listes du client. La file reste traitée
+        // au plus N chapitres à la fois, avec le délai par domaine de
+        // `ClientHttpPoli` : le volume ne change rien au rythme des requêtes.
+        // Juste désactivée : même parcours, sans réseau (calcul en base),
+        // pour vider la file de ce qui n'est plus voulu.
+        final titres = await _depotTitres.chargerTitres();
+        ids.addAll(titres.map((titre) => titre.id).whereType<int>());
+      }
       for (final nomListe in <String>[nomListeFavoris, nomListeSuivis]) {
         final liste = await _depotListes.chargerListeParNom(nomListe);
         if (liste?.id == null) continue;
         final titres = await _depotTitres.chargerTitres(idListe: liste!.id);
         ids.addAll(titres.map((titre) => titre.id).whereType<int>());
       }
+      // Retenu seulement une fois les titres lus : si la lecture a échoué,
+      // la désactivation sera encore reconnue à l'appel suivant.
+      _archiveCompleteAppliquee = archiveComplete;
+      var aTelecharger = 0;
+      var aSupprimer = 0;
+      var enEchec = 0;
       for (final idTitre in ids) {
         try {
-          await _appliquerRegles(idTitre, supprimerEchues: false);
+          final plan = await _appliquerRegles(idTitre, supprimerEchues: false);
+          aTelecharger += plan.idsATelecharger.length;
+          aSupprimer += plan.idsASupprimer.length;
         } catch (erreur, pile) {
           // Par exemple une écriture refusée pendant que l'autre isolat
           // écrit : ce titre sera repris à la prochaine application.
-          debugPrint(
-            'Règles du titre n°$idTitre non appliquées : $erreur\n$pile',
+          enEchec++;
+          Journal.actuel.avertissement(
+            CategorieJournal.telechargement,
+            'Règles du titre n°$idTitre non appliquées',
+            erreur: erreur,
+            pile: pile,
           );
         }
       }
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Règles appliquées à ${ids.length} titre(s)'
+        '${archiveComplete ? ' (archive complète)' : ''} : '
+        '$aTelecharger à télécharger, $aSupprimer à supprimer'
+        '${enEchec > 0 ? ', $enEchec titre(s) en échec' : ''}',
+      );
     } finally {
       // Une seule passe pour tous les titres (et même si la lecture des
       // listes a échoué) : les échéances concernent aussi des titres sortis
@@ -425,16 +959,29 @@ class ServiceTelechargement {
     final source = await _depotSources.chargerSource(idSource);
     final listes = await _depotListes.chargerListesDuTitre(idTitre);
     final noms = listes.map((liste) => liste.nom).toSet();
+    final idsSourcesLiees = await _chargerIdsSourcesLiees(idTitre, idSource);
     final politique = PolitiqueTelechargement(
       reglages: await _serviceParametres.chargerReglagesTelechargement(),
       // Même résolution que ServiceBibliotheque.languesPourTitre : langues
-      // propres au titre, sinon de la source si réglées, sinon réglage
-      // général du client.
+      // propres au titre, sinon de la source si réglées (titre à un seul
+      // site), sinon réglage général du client. Pour un titre à plusieurs
+      // sites, changer de site principal ne doit pas changer ses langues
+      // (relecture B1 : archives anglaises effacées).
       languesPreferees: ServiceBibliotheque.languesPreferees(
         source,
         general: await _serviceParametres.chargerLangues(),
         titre: titre,
+        plusieursSites: (idsSourcesLiees?.length ?? 1) > 1,
       ),
+      // Étape 8 : une version par numéro, le site principal départageant
+      // deux versions équivalentes ; les chapitres d'un site retiré ne sont
+      // plus suivis (leurs archives passent en suppression différée).
+      idSourcePrincipale: idSource,
+      idsSourcesLiees: idsSourcesLiees,
+      // Relu à chaque calcul (une lecture en base) : la tâche de fond
+      // Android voit ainsi le choix fait dans l'application, sans cache à
+      // invalider entre les isolats.
+      archiveComplete: await _serviceParametres.chargerArchiveComplete(),
     );
     final chapitres = await _depotChapitres.chargerChapitres(idTitre);
     final plan = politique.calculer(
@@ -443,6 +990,25 @@ class ServiceTelechargement {
       estSuivi: noms.contains(nomListeSuivis),
     );
     return (plan: plan, chapitres: chapitres);
+  }
+
+  /// Sites liés et lus du titre (principal compris), ou `null` sans dépôt
+  /// des sites (pas de filtre par site).
+  Future<Set<int>?> _chargerIdsSourcesLiees(
+    int idTitre,
+    int idSourcePrincipale,
+  ) async {
+    final depot = _depotTitresSources;
+    if (depot == null) return null;
+    final liens = await depot.chargerLiensTitre(idTitre);
+    // Un lien seul (tâche T4) compte comme un site retiré : ses chapitres
+    // restants (lus ou téléchargés avant le passage en lien seul) ne sont
+    // plus suivis et leurs archives suivent la règle des 24 h.
+    return <int>{
+      idSourcePrincipale,
+      for (final lien in liens)
+        if (!lien.estLienSeul) lien.idSource,
+    };
   }
 
   Future<PlanTelechargement> _appliquerRegles(
@@ -460,21 +1026,40 @@ class ServiceTelechargement {
     // complète ; l'inverse pourrait laisser un trou dans sa lecture.
     // LIMITE : pas de transaction commune (les dépôts ouvrent chacune la
     // leur) ; une application suivante des règles termine le travail.
+    var misEnFile = 0;
     for (final idChapitre in plan.idsATelecharger) {
-      await _mettreEnFileAutomatiquement(idChapitre);
+      if (await _mettreEnFileAutomatiquement(idChapitre)) misEnFile++;
     }
+    var retiresDeLaFile = 0;
+    var suppressionsPrevues = 0;
+    var suppressionsAnnulees = 0;
     // Les téléchargements en attente qui ne sont plus voulus (lecture qui a
     // avancé, titre retiré de Favoris et Suivis) sont retirés de la file ;
     // ceux que le client a demandés à la main restent.
     final idsChapitres = chapitres.map((c) => c.id).whereType<int>().toSet();
+    // Chapitres devenus externes (R4) : retirés de la file même s'ils avaient
+    // été demandés à la main (ils n'ont aucune page à télécharger). Les
+    // échecs aussi : sinon « Réessayer » resterait proposé.
+    final idsExternes = <int>{
+      for (final chapitre in chapitres)
+        if (chapitre.id != null && chapitre.estExterne) chapitre.id!,
+    };
     final file = await _depotTelechargements.chargerFile(
-      statuts: <StatutTelechargement>{StatutTelechargement.enAttente},
+      statuts: <StatutTelechargement>{
+        StatutTelechargement.enAttente,
+        StatutTelechargement.echec,
+      },
     );
     for (final telechargement in file) {
-      if (idsChapitres.contains(telechargement.idChapitre) &&
-          !plan.idsVoulus.contains(telechargement.idChapitre) &&
-          !_demandesManuelles.contains(telechargement.idChapitre)) {
+      final idChapitre = telechargement.idChapitre;
+      if (!idsChapitres.contains(idChapitre)) continue;
+      final plusVoulu =
+          telechargement.statut == StatutTelechargement.enAttente &&
+          !plan.idsVoulus.contains(idChapitre) &&
+          !_demandesManuelles.contains(idChapitre);
+      if (plusVoulu || idsExternes.contains(idChapitre)) {
         await _depotTelechargements.supprimerTelechargement(telechargement.id!);
+        retiresDeLaFile++;
       }
     }
     // Suppression différée (décision du client) : une date est posée pour
@@ -482,22 +1067,41 @@ class ServiceTelechargement {
     // redeviennent. Une date déjà posée n'est pas repoussée : sinon chaque
     // application des règles relancerait le compte à rebours affiché.
     final aSupprimer = plan.idsASupprimer.toSet();
-    final gardes = await _serviceParametres.chargerChapitresGardes();
     final echeance = _maintenant().add(delaiSuppressionDifferee);
     for (final chapitre in chapitres) {
       final id = chapitre.id;
       if (id == null || !chapitre.estTelecharge) continue;
-      // Choix « Garder » du client : jamais supprimé par les règles. Un
-      // téléchargement manuel hors des règles (autre langue, chapitre
-      // ancien) n'est pas exempté : le compte à rebours affiché laisse 24 h
-      // au client pour le garder.
-      final voulu = !aSupprimer.contains(id) || gardes.contains(id);
+      // Choix « Garder » du client (`est_garde`) : jamais supprimé par les
+      // règles. Un téléchargement manuel hors des règles (autre langue,
+      // chapitre ancien) n'est pas exempté : le compte à rebours affiché
+      // laisse 24 h au client pour le garder.
+      final voulu = !aSupprimer.contains(id) || chapitre.estGarde;
       if (!voulu && chapitre.dateSuppressionPrevue == null) {
         await _depotChapitres.planifierSuppression(id, echeance);
+        suppressionsPrevues++;
       } else if (voulu && chapitre.dateSuppressionPrevue != null) {
         await _depotChapitres.planifierSuppression(id, null);
+        suppressionsAnnulees++;
       }
     }
+    // Une ligne seulement quand quelque chose change : les règles sont
+    // appliquées à chaque lecture et à chaque démarrage, pour tous les
+    // titres ; un titre déjà à jour ne mérite qu'une ligne de débogage.
+    final aChange =
+        misEnFile +
+            retiresDeLaFile +
+            suppressionsPrevues +
+            suppressionsAnnulees >
+        0;
+    Journal.actuel.journaliser(
+      aChange ? NiveauJournal.info : NiveauJournal.debogage,
+      CategorieJournal.telechargement,
+      'Règles du titre n°$idTitre : ${plan.idsATelecharger.length} à '
+      'télécharger, ${plan.idsASupprimer.length} à supprimer ; $misEnFile '
+      'mis en file, $retiresDeLaFile retiré(s) de la file, '
+      '$suppressionsPrevues suppression(s) prévue(s), $suppressionsAnnulees '
+      'annulée(s)',
+    );
     if (supprimerEchues) {
       await _supprimerArchivesEchuesSansErreur(signalerChangement: false);
     }
@@ -525,11 +1129,24 @@ class ServiceTelechargement {
   }
 
   Future<int> _supprimerArchivesEchues() async {
+    // Avant tout effacement : un chapitre gardé avec l'ancienne version (clé
+    // `parametres`) n'a pas encore `est_garde` et serait sinon supprimé si
+    // cette méthode passe avant `appliquerReglesATous` (tâche de fond,
+    // appel de l'interface au retour au premier plan).
+    await _reprendreAnciensGardes();
+    // Dossier changé pendant cette session (les archives sont ou seront
+    // ailleurs) ou injoignable : effacer échouerait, ou effacerait au mauvais
+    // endroit en marquant le chapitre « non téléchargé ». Les échéances
+    // restent en base et seront traitées plus tard.
+    if (_dossierChange || await _dossierInjoignable()) return 0;
+    // Déplacement en cours ou inachevé : l'archive est peut-être déjà dans
+    // le nouveau dossier ; l'effacer de l'ancien laisserait sa copie et
+    // marquerait le chapitre « non téléchargé ». Les échéances attendent.
+    if (await _deplacementEnCours()) return 0;
     final echues = await _depotChapitres.chargerSuppressionsEchues(
       _maintenant(),
     );
     if (echues.isEmpty) return 0;
-    final gardes = await _serviceParametres.chargerChapitresGardes();
     // Chapitres encore à supprimer selon les règles, par titre (un calcul
     // par titre concerné, pas par chapitre).
     final aSupprimerParTitre = <int, Set<int>>{};
@@ -554,9 +1171,10 @@ class ServiceTelechargement {
               (await _calculerPlan(idTitre))?.plan.idsASupprimer.toSet() ??
               const <int>{};
         }
-        if (gardes.contains(id) || !aSupprimer.contains(id)) {
-          // Gardé par le client (peut-être dans l'autre isolat), ou plus à
-          // supprimer : la date n'a plus lieu d'être.
+        // Les chapitres gardés sont déjà exclus par la requête des échéances
+        // (`est_garde`), même gardés dans l'autre isolat.
+        if (!aSupprimer.contains(id)) {
+          // Plus à supprimer : la date n'a plus lieu d'être.
           await _depotChapitres.planifierSuppression(id, null);
           annulees++;
           continue;
@@ -564,9 +1182,18 @@ class ServiceTelechargement {
         await supprimerTelechargement(id, signalerChangement: false);
         nombre++;
       } catch (erreur) {
-        debugPrint('Suppression prévue du chapitre n°$id impossible : $erreur');
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Suppression prévue du chapitre n°$id impossible',
+          erreur: erreur,
+        );
       }
     }
+    Journal.actuel.info(
+      CategorieJournal.telechargement,
+      'Suppressions échues : $nombre archive(s) supprimée(s), $annulees '
+      'annulée(s) sur ${echues.length}',
+    );
     // Les dates annulées changent l'affichage (fin du compte à rebours
     // rouge) même si rien n'a été effacé.
     if (annulees > 0) _signaler();
@@ -582,7 +1209,12 @@ class ServiceTelechargement {
       final nombre = await _supprimerArchivesEchues();
       if (nombre > 0 && signalerChangement) _signaler();
     } catch (erreur, pile) {
-      debugPrint('Suppressions prévues non faites : $erreur\n$pile');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Suppressions prévues non faites',
+        erreur: erreur,
+        pile: pile,
+      );
     }
   }
 
@@ -597,43 +1229,77 @@ class ServiceTelechargement {
   /// peut encore le supprimer. Sans effet visible si aucune suppression
   /// n'était prévue (le chapitre est simplement marqué gardé).
   Future<void> annulerSuppression(int idChapitre) async {
-    final gardes = await _serviceParametres.chargerChapitresGardes();
-    // Retiré puis ajouté : le plus récent passe en fin de liste et survit à
-    // la borne de ServiceParametres.nombreMaximalChapitresGardes.
-    gardes
-      ..remove(idChapitre)
-      ..add(idChapitre);
-    await _serviceParametres.enregistrerChapitresGardes(gardes);
-    await _depotChapitres.planifierSuppression(idChapitre, null);
+    // Une seule requête : le chapitre est marqué gardé et sa date effacée
+    // ensemble, sans fenêtre où l'autre isolat pourrait le supprimer.
+    await _depotChapitres.marquerGarde(idChapitre);
     _signaler();
   }
 
+  /// Retire le choix « Garder » d'un chapitre ([annulerSuppression]) puis
+  /// applique les règles de son titre : s'il n'est plus voulu, sa
+  /// suppression est de nouveau prévue dans 24 heures.
+  Future<void> retirerGarde(int idChapitre) async {
+    await _depotChapitres.marquerGarde(idChapitre, estGarde: false);
+    final idTitre = (await _depotChapitres.chargerChapitre(idChapitre))
+        ?.idTitre;
+    if (idTitre != null) {
+      await appliquerRegles(idTitre);
+    } else {
+      _signaler();
+    }
+  }
+
   /// Chapitres gardés par le client ([annulerSuppression]) : l'interface
-  /// peut l'indiquer à côté du chapitre.
+  /// peut l'indiquer à côté du chapitre (`Chapitre.estGarde` donne la même
+  /// information chapitre par chapitre).
   Future<Set<int>> chargerChapitresGardes() =>
-      _serviceParametres.chargerChapitresGardes();
+      _depotChapitres.chargerIdsChapitresGardes();
+
+  /// Chapitres dont la suppression est prévue (tous titres, ou seulement
+  /// [idTitre]), la plus proche d'abord : section rouge de l'onglet
+  /// Téléchargements, avec le compte à rebours
+  /// (`Chapitre.dateSuppressionPrevue`).
+  Future<List<Chapitre>> chargerSuppressionsPrevues({int? idTitre}) =>
+      _depotChapitres.chargerSuppressionsPrevues(idTitre: idTitre);
 
   /// Met un chapitre voulu par les règles en file, ou relance son échec.
-  Future<void> _mettreEnFileAutomatiquement(int idChapitre) async {
+  /// Renvoie `true` si la file a changé (pour le bilan du journal).
+  Future<bool> _mettreEnFileAutomatiquement(int idChapitre) async {
     // Relu juste avant : l'autre isolat a pu le terminer depuis le calcul du
     // plan.
     final chapitre = await _depotChapitres.chargerChapitre(idChapitre);
-    if (chapitre == null || chapitre.estTelecharge) return;
+    // Chapitre hébergé ailleurs (R4) : jamais téléchargeable. La politique
+    // l'écarte déjà ; contrôle redit ici car il a pu devenir externe depuis
+    // le calcul du plan.
+    if (chapitre == null || chapitre.estTelecharge || chapitre.estExterne) {
+      return false;
+    }
     final existant = await _depotTelechargements.chargerParChapitre(idChapitre);
     if (existant == null) {
       await _depotTelechargements.ajouterEnFile(idChapitre);
-      return;
+      Journal.actuel.debogage(
+        CategorieJournal.telechargement,
+        'Chapitre n°$idChapitre mis en file (règles)',
+      );
+      return true;
     }
     // Seul un échec est relancé : « en attente » et « en cours » sont déjà
     // pris en charge, et « terminé » signifie qu'un autre traitement vient de
     // finir (l'état du chapitre sera à jour au prochain calcul).
-    if (existant.statut != StatutTelechargement.echec) return;
+    if (existant.statut != StatutTelechargement.echec) return false;
     // Pas de relance sans fin d'un chapitre que le site refuse.
-    if ((_echecs[idChapitre] ?? 0) >= nombreMaximalEchecsAutomatiques) return;
+    if ((_echecs[idChapitre] ?? 0) >= nombreMaximalEchecsAutomatiques) {
+      return false;
+    }
     await _depotTelechargements.enregistrerStatut(
       existant.id!,
       StatutTelechargement.enAttente,
     );
+    Journal.actuel.debogage(
+      CategorieJournal.telechargement,
+      'Chapitre n°$idChapitre relancé après un échec (règles)',
+    );
+    return true;
   }
 
   // ------------------------------------------------- Actions du client
@@ -647,16 +1313,35 @@ class ServiceTelechargement {
   /// Une demande manuelle relance aussi un chapitre que les règles ne
   /// relancent plus (trop d'échecs), et n'est pas retirée de la file par les
   /// règles pendant cette session.
+  ///
+  /// Lève une [ErreurService] pour un chapitre hébergé sur un site externe
+  /// (`Chapitre.estExterne`) : il se lit sur ce site et n'a aucune page à
+  /// télécharger (R4).
   Future<void> telechargerChapitre(int idChapitre) async {
+    final chapitre = await _depotChapitres.chargerChapitre(idChapitre);
+    if (chapitre != null && chapitre.estExterne) {
+      throw const ErreurService(
+        "Ce chapitre se lit sur le site de l'éditeur : il ne peut pas être "
+        'téléchargé.',
+      );
+    }
     _demandesManuelles.add(idChapitre);
     _echecs.remove(idChapitre);
     final existant = await _depotTelechargements.chargerParChapitre(idChapitre);
     if (existant == null) {
       await _depotTelechargements.ajouterEnFile(idChapitre);
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Chapitre n°$idChapitre mis en file (demande manuelle)',
+      );
     } else if (existant.statut == StatutTelechargement.echec) {
       await _depotTelechargements.enregistrerStatut(
         existant.id!,
         StatutTelechargement.enAttente,
+      );
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Chapitre n°$idChapitre relancé (demande manuelle)',
       );
     }
     _signaler();
@@ -668,19 +1353,38 @@ class ServiceTelechargement {
   /// fichiers `.zip` sur l'appareil.
   ///
   /// Les archives sont effacées d'abord (et leurs chapitres marqués non
-  /// téléchargés) : si une suppression de fichier échoue, l'erreur remonte
-  /// et le titre reste, pour pouvoir réessayer sans perdre la trace des
-  /// fichiers. Un téléchargement en cours pour ce titre s'arrête à la page
-  /// suivante (sa ligne de file disparaît avec le titre).
+  /// téléchargés), puis la couverture enregistrée : si une suppression de
+  /// fichier échoue, l'erreur remonte et le titre reste, pour pouvoir
+  /// réessayer sans perdre la trace des fichiers. Un téléchargement en cours
+  /// pour ce titre s'arrête à la page suivante (sa ligne de file disparaît
+  /// avec le titre).
+  ///
+  /// Lève une [ErreurService] pendant un déplacement des archives (en cours
+  /// ou inachevé) : archives et couverture sont peut-être déjà copiées
+  /// ailleurs.
   Future<void> supprimerTitre(int idTitre) async {
+    _verifierArchivesSurPlace();
+    await _verifierAucunDeplacement();
     final chapitres = await _depotChapitres.chargerChapitres(idTitre);
+    var archives = 0;
     for (final chapitre in chapitres) {
       final id = chapitre.id;
       if (id != null && chapitre.estTelecharge) {
         await supprimerTelechargement(id, signalerChangement: false);
+        archives++;
       }
     }
+    final titre = await _depotTitres.chargerTitre(idTitre);
+    if (titre != null) {
+      // Après les archives : le dossier du titre n'est retiré que vide.
+      await _stockage.supprimerCouverture(titre);
+    }
     await _depotTitres.supprimerTitre(idTitre);
+    Journal.actuel.info(
+      CategorieJournal.bibliotheque,
+      'Titre n°$idTitre${titre == null ? '' : ' « ${titre.nom} »'} supprimé '
+      'avec $archives archive(s)',
+    );
     _signaler();
   }
 
@@ -690,10 +1394,20 @@ class ServiceTelechargement {
   /// page suivante et son archive partielle est effacée (annulation). Un
   /// chapitre seulement en file (jamais téléchargé) perd sa ligne de file
   /// sans qu'aucune archive ne soit touchée.
+  ///
+  /// Lève une [ErreurService] (message clair) si le chapitre a une archive
+  /// et qu'un déplacement des archives est en cours ou resté inachevé :
+  /// l'archive est peut-être déjà copiée dans le nouveau dossier. Retirer de
+  /// la file un chapitre sans archive reste possible.
   Future<void> supprimerTelechargement(
     int idChapitre, {
     bool signalerChangement = true,
   }) async {
+    _verifierArchivesSurPlace();
+    final avant = await _depotChapitres.chargerChapitre(idChapitre);
+    if (avant != null && (avant.estTelecharge || avant.nomArchive != null)) {
+      await _verifierAucunDeplacement();
+    }
     // Ligne de file d'abord : un téléchargement qui se termine pendant cette
     // suppression ne peut plus s'enregistrer « terminé » (sa ligne a
     // disparu) et efface lui-même son archive. Dans l'ordre inverse, il
@@ -720,11 +1434,22 @@ class ServiceTelechargement {
     }
     // Efface aussi le nom d'archive et la suppression prévue.
     await _depotChapitres.enregistrerArchive(idChapitre, null);
+    if (avant != null && (avant.estTelecharge || avant.nomArchive != null)) {
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Archive du chapitre n°$idChapitre supprimée'
+        '${avant.dateSuppressionPrevue != null ? ' (suppression prévue)' : ''}',
+      );
+    } else if (ligne != null) {
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Chapitre n°$idChapitre retiré de la file',
+      );
+    }
     // Un chapitre supprimé n'a plus à être « gardé » : s'il est retéléchargé,
     // les règles s'appliquent à nouveau normalement.
-    final gardes = await _serviceParametres.chargerChapitresGardes();
-    if (gardes.remove(idChapitre)) {
-      await _serviceParametres.enregistrerChapitresGardes(gardes);
+    if (chapitre?.estGarde ?? false) {
+      await _depotChapitres.marquerGarde(idChapitre, estGarde: false);
     }
     if (signalerChangement) {
       _signaler();
@@ -767,6 +1492,9 @@ class ServiceTelechargement {
   }
 
   Future<_ContexteChapitre> _exigerContexte(int idChapitre) async {
+    // Lecture d'une archive : refusée si les archives viennent d'être
+    // déplacées (message clair plutôt que « pas téléchargé »).
+    _verifierArchivesSurPlace();
     final contexte = await _chargerContexte(idChapitre);
     if (contexte == null) {
       throw const ErreurService('Ce chapitre n\'existe plus.');
@@ -779,7 +1507,10 @@ class ServiceTelechargement {
     final idTitre = chapitre?.idTitre;
     if (chapitre == null || idTitre == null) return null;
     final titre = await _depotTitres.chargerTitre(idTitre);
-    final idSource = titre?.idSource;
+    // Étape 8 : le contenu d'un chapitre se demande au site d'où il vient
+    // (un site secondaire peut être d'un autre type que le principal) ; un
+    // chapitre sans site connu vient du site principal.
+    final idSource = chapitre.idSource ?? titre?.idSource;
     if (titre == null || idSource == null) return null;
     final source = await _depotSources.chargerSource(idSource);
     if (source == null) return null;
@@ -810,14 +1541,28 @@ class ServiceTelechargement {
   /// l'expiration de ce verrou, et tout appel suivant réessaie aussi. Ne lève
   /// jamais d'erreur (elles sont journalisées) : l'appel peut être lancé sans
   /// être attendu.
+  ///
+  /// File en pause (changement du dossier des chapitres) : rien n'est lancé.
+  ///
+  /// Pendant un traitement, l'appel le réveille : le nombre de
+  /// téléchargements simultanés est relu et les emplacements libres sont
+  /// remplis tout de suite. À appeler après
+  /// `ServiceParametres.enregistrerTelechargementsSimultanes`.
   Future<void> lancerTraitement() {
     final enCours = _traitement;
     if (enCours != null) {
+      // Demande notée même si la boucle est en train de finir : elle sera
+      // servie par un nouveau passage ([_traiterFileTantQueDemande]).
+      _relanceDemandee = true;
+      _reveiller();
       return enCours;
+    }
+    if (_enPause) {
+      return Future<void>.value();
     }
     _relance?.cancel();
     _relance = null;
-    final nouveau = _traiterFile().whenComplete(() {
+    final nouveau = _traiterFileTantQueDemande().whenComplete(() {
       _traitement = null;
       _signaler();
     });
@@ -825,47 +1570,284 @@ class ServiceTelechargement {
     return nouveau;
   }
 
+  /// Traite la file, puis la retraite tant que [lancerTraitement] a été
+  /// appelé pendant la fin du passage précédent ([_relanceDemandee]).
+  ///
+  /// Relance faite dans le même `Future` plutôt qu'après sa fin : celui qui
+  /// attend [lancerTraitement] attend aussi le chapitre ajouté au dernier
+  /// moment. Toujours borné : un passage de plus n'a lieu que si un appel
+  /// est arrivé pendant le précédent (le drapeau est remis à `false` à
+  /// chaque recherche d'un chapitre en attente), jamais en boucle seule.
+  Future<void> _traiterFileTantQueDemande() async {
+    do {
+      _relanceDemandee = false;
+      await _traiterFile();
+    } while (_relanceDemandee && !_enPause && !_changements.isClosed);
+    _relanceDemandee = false;
+  }
+
   Future<void> _traiterFile() async {
     // Rend la main avant de commencer : `_traitement` est affecté avant
     // qu'une fin immédiate ne le remette à null.
     await Future<void>.value();
+    if (_enPause) return;
     try {
+      // Dossier des chapitres injoignable (NAS éteint) : la file attend, sans
+      // rien demander aux sites ni compter d'échec.
+      if (!await _dossierPretPourLaFile()) return;
       final verrou = await _prendreVerrou();
       if (verrou != null) {
         _planifierRelance(verrou);
         return;
       }
       try {
+        _verrouPerdu = false;
+        // Même contrôle qu'avant chaque chapitre, avant de toucher aux
+        // archives partielles de l'ancien dossier.
+        if (!await _dossierStablePourLaFile()) return;
         await _reprendreApresInterruption();
-        while (!_changements.isClosed) {
-          // Renouvelé avant chaque chapitre ; si un autre isolat a repris le
-          // verrou entre-temps (le nôtre avait expiré), on lui laisse la file
-          // plutôt que d'écrire les mêmes archives que lui.
-          if (!await _renouvelerVerrou(verifier: true)) {
-            return;
-          }
-          // Réservation atomique (en attente → en cours) : même si les deux
-          // isolats se croient propriétaires du verrou (voir la LIMITE
-          // ci-dessous), un chapitre n'est jamais pris par les deux.
-          final suivant = await _depotTelechargements.reserverProchain();
-          if (suivant == null) {
-            // File vide : les suppressions prévues échues pendant le
-            // traitement (qui peut durer longtemps) sont faites maintenant.
-            await _supprimerArchivesEchuesSansErreur();
-            await _planifierRepriseSiNecessaire();
-            return;
-          }
-          await _telecharger(suivant);
-        }
+        await _traiterChapitresEnParallele();
       } finally {
+        // Toujours après la fin de tous les chapitres en cours
+        // (`_traiterChapitresEnParallele` les attend même en cas d'erreur) :
+        // l'autre isolat ne doit pas reprendre la file pendant qu'on écrit.
         await _libererVerrou();
       }
     } catch (erreur, pile) {
       // Une erreur de base (par exemple une écriture concurrente de l'autre
       // isolat) ne doit pas remonter jusqu'à l'interface : la file sera
       // reprise au prochain lancement.
-      debugPrint('Traitement de la file interrompu : $erreur\n$pile');
+      Journal.actuel.erreur(
+        CategorieJournal.telechargement,
+        'Traitement de la file interrompu',
+        erreur: erreur,
+        pile: pile,
+      );
     }
+  }
+
+  /// Cœur de la file, verrou pris : garde jusqu'à N chapitres en cours
+  /// ([_chargerLimiteSimultanes]) et commence le suivant dès qu'un
+  /// emplacement se libère, jusqu'à ce que la file soit vide ou qu'un
+  /// contrôle demande l'arrêt. Ne rend la main qu'une fois **tous** les
+  /// chapitres commencés terminés (même si une erreur de base interrompt la
+  /// boucle) : le verrou reste ainsi tenu, et renouvelé page après page,
+  /// tant qu'une archive est en cours d'écriture.
+  ///
+  /// Les contrôles d'avant chapitre de la file à un seul chapitre sont faits
+  /// avant **chaque** réservation (pause, dossier réglé ou en déplacement,
+  /// verrou, dossier joignable). Quand l'un d'eux échoue, aucun chapitre
+  /// n'est plus commencé ; ceux en cours se terminent (comme le chapitre en
+  /// cours d'avant), sauf verrou perdu, où ils s'arrêtent à leur page
+  /// suivante.
+  Future<void> _traiterChapitresEnParallele() async {
+    final enCours = <Future<void>>{};
+    var limite = await _chargerLimiteSimultanes();
+    // Ligne de début écrite au premier chapitre réservé seulement : la file
+    // est relancée à chaque lecture et à chaque application des règles, une
+    // ligne par relance sans rien à télécharger noierait le journal.
+    var debutAnnonce = false;
+    // Plus aucun chapitre ne doit être commencé (pause, dossier changé ou
+    // injoignable, verrou perdu, erreur inattendue).
+    var arret = false;
+    // Dossier des chapitres devenu injoignable pendant un chapitre.
+    var dossierPerdu = false;
+    try {
+      while (!_changements.isClosed) {
+        // Les demandes arrivées jusqu'ici sont servies par le remplissage
+        // qui suit (il relit la file) : seules les suivantes demandent un
+        // nouveau passage.
+        _relanceDemandee = false;
+        // Remplissage des emplacements libres.
+        while (!arret && enCours.length < limite) {
+          // Pause demandée pendant le traitement (changement du dossier) :
+          // les chapitres en cours se terminent, aucun autre n'est commencé.
+          // Verrou repris par l'autre isolat (vu par un chapitre en cours) :
+          // on lui laisse la file.
+          if (_enPause || _verrouPerdu) {
+            arret = true;
+            break;
+          }
+          // Réglages relus avant chaque chapitre : la pause est propre à cet
+          // isolat, et une tâche de fond Android lancée avant un changement
+          // de dossier écrirait sinon dans l'ancien dossier (ou pendant la
+          // copie). Arrêt sans échec : le chapitre reste en attente.
+          if (!await _dossierStablePourLaFile()) {
+            arret = true;
+            break;
+          }
+          // Renouvelé avant chaque chapitre ; si un autre isolat a repris le
+          // verrou entre-temps (le nôtre avait expiré), on lui laisse la file
+          // plutôt que d'écrire les mêmes archives que lui.
+          if (!await _renouvelerVerrou(verifier: true)) {
+            _verrouPerdu = true;
+            arret = true;
+            break;
+          }
+          // Le NAS peut s'éteindre au milieu d'une longue file : contrôle
+          // avant chaque chapitre, avant toute requête vers le site.
+          if (!await _dossierPretPourLaFile()) {
+            arret = true;
+            break;
+          }
+          // Réservation atomique (en attente → en cours) : ni deux chapitres
+          // en cours de ce traitement, ni les deux isolats (même s'ils se
+          // croient tous deux propriétaires du verrou, voir la LIMITE plus
+          // bas) ne peuvent prendre la même ligne. Les réservations de ce
+          // traitement se font de plus une par une (chaque `await` ci-dessus
+          // est fini avant la suivante).
+          final suivant = await _depotTelechargements.reserverProchain();
+          if (suivant == null) break;
+          if (!debutAnnonce) {
+            debutAnnonce = true;
+            Journal.actuel.info(
+              CategorieJournal.telechargement,
+              "File de téléchargement : début, jusqu'à $limite chapitre(s) "
+              'en même temps${_descriptionPlafond(limite)}',
+            );
+          }
+          late final Future<void> tache;
+          tache =
+              _executerChapitre(
+                suivant,
+                surDossierPerdu: () {
+                  dossierPerdu = true;
+                  arret = true;
+                },
+                surErreur: () => arret = true,
+              ).whenComplete(() {
+                enCours.remove(tache);
+              });
+          enCours.add(tache);
+        }
+        if (enCours.isEmpty) {
+          if (!arret) {
+            // File vide : les suppressions prévues échues pendant le
+            // traitement (qui peut durer longtemps) sont faites maintenant.
+            await _supprimerArchivesEchuesSansErreur();
+            await _planifierRepriseSiNecessaire();
+          }
+          return;
+        }
+        // Attente de la fin d'un chapitre, ou d'un réveil
+        // ([lancerTraitement] : chapitre ajouté, réglage changé). Jamais de
+        // boucle active : sans l'un ou l'autre, rien n'est relu.
+        final reveil = _reveil = Completer<void>();
+        await Future.any<void>(<Future<void>>[...enCours, reveil.future]);
+        _reveil = null;
+        if (!arret) {
+          // Réglage relu à chaque emplacement libéré (une lecture en base) :
+          // la jauge des Paramètres s'applique sans redémarrer la file. Une
+          // baisse laisse finir les chapitres en trop sans en commencer.
+          final nouvelle = await _chargerLimiteSimultanes();
+          if (nouvelle != limite) {
+            Journal.actuel.info(
+              CategorieJournal.telechargement,
+              'File de téléchargement : $limite → $nouvelle chapitre(s) en '
+              'même temps${_descriptionPlafond(nouvelle)}',
+            );
+            limite = nouvelle;
+          }
+        }
+      }
+    } finally {
+      _reveil = null;
+      // Copie : chaque fin de chapitre retire sa tâche de l'ensemble.
+      await Future.wait<void>(enCours.toList());
+      if (dossierPerdu) {
+        // Dossier devenu injoignable pendant un chapitre : la file attend
+        // son retour (un seul nouvel essai prévu).
+        _planifierNouvelEssai(attenteNouvelEssaiDossierInaccessible);
+      }
+    }
+  }
+
+  /// Télécharge un chapitre réservé, pour [_traiterChapitresEnParallele].
+  /// Ne lève jamais : [surDossierPerdu] est appelé si le dossier des
+  /// chapitres est devenu injoignable, [surErreur] pour une erreur
+  /// inattendue (qui arrêtait toute la file quand un seul chapitre était
+  /// traité à la fois : même effet ici, plus aucun chapitre n'est commencé).
+  Future<void> _executerChapitre(
+    Telechargement telechargement, {
+    required void Function() surDossierPerdu,
+    required void Function() surErreur,
+  }) async {
+    try {
+      if (!await _telecharger(telechargement)) surDossierPerdu();
+    } catch (erreur, pile) {
+      surErreur();
+      Journal.actuel.erreur(
+        CategorieJournal.telechargement,
+        'Traitement de la file interrompu (chapitre n°'
+        '${telechargement.idChapitre})',
+        erreur: erreur,
+        pile: pile,
+      );
+    }
+  }
+
+  /// Réveille la boucle de la file si elle attend (voir [_reveil]).
+  void _reveiller() {
+    final reveil = _reveil;
+    if (reveil != null && !reveil.isCompleted) reveil.complete();
+  }
+
+  /// Nombre de chapitres à télécharger en même temps : réglage du client,
+  /// ramené au plafond de l'isolat ([_plafondEffectif]). Ne lève jamais :
+  /// un réglage illisible vaut la valeur par défaut.
+  Future<int> _chargerLimiteSimultanes() async {
+    int reglage;
+    try {
+      reglage = await _serviceParametres.chargerTelechargementsSimultanes();
+    } catch (erreur) {
+      Journal.actuel.avertissement(
+        CategorieJournal.parametres,
+        'Nombre de téléchargements simultanés illisible',
+        erreur: erreur,
+      );
+      reglage = telechargementsSimultanesParDefaut;
+    }
+    // Bornes redites ici : un faux `ServiceParametres` (ou une future
+    // version) ne doit jamais lancer 0 ou 1000 chapitres.
+    final borne = reglage.clamp(
+      telechargementsSimultanesMinimum,
+      telechargementsSimultanesMaximum,
+    );
+    final plafond = _plafondEffectif();
+    return plafond != null && plafond < borne ? plafond : borne;
+  }
+
+  /// Plafond des téléchargements simultanés de cet isolat, ou `null`.
+  ///
+  /// Celui passé au constructeur s'il existe ; sinon
+  /// [telechargementsSimultanesTacheDeFond] dans la tâche de fond Android,
+  /// reconnue à son journal (`JournalFichier` installé avec
+  /// [nomIsolatFond] avant la construction des services).
+  // LIMITE : sans plafond passé au constructeur, la tâche de fond n'est
+  // reconnue que par son journal ; si celui-ci n'a pas pu être ouvert, elle
+  // suit le réglage du client (32 au plus). Passer
+  // `plafondTelechargementsSimultanes` depuis `executerTacheDeFond`
+  // (lib/main.dart) supprimerait cette dépendance.
+  int? _plafondEffectif() {
+    final impose = _plafondSimultanes;
+    if (impose != null) {
+      return impose < telechargementsSimultanesMinimum
+          ? telechargementsSimultanesMinimum
+          : impose;
+    }
+    final journal = Journal.actuel;
+    if (journal is JournalFichier && journal.nomIsolat == nomIsolatFond) {
+      return telechargementsSimultanesTacheDeFond;
+    }
+    return null;
+  }
+
+  /// Précision du journal quand [limite] vient du plafond de l'isolat.
+  String _descriptionPlafond(int limite) {
+    final plafond = _plafondEffectif();
+    return plafond != null && limite >= plafond
+        ? ' (plafond de cet isolat : $plafond)'
+        : '';
   }
 
   /// Remet en attente les téléchargements « en cours » et efface les
@@ -887,7 +1869,11 @@ class ServiceTelechargement {
     } catch (erreur) {
       // Un fichier partiel impossible à effacer ne doit pas bloquer la file :
       // l'écriture du même chapitre repartira de zéro.
-      debugPrint('Nettoyage des archives partielles impossible : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        'Nettoyage des archives partielles impossible',
+        erreur: erreur,
+      );
     }
   }
 
@@ -964,12 +1950,19 @@ class ServiceTelechargement {
       return true;
     }
     try {
-      return await _renouvelerVerrou(verifier: true);
+      final garde = await _renouvelerVerrou(verifier: true);
+      // Partagé par tous les chapitres en cours (voir [_verrouPerdu]).
+      if (!garde) _verrouPerdu = true;
+      return garde;
     } catch (erreur) {
       // Un renouvellement manqué (base momentanément occupée) ne doit pas
       // faire échouer le chapitre : le verrou reste valable jusqu'à son
       // expiration, et sera revérifié à la page suivante.
-      debugPrint('Renouvellement du verrou impossible : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Renouvellement du verrou impossible',
+        erreur: erreur,
+      );
       return true;
     }
   }
@@ -984,7 +1977,11 @@ class ServiceTelechargement {
       }
     } catch (erreur) {
       // Le verrou expirera de lui-même.
-      debugPrint('Libération du verrou de téléchargement impossible : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Libération du verrou de téléchargement impossible',
+        erreur: erreur,
+      );
     }
   }
 
@@ -1012,7 +2009,11 @@ class ServiceTelechargement {
         _planifierNouvelEssai(_dureeVerrou + margeNouvelEssaiVerrou);
       }
     } catch (erreur) {
-      debugPrint('Contrôle des téléchargements en cours impossible : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Contrôle des téléchargements en cours impossible',
+        erreur: erreur,
+      );
     }
   }
 
@@ -1038,7 +2039,12 @@ class ServiceTelechargement {
 
   /// Télécharge un chapitre de la file. Ne lève jamais : toute erreur met le
   /// téléchargement en échec (ou est journalisée si même cela échoue).
-  Future<void> _telecharger(Telechargement telechargement) async {
+  ///
+  /// Exception : si le dossier des chapitres (choisi par le client) est
+  /// injoignable, le téléchargement est remis en attente, sans échec ni
+  /// compteur d'échecs, et la méthode renvoie `false` pour que la file
+  /// s'arrête. Renvoie `true` dans tous les autres cas.
+  Future<bool> _telecharger(Telechargement telechargement) async {
     final id = telechargement.id!;
     final idChapitre = telechargement.idChapitre;
     EcritureChapitre? ecriture;
@@ -1046,15 +2052,34 @@ class ServiceTelechargement {
     // l'enregistrement échoue, sinon elle resterait sur le disque sans
     // qu'aucun chapitre ne la désigne.
     String? archiveOrpheline;
+    // Durée et nombre de pages pour le journal (aide au diagnostic d'un site
+    // lent ou d'un chapitre incomplet).
+    final chrono = Stopwatch()..start();
+    var nombrePages = 0;
+    var description = 'chapitre n°$idChapitre';
     try {
       // Déjà « en cours » : la ligne a été réservée par reserverProchain().
       _signaler();
 
       final contexte = await _chargerContexte(idChapitre);
-      if (contexte == null) {
+      // Chapitre disparu, ou devenu externe depuis sa mise en file (R4) :
+      // la ligne est retirée sans rien demander au site.
+      if (contexte == null || contexte.chapitre.estExterne) {
         await _depotTelechargements.supprimerTelechargement(id);
-        return;
+        Journal.actuel.info(
+          CategorieJournal.telechargement,
+          'Chapitre n°$idChapitre retiré de la file (disparu ou externe)',
+        );
+        return true;
       }
+      description =
+          'chapitre n°$idChapitre (« ${contexte.titre.nom} » '
+          'ch. ${_formaterNumero(contexte.chapitre.numero)} '
+          '${contexte.chapitre.langue}, ${contexte.source.nom})';
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Téléchargement du $description : début',
+      );
       final adaptateur = _fabriqueSources.creer(contexte.source);
       var contenu = await adaptateur.recupererContenu(
         contexte.chapitre.urlChapitre,
@@ -1069,6 +2094,7 @@ class ServiceTelechargement {
         await ecriture.ajouterTexte(texte);
       } else {
         final total = contenu.urlsImages.length;
+        nombrePages = total;
         await _depotTelechargements.enregistrerProgression(
           id,
           nombrePagesFaites: 0,
@@ -1084,9 +2110,7 @@ class ServiceTelechargement {
           contenu = contenuAJour;
           await ecriture.ajouterPage(
             octets,
-            extension:
-                StockageTelechargements.extensionDepuisUrl(url) ??
-                extensionImageParDefaut,
+            extension: extensionImage(octets, url),
           );
           // La ligne a disparu (le client a annulé ou supprimé le titre) :
           // on s'arrête sans solliciter le site pour les pages restantes.
@@ -1096,7 +2120,10 @@ class ServiceTelechargement {
           )) {
             throw const _Annulation();
           }
-          if (!await _renouvelerVerrouSiNecessaire()) {
+          // Verrou repris par l'autre isolat, vu par un autre chapitre en
+          // cours (ou par celui-ci) : chaque chapitre s'arrête à sa page
+          // suivante, sans attendre son propre renouvellement.
+          if (_verrouPerdu || !await _renouvelerVerrouSiNecessaire()) {
             throw const _VerrouPerdu();
           }
           _signaler();
@@ -1125,23 +2152,78 @@ class ServiceTelechargement {
         // plus voulue et ne serait suivie par aucune ligne en base.
         archiveOrpheline = null;
         await _stockage.supprimerArchive(nomArchive);
-        return;
+        Journal.actuel.info(
+          CategorieJournal.telechargement,
+          'Téléchargement du $description annulé à la fin',
+        );
+        return true;
       }
       archiveOrpheline = null;
       _echecs.remove(idChapitre);
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Téléchargement du $description : terminé en '
+        '${_formaterDuree(chrono.elapsed)}, '
+        '${contenu.estTexte ? 'texte' : '$nombrePages page(s)'}',
+      );
     } on _Annulation {
+      Journal.actuel.info(
+        CategorieJournal.telechargement,
+        'Téléchargement du $description annulé',
+      );
       await _abandonner(ecriture);
     } on _VerrouPerdu {
       // L'autre isolat a repris la file : on efface seulement notre archive
       // partielle, sans toucher la ligne de file (c'est désormais à lui de
       // la gérer ; elle sera reprise comme interrompue).
-      debugPrint('Téléchargement n°$id abandonné : verrou repris ailleurs');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Téléchargement du $description abandonné : file reprise par '
+        "l'autre isolat",
+      );
       await _abandonner(ecriture);
     } catch (erreur, pile) {
-      debugPrint('Téléchargement n°$id en échec : $erreur\n$pile');
       await _abandonner(ecriture);
       await _supprimerArchiveOrpheline(archiveOrpheline);
+      if (await _estDossierDevenuInjoignable()) {
+        // NAS éteint, partage déconnecté : le site n'y est pour rien. Le
+        // chapitre retourne en attente (sans échec ni compteur) et la file
+        // s'arrête jusqu'au retour du dossier.
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Téléchargement du $description suspendu : dossier des chapitres '
+          'inaccessible (NAS ?)',
+          erreur: erreur,
+        );
+        try {
+          await _depotTelechargements.enregistrerStatut(
+            id,
+            StatutTelechargement.enAttente,
+          );
+        } catch (erreurStatut) {
+          // La ligne restera « en cours » et sera reprise comme interrompue.
+          Journal.actuel.avertissement(
+            CategorieJournal.telechargement,
+            'Téléchargement n°$id non remis en attente',
+            erreur: erreurStatut,
+          );
+        }
+        await _actualiserAcces(
+          nature: erreur is ErreurStockage ? erreur.nature : null,
+        );
+        return false;
+      }
       _echecs.update(idChapitre, (n) => n + 1, ifAbsent: () => 1);
+      // La pile n'est utile que pour une erreur inattendue : un refus du
+      // site (`ErreurSource`) se comprend avec son message.
+      Journal.actuel.erreur(
+        CategorieJournal.telechargement,
+        'Téléchargement du $description en échec après '
+        '${_formaterDuree(chrono.elapsed)} (échec n°${_echecs[idChapitre]}) : '
+        '${_messageErreur(erreur)}',
+        erreur: erreur,
+        pile: erreur is ErreurSource ? null : pile,
+      );
       try {
         await _depotTelechargements.enregistrerStatut(
           id,
@@ -1151,12 +2233,33 @@ class ServiceTelechargement {
       } catch (erreurStatut) {
         // La ligne restera « en cours » et sera reprise au prochain
         // traitement.
-        debugPrint(
-          'Statut du téléchargement n°$id non enregistré : $erreurStatut',
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Statut du téléchargement n°$id non enregistré',
+          erreur: erreurStatut,
         );
       }
     } finally {
       _signaler();
+    }
+    return true;
+  }
+
+  /// `true` si l'échec d'un chapitre vient du dossier des chapitres choisi
+  /// par le client, devenu injoignable.
+  ///
+  /// Le dossier est contrôlé **après** l'erreur, quelle qu'elle soit : une
+  /// écriture coupée par la perte du partage remonte souvent comme une
+  /// simple erreur d'écriture. À l'inverse, une erreur qui se dit « dossier
+  /// introuvable » alors que le dossier racine répond (dossier du titre
+  /// effacé à cet instant) reste un échec ordinaire : la remettre en attente
+  /// relancerait le même chapitre sans fin. Toujours `false` pour le dossier
+  /// par défaut, qui n'est jamais injoignable.
+  Future<bool> _estDossierDevenuInjoignable() async {
+    try {
+      return await _dossierInjoignable();
+    } catch (_) {
+      return false;
     }
   }
 
@@ -1178,7 +2281,11 @@ class ServiceTelechargement {
     } catch (erreur) {
       // LIMITE : l'archive reste sur le disque sans chapitre associé ; elle
       // sera remplacée si ce chapitre est retéléchargé sous le même nom.
-      debugPrint('Archive orpheline $nomArchive non effacée : $erreur');
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        'Archive orpheline $nomArchive non effacée',
+        erreur: erreur,
+      );
     }
   }
 
@@ -1224,7 +2331,7 @@ class ServiceTelechargement {
     _ContexteChapitre contexte,
   ) async {
     final uri = Uri.parse(url);
-    if (SignalementMangaDex.estServeurMangaDexAtHome(url)) {
+    if (_estImageMangaDexAtHome(url, contexte)) {
       // Une seule tentative : chaque échec doit être signalé, puis on change
       // de serveur plutôt que d'insister (documentation MangaDex).
       try {
@@ -1232,6 +2339,9 @@ class ServiceTelechargement {
           uri,
           userAgent: userAgentApplication,
           nouvellesTentatives: 0,
+          // Une page d'erreur HTML servie en 200 n'est pas une page du
+          // chapitre : signalée comme un échec, puis nœud renouvelé.
+          exigerImage: true,
         );
         unawaited(_signalement.signalerReussite(url, reponse));
         return reponse.octets;
@@ -1243,19 +2353,29 @@ class ServiceTelechargement {
     return _client.recupererOctets(
       uri,
       referer: contenu.urlReferer ?? contexte.source.urlBase,
-      userAgent: _estAdresseMangaDex(uri.host) ? userAgentApplication : null,
+      // Pas de User-Agent précisé : `ClientHttpPoli` envoie celui de
+      // l'application à tous les sites (tâche T1), ce qu'exigent aussi tous
+      // les serveurs MangaDex (`uploads.mangadex.org`, E10).
+      // Une page anti-robot HTML servie en 200 (E10) ne doit jamais être
+      // écrite dans l'archive comme une page du chapitre. Une image servie
+      // sans `Content-Type` `image/*` est reconnue par ses octets
+      // (`detecterFormatImage`, retour X1 de la 0.2.1-test).
+      exigerImage: true,
     );
   }
 
-  /// `true` si [hote] appartient à MangaDex (site, serveur d'images
-  /// `uploads.mangadex.org`, nœuds `*.mangadex.network`) : MangaDex exige un
-  /// User-Agent honnête sur tous ses serveurs.
-  static bool _estAdresseMangaDex(String hote) {
-    final h = hote.toLowerCase();
-    return SourceMangaDex.estHoteMangaDex(h) ||
-        h.endsWith('.mangadex.org') ||
-        h.endsWith('.mangadex.network');
-  }
+  /// `true` si [url] est une page servie par un nœud MangaDex@Home : chapitre
+  /// d'une source MangaDex **et** adresse hors `mangadex.org`.
+  ///
+  /// `SignalementMangaDex.estServeurMangaDexAtHome` ne regarde que l'adresse
+  /// (« base url that doesn't contain mangadex.org ») : seule, elle prenait
+  /// les images de tous les autres sites (Madara, Scan-Manga…) pour des
+  /// nœuds MangaDex@Home. Chacune était alors signalée à
+  /// `api.mangadex.network` (une requête de plus par page, vers un tiers qui
+  /// n'a rien servi) et téléchargée sans nouvelle tentative.
+  static bool _estImageMangaDexAtHome(String url, _ContexteChapitre contexte) =>
+      contexte.source.typeSource == TypeSource.mangaDex &&
+      SignalementMangaDex.estServeurMangaDexAtHome(url);
 
   /// `true` si un échec sur [url] justifie de redemander les adresses des
   /// images : tout échec d'un nœud MangaDex@Home (nœud en panne), ou un 403
@@ -1266,11 +2386,11 @@ class ServiceTelechargement {
     ErreurSource erreur,
     _ContexteChapitre contexte,
   ) {
-    if (SignalementMangaDex.estServeurMangaDexAtHome(url)) return true;
+    if (_estImageMangaDexAtHome(url, contexte)) return true;
     final hote = Uri.tryParse(url)?.host ?? '';
     final estMangaDex =
         contexte.source.typeSource == TypeSource.mangaDex ||
-        _estAdresseMangaDex(hote);
+        SourceMangaDex.estServeurMangaDex(hote);
     return estMangaDex && erreur.codeStatut == 403;
   }
 
@@ -1278,5 +2398,18 @@ class ServiceTelechargement {
     if (erreur is ErreurSource) return erreur.message;
     if (erreur is ErreurService) return erreur.message;
     return erreur.toString();
+  }
+
+  /// Numéro de chapitre lisible pour le journal : `12` plutôt que `12.0`.
+  static String _formaterNumero(double numero) =>
+      numero == numero.truncateToDouble() && numero.isFinite
+      ? numero.toInt().toString()
+      : numero.toString();
+
+  /// Durée lisible pour le journal : `850 ms` ou `12,4 s`.
+  static String _formaterDuree(Duration duree) {
+    final ms = duree.inMilliseconds;
+    if (ms < Duration.millisecondsPerSecond) return '$ms ms';
+    return '${(ms / Duration.millisecondsPerSecond).toStringAsFixed(1).replaceAll('.', ',')} s';
   }
 }

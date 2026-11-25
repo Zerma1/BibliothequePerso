@@ -4,7 +4,6 @@ import 'dart:async';
 import 'package:bibliotheque_perso/ecrans/ecran_bibliotheque.dart';
 import 'package:bibliotheque_perso/etat/constantes_etat.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
-import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/services/service_mises_a_jour.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
@@ -96,18 +95,37 @@ void main() {
     expect(find.byType(CarteTitre), findsNWidgets(2));
     expect(find.text('2'), findsOneWidget);
 
+    // Dans la barre : seulement « Toutes les catégories » et l'entonnoir ;
+    // les catégories sont dans une fenêtre.
+    expect(find.widgetWithText(FilterChip, 'Gore'), findsNothing);
+    await tester.tap(find.byTooltip(Textes.filtrerParCategories));
+    await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilterChip, 'Gore'));
     await tester.pump();
+    // Brouillon : rien n'est appliqué avant « Appliquer ».
+    expect(find.byType(CarteTitre), findsNWidgets(2));
+    await tester.tap(find.text(Textes.appliquer));
+    await tester.pumpAndSettle();
     expect(find.byType(CarteTitre), findsOneWidget);
     expect(find.text('Shinigami'), findsOneWidget);
-
+    expect(find.byTooltip(Textes.filtreCategoriesActif(1)), findsOneWidget);
+    // « Toutes les catégories » retire le filtre.
     await tester.tap(find.text(Textes.toutesLesCategories));
     await tester.pump();
+    expect(find.byType(CarteTitre), findsNWidgets(2));
+    // Les listes système (Planifié, En attente) précèdent celle du client :
+    // la ligne défile jusqu'à elle.
+    await tester.ensureVisible(
+      find.widgetWithText(FilterChip, 'À lire plus tard'),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilterChip, 'À lire plus tard'));
     await tester.pump();
     expect(find.byType(CarteTitre), findsOneWidget);
     expect(find.text('Solo Leveling'), findsOneWidget);
 
+    await tester.ensureVisible(find.text(Textes.toutesLesListes));
+    await tester.pumpAndSettle();
     await tester.tap(find.text(Textes.toutesLesListes));
     await tester.pump();
     await tester.enterText(find.byType(TextField), 'shini');
@@ -129,41 +147,160 @@ void main() {
     expect(find.byType(CarteTitre), findsNWidgets(2));
   });
 
-  testWidgets('la couverture est demandée avec le Referer du site', (
+  testWidgets(
+    'la couverture est demandée par titre (appareil d\'abord, puis site)',
+    (tester) async {
+      service.octetsCouverture = pngMinimal;
+      service.ajouterTitreDeTest(
+        'Avec couverture',
+        urlCouverture: 'https://images.test/c.jpg',
+      );
+      service.ajouterTitreDeTest('Sans couverture');
+      await afficher(tester);
+      await tester.pump();
+      await tester.pump();
+
+      // Seul le titre qui a une couverture la demande, au service (qui lit
+      // l'appareil puis le site) et non directement par son adresse.
+      expect(service.couverturesChargees, <int>[1]);
+      expect(service.couverturesDemandees, isEmpty);
+      expect(find.byType(Image), findsOneWidget);
+    },
+  );
+
+  testWidgets('niveau de contenu : panneau, enregistrement et filtre', (
     tester,
   ) async {
-    service.sources.add(
-      const Source(
-        id: 7,
-        nom: 'Lecture',
-        urlBase: 'https://lecture.test',
-        typeSource: TypeSource.madara,
+    final parametres = FauxServiceParametres();
+    service
+      ..ajouterTitreDeTest('Tous publics')
+      ..ajouterTitreDeTest('Explicite');
+    service.remplacerTitreDeTest(
+      service.titres[1].copierAvec(niveauContenu: 'pornographic'),
+    );
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      envelopper(
+        const EcranBibliotheque(),
+        bibliotheque: service,
+        parametres: parametres,
       ),
     );
-    service.ajouterTitreDeTest(
-      'Avec site',
-      idSource: 7,
-      urlCouverture: 'https://images.test/c.jpg',
-    );
-    service.ajouterTitreDeTest(
-      'Sans site',
-      urlCouverture: 'https://images.test/d.jpg',
-    );
-    await afficher(tester);
-    await tester.pump();
     await tester.pump();
 
-    final parUrl = <String, String?>{
-      for (var i = 0; i < service.couverturesDemandees.length; i++)
-        service.couverturesDemandees[i]: service.referersDemandes[i],
-    };
-    expect(parUrl['https://images.test/c.jpg'], 'https://lecture.test');
-    expect(parUrl['https://images.test/d.jpg'], isNull);
+    // Par défaut, tout sauf pornographique.
+    expect(find.byType(CarteTitre), findsOneWidget);
+    expect(service.derniersNiveauxDemandes, <String>[
+      'safe',
+      'suggestive',
+      'erotica',
+    ]);
+
+    // Téléphone : le panneau est une feuille du bas (la ligne des filtres
+    // défile jusqu'au bouton).
+    await tester.ensureVisible(find.text(Textes.boutonContenu));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(Textes.boutonContenu));
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsOneWidget);
+    await tester.tap(find.text(Textes.libelleNiveauContenu('pornographic')));
+    await tester.pumpAndSettle();
+    expect(parametres.niveaux, contains('pornographic'));
+    await tester.tap(find.text(Textes.afficherTitres(2)));
+    await tester.pumpAndSettle();
+    expect(find.byType(CarteTitre), findsNWidgets(2));
+  });
+
+  testWidgets('bibliothèque vide : un seul bouton « Ajouter un titre »', (
+    tester,
+  ) async {
+    await afficher(tester);
+    await tester.pump();
+
+    expect(find.text(Textes.boutonAjouterTitre), findsOneWidget);
+    expect(find.byType(FloatingActionButton), findsOneWidget);
+  });
+
+  testWidgets('fenêtre des catégories : recherche, regroupement, inclure et '
+      'exclure', (tester) async {
+    service
+      ..ajouterTitreDeTest('A', nomsCategories: <String>['action', 'comédie'])
+      ..ajouterTitreDeTest('B', nomsCategories: <String>['action'])
+      ..ajouterTitreDeTest('C', nomsCategories: <String>['comédie', 'drame']);
+    await afficher(tester);
+    await tester.pump();
+
+    await tester.tap(find.byTooltip(Textes.filtrerParCategories));
+    await tester.pumpAndSettle();
+    // Toutes les catégories, regroupées par initiale.
+    expect(find.text('D'), findsOneWidget);
+    expect(find.widgetWithText(FilterChip, 'Drame'), findsOneWidget);
+
+    // Recherche sans accent ni majuscule.
+    await tester.enterText(
+      find.widgetWithText(TextField, Textes.rechercherCategorie),
+      'COMEDIE',
+    );
+    await tester.pump();
+    expect(find.widgetWithText(FilterChip, 'Comédie'), findsOneWidget);
+    expect(find.widgetWithText(FilterChip, 'Action'), findsNothing);
+    await tester.enterText(
+      find.widgetWithText(TextField, Textes.rechercherCategorie),
+      '',
+    );
+    await tester.pump();
+
+    // Action : incluse (un appui) ; drame : exclue (deux appuis).
+    await tester.tap(find.widgetWithText(FilterChip, 'Action'));
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilterChip, 'Drame'));
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilterChip, 'Drame'));
+    await tester.pump();
+    expect(find.text(Textes.resumeFiltreCategories(1, 1)), findsOneWidget);
+    expect(find.byIcon(Icons.add_circle), findsOneWidget);
+    expect(find.byIcon(Icons.remove_circle), findsOneWidget);
+    await tester.tap(find.text(Textes.appliquer));
+    await tester.pumpAndSettle();
+    // A et B ont action ; aucun n'a drame.
+    expect(find.byType(CarteTitre), findsNWidgets(2));
+    expect(find.text('C'), findsNothing);
+
+    // Comédie exclue en plus : il ne reste que B.
+    await tester.tap(find.byTooltip(Textes.filtreCategoriesActif(2)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilterChip, 'Comédie'));
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilterChip, 'Comédie'));
+    await tester.pump();
+    await tester.tap(find.text(Textes.appliquer));
+    await tester.pumpAndSettle();
+    expect(find.byType(CarteTitre), findsOneWidget);
+    expect(find.text('B'), findsOneWidget);
+
+    // « Annuler » ne change rien ; « Tout effacer » puis « Appliquer »
+    // retire le filtre.
+    await tester.tap(find.byTooltip(Textes.filtreCategoriesActif(3)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(Textes.effacerCategories));
+    await tester.pump();
+    await tester.tap(find.text(Textes.annuler).last);
+    await tester.pumpAndSettle();
+    expect(find.byType(CarteTitre), findsOneWidget);
+    await tester.tap(find.byTooltip(Textes.filtreCategoriesActif(3)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(Textes.effacerCategories));
+    await tester.pump();
+    await tester.tap(find.text(Textes.appliquer));
+    await tester.pumpAndSettle();
+    expect(find.byType(CarteTitre), findsNWidgets(3));
   });
 
   testWidgets(
-    'le dialogue coche Favoris et Suivis même si les listes n\'étaient pas '
-    'chargées',
+    'le dialogue coche Suivis (pas Favoris) même si les listes n\'étaient '
+    'pas chargées',
     (tester) async {
       service.erreurLecture = const ErreurSource('https://x.test', 'Panne');
       await afficher(tester);
@@ -180,12 +317,14 @@ void main() {
           .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
           .map((caseListe) => caseListe.value)
           .toList();
-      expect(cases, <bool?>[true, true, false]);
+      // Favoris (décochée : X3), Suivis, Planifié, Terminés, À lire plus
+      // tard (« En attente » est automatique : pas de case).
+      expect(cases, <bool?>[false, true, false, false, false]);
     },
   );
 
   testWidgets(
-    'le dialogue d\'ajout coche Favoris et Suivis et ajoute le titre',
+    'le dialogue d\'ajout coche Suivis seulement et ajoute le titre',
     (tester) async {
       await afficher(tester);
       await tester.pump();
@@ -198,10 +337,24 @@ void main() {
       final cases = tester
           .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
           .toList();
-      expect(cases, hasLength(3));
+      expect(cases, hasLength(5));
+      expect(
+        tester
+            .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
+            .map((caseListe) => (caseListe.title! as Text).data),
+        <String>[
+          'Favoris',
+          'Suivis',
+          'Planifié',
+          'Terminés',
+          'À lire plus tard',
+        ],
+      );
       expect(cases.map((caseListe) => caseListe.value), <bool?>[
+        false,
         true,
-        true,
+        false,
+        false,
         false,
       ]);
 
@@ -220,7 +373,7 @@ void main() {
       expect(find.byType(AlertDialog), findsNothing);
       expect(find.textContaining('3 nouveaux chapitres'), findsOneWidget);
       expect(find.byType(CarteTitre), findsOneWidget);
-      expect(service.listesParTitre[1], <int>{1, 2});
+      expect(service.listesParTitre[1], <int>{2});
     },
   );
 

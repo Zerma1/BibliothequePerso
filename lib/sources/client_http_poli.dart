@@ -8,8 +8,12 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import '../modeles/journal.dart';
 import 'constantes_sources.dart';
+import 'detection_image.dart';
 import 'erreur_source.dart';
+import 'protection_anti_robot.dart';
+import 'rapport_erreur_source.dart';
 
 /// Fonction qui donne l'heure courante (remplaçable dans les tests).
 typedef FonctionHorloge = DateTime Function();
@@ -64,8 +68,12 @@ class ReponseOctets {
 /// Client HTTP qui respecte la charge des sites lus.
 ///
 /// Il applique les règles de PLAYBOOK.md section 6 :
-/// - en-tête `User-Agent` (navigateur courant par défaut, remplaçable par
-///   requête : l'API MangaDex interdit un User-Agent usurpé) ;
+/// - en-tête `User-Agent` honnête de l'application par défaut, pour tous les
+///   sites ([userAgentApplication], tâche T1 : un faux User-Agent de
+///   navigateur est repéré par les protections anti-robot) ;
+/// - page de défi anti-robot (403/429/503 « Just a moment… ») reconnue et
+///   signalée par une [ErreurSource] dont `protectionAntiRobot` vaut `true`,
+///   sans nouvelle tentative ni contournement ;
 /// - en-tête `Referer` optionnel, que beaucoup de sites exigent pour les
 ///   images ;
 /// - au moins [delaiParDomaine] entre le début de deux requêtes vers un même
@@ -82,7 +90,7 @@ class ClientHttpPoli {
   /// et [attendre] permettent de simuler le temps.
   ClientHttpPoli({
     http.Client? client,
-    this.userAgentParDefaut = userAgentNavigateur,
+    this.userAgentParDefaut = userAgentApplication,
     this.delaiParDomaine = delaiMinimalParDomaine,
     this.delaiExpiration = delaiExpirationRequete,
     this.nombreNouvellesTentatives = nombreMaxNouvellesTentatives,
@@ -121,7 +129,8 @@ class ClientHttpPoli {
   /// décode en UTF-8 (le défaut de `package:http` est latin-1, ce qui abîme
   /// les pages UTF-8 qui ne déclarent pas leur encodage).
   ///
-  /// Lève une [ErreurSource] en cas d'échec.
+  /// Lève une [ErreurSource] en cas d'échec, avec `protectionAntiRobot` à
+  /// `true` si la page reçue (même en 200) est un défi anti-robot.
   Future<String> recupererTexte(
     Uri uri, {
     String? referer,
@@ -137,8 +146,9 @@ class ClientHttpPoli {
       limite: limite,
       nouvellesTentatives: nombreNouvellesTentatives,
     );
+    final String texte;
     try {
-      return _decoderTexte(reponse);
+      texte = _decoderTexte(reponse);
     } on FormatException catch (erreur) {
       throw ErreurSource(
         uri.toString(),
@@ -147,18 +157,39 @@ class ClientHttpPoli {
         codeStatut: reponse.statusCode,
       );
     }
+    // Certains défis sont servis en 200 (après une redirection suivie par
+    // `package:http`) : sans ce contrôle, l'adaptateur analyserait la page
+    // de défi et signalerait une « structure inattendue » trompeuse.
+    if (estPageDefiAntiRobot(texte)) {
+      Journal.actuel.erreur(
+        CategorieJournal.reseau,
+        'GET ${masquerDonneesSensibles(uri.toString())} : protection '
+        'anti-robot détectée (page de défi servie en '
+        'HTTP ${reponse.statusCode})',
+      );
+      throw erreurProtectionAntiRobot(
+        uri,
+        codeStatut: reponse.statusCode,
+        octetsRecus: reponse.bodyBytes.length,
+        extraitReponse: _extrait(reponse),
+      );
+    }
+    return texte;
   }
 
   /// Récupère [uri] et renvoie le corps brut (images…).
   ///
   /// [referer] est envoyé dans l'en-tête `Referer`, que beaucoup de sites
   /// exigent pour servir leurs images. Lève une [ErreurSource] en cas d'échec.
+  ///
+  /// [exigerImage] : voir [recupererOctetsAvecDetails].
   Future<Uint8List> recupererOctets(
     Uri uri, {
     String? referer,
     String? userAgent,
     Map<String, String> enTetes = const <String, String>{},
     LimiteRequetes? limite,
+    bool exigerImage = false,
   }) async {
     final reponse = await recupererOctetsAvecDetails(
       uri,
@@ -166,6 +197,7 @@ class ClientHttpPoli {
       userAgent: userAgent,
       enTetes: enTetes,
       limite: limite,
+      exigerImage: exigerImage,
     );
     return reponse.octets;
   }
@@ -182,6 +214,18 @@ class ClientHttpPoli {
   /// En cas d'échec, l'[ErreurSource] levée porte [ErreurSource.codeStatut],
   /// [ErreurSource.octetsRecus] et [ErreurSource.duree] de la dernière
   /// tentative.
+  ///
+  /// [exigerImage] : `true` pour lever une [ErreurSource] si la réponse
+  /// finale (après les redirections suivies par `package:http`) n'est pas une
+  /// image. Les **octets** décident d'abord : une signature JPEG, PNG, GIF,
+  /// WEBP, AVIF, HEIF ou BMP ([detecterFormatImage]) est acceptée quel que
+  /// soit le `Content-Type` (absent, `application/octet-stream` ou faux).
+  /// Sans signature reconnue, seul un `Content-Type` `image/*` est accepté,
+  /// et jamais pour une page HTML : une page anti-robot servie en 200 n'est
+  /// pas prise pour une image (journal des erreurs, E10). L'erreur porte le
+  /// code de statut, la taille, la durée, le type détecté et, si la réponse
+  /// est du texte, un court extrait nettoyé (jamais d'octets binaires) ;
+  /// aucune nouvelle tentative (la même requête recevrait la même page).
   Future<ReponseOctets> recupererOctetsAvecDetails(
     Uri uri, {
     String? referer,
@@ -189,6 +233,7 @@ class ClientHttpPoli {
     Map<String, String> enTetes = const <String, String>{},
     LimiteRequetes? limite,
     int? nouvellesTentatives,
+    bool exigerImage = false,
   }) async {
     final (reponse, duree) = await _executer(
       uri,
@@ -197,7 +242,13 @@ class ClientHttpPoli {
       enTetes: enTetes,
       limite: limite,
       nouvellesTentatives: _plafonnerTentatives(nouvellesTentatives),
+      // Une ligne par image (60 par chapitre) noierait le journal : le
+      // succès n'est gardé qu'en débogage, les échecs restent visibles.
+      niveauSucces: NiveauJournal.debogage,
     );
+    if (exigerImage) {
+      _verifierImage(uri, reponse, duree);
+    }
     return ReponseOctets(
       octets: reponse.bodyBytes,
       // `IOClient` met déjà les noms en minuscules, mais pas tous les clients
@@ -261,6 +312,64 @@ class ClientHttpPoli {
       limite: limite,
       nouvellesTentatives: _plafonnerTentatives(nouvellesTentatives),
       corpsPost: octetsCorps,
+      // Signalements MangaDex@Home : un par image, même raison que pour
+      // [recupererOctetsAvecDetails].
+      niveauSucces: NiveauJournal.debogage,
+    );
+    try {
+      return _decoderTexte(reponse);
+    } on FormatException catch (erreur) {
+      throw ErreurSource(
+        uri.toString(),
+        'Réponse illisible (encodage du texte)',
+        cause: erreur,
+        codeStatut: reponse.statusCode,
+      );
+    }
+  }
+
+  /// Envoie un formulaire par `POST` vers [uri] (corps
+  /// `application/x-www-form-urlencoded` fait des [champs], vide si aucun)
+  /// et renvoie le corps de la réponse décodé en texte.
+  ///
+  /// Sert aux requêtes de **lecture** publiques que les thèmes WordPress font
+  /// en `POST` depuis leurs propres pages (liste des chapitres de Madara :
+  /// `<titre>/ajax/chapters/` ou `admin-ajax.php`), exactement comme le
+  /// navigateur d'un lecteur : l'en-tête `X-Requested-With: XMLHttpRequest`
+  /// est celui qu'envoie jQuery.
+  ///
+  /// Mêmes règles que les autres requêtes (User-Agent, [referer], créneau par
+  /// domaine, délai d'expiration, [ErreurSource] en cas d'échec).
+  /// Nouvelles tentatives : aucune par défaut (un `POST` n'est en général
+  /// pas idempotent, voir [envoyerJson]) ; l'appelant qui sait que la requête
+  /// ne fait que lire passe [nouvellesTentatives] (plafonné à
+  /// [nombreNouvellesTentatives]).
+  Future<String> envoyerFormulaire(
+    Uri uri, {
+    Map<String, String> champs = const <String, String>{},
+    String? referer,
+    String? userAgent,
+    Map<String, String> enTetes = const <String, String>{},
+    LimiteRequetes? limite,
+    int nouvellesTentatives = 0,
+  }) async {
+    // `Uri(queryParameters: …).query` encode les champs comme un formulaire
+    // HTML (clé=valeur&…, caractères spéciaux échappés).
+    final corps = champs.isEmpty
+        ? const <int>[]
+        : utf8.encode(Uri(queryParameters: champs).query);
+    final (reponse, _) = await _executer(
+      uri,
+      referer: referer,
+      userAgent: userAgent,
+      enTetes: <String, String>{
+        'X-Requested-With': 'XMLHttpRequest',
+        ...enTetes,
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+      },
+      limite: limite,
+      nouvellesTentatives: _plafonnerTentatives(nouvellesTentatives),
+      corpsPost: corps,
     );
     try {
       return _decoderTexte(reponse);
@@ -290,6 +399,13 @@ class ClientHttpPoli {
   /// Exécute la requête (GET, ou POST si [corpsPost] est fourni) avec les
   /// règles du client, et renvoie la réponse 2xx avec la durée de la
   /// tentative réussie.
+  ///
+  /// [niveauSucces] : niveau de la ligne de journal écrite pour une requête
+  /// réussie. `info` pour les pages et l'API (une ligne par étape utile) ;
+  /// `debogage` pour les requêtes répétées en masse (images de chapitre,
+  /// signalements MangaDex@Home), qui sinon noieraient les rapports d'erreur
+  /// (200 dernières lignes) et rempliraient le fichier de journal. Les
+  /// échecs, nouveaux essais, 429 et pages anti-robot gardent leur niveau.
   Future<(http.Response, Duration)> _executer(
     Uri uri, {
     required String? referer,
@@ -298,11 +414,20 @@ class ClientHttpPoli {
     required LimiteRequetes? limite,
     required int nouvellesTentatives,
     List<int>? corpsPost,
+    NiveauJournal niveauSucces = NiveauJournal.info,
   }) async {
     final url = uri.toString();
+    final methode = corpsPost == null ? 'GET' : 'POST';
+    // URL masquée une seule fois : jetons de session MangaDex, `?token=`…
+    // ne doivent jamais apparaître dans le journal.
+    final urlJournal = masquerDonneesSensibles(url);
     // Seuls http et https ont un sens ici ; un hôte vide rendrait la règle
     // « 1 s par domaine » inopérante.
     if ((uri.scheme != 'http' && uri.scheme != 'https') || uri.host.isEmpty) {
+      Journal.actuel.avertissement(
+        CategorieJournal.reseau,
+        '$methode $urlJournal : URL invalide (http:// ou https:// attendu)',
+      );
       throw ErreurSource(url, 'URL invalide : http:// ou https:// attendu');
     }
 
@@ -314,8 +439,19 @@ class ClientHttpPoli {
 
     final hote = uri.host.toLowerCase();
     ErreurSource? derniereErreur;
+    // Nombre d'essais réellement envoyés, pour la ligne finale du journal.
+    var essais = 0;
     for (var tentative = 0; tentative <= nouvellesTentatives; tentative++) {
+      if (tentative > 0) {
+        Journal.actuel.avertissement(
+          CategorieJournal.reseau,
+          '$methode $urlJournal : nouvel essai '
+          '${tentative + 1}/${nouvellesTentatives + 1} '
+          '(${_causeCourte(derniereErreur)})',
+        );
+      }
       await _reserverCreneau(hote, limite);
+      essais = tentative + 1;
 
       final attenteAvantNouvelleTentative =
           attenteBaseNouvelleTentative * (tentative + 1);
@@ -334,14 +470,53 @@ class ClientHttpPoli {
         chrono.stop();
         final code = reponse.statusCode;
         if (code >= 200 && code < 300) {
+          // Une ligne par requête réussie : jamais le corps, seulement sa
+          // taille (une page peut contenir des données personnelles).
+          // `estActif` évite de construire le message d'une ligne de
+          // débogage ignorée (une par image de chapitre).
+          if (Journal.actuel.estActif(niveauSucces)) {
+            Journal.actuel.journaliser(
+              niveauSucces,
+              CategorieJournal.reseau,
+              '$methode $urlJournal : '
+              '${_resume(code, reponse.bodyBytes.length, chrono.elapsed, essais)}',
+            );
+          }
           return (reponse, chrono.elapsed);
+        }
+        // Extrait nettoyé des données personnelles (une page d'erreur peut
+        // afficher l'adresse IP ou un jeton) : il est cité dans le message
+        // affiché et gardé à part pour le rapport d'erreur exportable.
+        final extrait = _extrait(reponse);
+        // Page de défi anti-robot : réessayer ne servirait à rien (la même
+        // requête reçoit le même défi) et insister ressemblerait à une
+        // attaque. On s'arrête tout de suite avec une erreur dédiée ;
+        // aucune tentative de résoudre le défi (PLAYBOOK.md section 10).
+        if (estReponseDefiAntiRobot(
+          codeStatut: code,
+          enTetes: reponse.headers,
+          corps: utf8.decode(reponse.bodyBytes, allowMalformed: true),
+        )) {
+          Journal.actuel.erreur(
+            CategorieJournal.reseau,
+            '$methode $urlJournal : protection anti-robot détectée, '
+            '${_resume(code, reponse.bodyBytes.length, chrono.elapsed, essais)}',
+          );
+          throw erreurProtectionAntiRobot(
+            uri,
+            codeStatut: code,
+            octetsRecus: reponse.bodyBytes.length,
+            duree: chrono.elapsed,
+            extraitReponse: extrait,
+          );
         }
         derniereErreur = ErreurSource(
           url,
-          'Réponse HTTP $code : ${_extrait(reponse)}',
+          'Réponse HTTP $code${extrait == null ? '' : ' : $extrait'}',
           codeStatut: code,
           octetsRecus: reponse.bodyBytes.length,
           duree: chrono.elapsed,
+          extraitReponse: extrait,
         );
         if (code == codeHttpTropDeRequetes) {
           // Le serveur dit combien de temps patienter : on lui obéit, sauf si
@@ -349,6 +524,12 @@ class ClientHttpPoli {
           // prochaine vérification que bloquer toute la file).
           final demandee = _attenteDemandee(reponse);
           final attente = demandee ?? attenteAvantNouvelleTentative;
+          Journal.actuel.avertissement(
+            CategorieJournal.reseau,
+            '$methode $urlJournal : HTTP 429 (trop de requêtes), attente '
+            '${attente.inMilliseconds} ms'
+            '${demandee == null ? '' : ' demandée par le serveur'}',
+          );
           // Le 429 vaut pour tout le domaine (MangaDex : « HTTP 429 responses
           // for all requests to *.mangadex.org ») : on repousse le créneau du
           // domaine pour que TOUTES ses requêtes patientent, pas seulement
@@ -360,16 +541,32 @@ class ClientHttpPoli {
                 : attente,
           );
           if (attente > attenteMaxDemandeeParServeur) {
+            Journal.actuel.erreur(
+              CategorieJournal.reseau,
+              '$methode $urlJournal : abandon, attente demandée trop longue, '
+              '${_resume(code, reponse.bodyBytes.length, chrono.elapsed, essais)}',
+            );
             throw derniereErreur;
           }
           attenteViaCreneau = true;
         } else if (code < 500) {
           // Une autre erreur 4xx (404, 403…) ne se corrigera pas en
-          // réessayant : on échoue tout de suite.
+          // réessayant : on échoue tout de suite. Avertissement seulement :
+          // l'appelant peut avoir une solution de repli (autre adresse).
+          Journal.actuel.avertissement(
+            CategorieJournal.reseau,
+            '$methode $urlJournal : échec, '
+            '${_resume(code, reponse.bodyBytes.length, chrono.elapsed, essais)}',
+          );
           throw derniereErreur;
         }
       } on TimeoutException catch (erreur) {
         chrono.stop();
+        Journal.actuel.avertissement(
+          CategorieJournal.reseau,
+          '$methode $urlJournal : délai dépassé '
+          '(${delaiExpiration.inSeconds} s, essai $essais)',
+        );
         derniereErreur = ErreurSource(
           url,
           'Délai dépassé (${delaiExpiration.inSeconds} s)',
@@ -396,7 +593,39 @@ class ClientHttpPoli {
         await _attendre(attenteAvantNouvelleTentative);
       }
     }
-    throw derniereErreur!;
+    final echec = derniereErreur!;
+    // Échec final après toutes les tentatives : l'objet ErreurSource n'est
+    // pas joint (son message peut citer le début de la réponse), seulement
+    // la cause réseau d'origine si elle existe.
+    Journal.actuel.erreur(
+      CategorieJournal.reseau,
+      '$methode $urlJournal : échec (${_causeCourte(echec)}), '
+      '${_resume(echec.codeStatut, echec.octetsRecus, echec.duree, essais)}',
+      erreur: echec.cause,
+    );
+    throw echec;
+  }
+
+  /// Résumé d'une requête pour le journal : code, taille reçue, durée et
+  /// nombre d'essais (jamais le contenu de la réponse).
+  static String _resume(int? code, int? octets, Duration? duree, int essais) {
+    final morceaux = <String>[
+      code == null ? 'sans réponse' : 'HTTP $code',
+      '${octets ?? 0} o',
+      if (duree != null) '${duree.inMilliseconds} ms',
+      '$essais essai${essais > 1 ? 's' : ''}',
+    ];
+    return morceaux.join(', ');
+  }
+
+  /// Cause courte d'un échec pour le journal (`HTTP 503`, `délai dépassé`,
+  /// `erreur réseau`), sans le début de la réponse que cite le message.
+  static String _causeCourte(ErreurSource? erreur) {
+    if (erreur == null) return 'inconnue';
+    final code = erreur.codeStatut;
+    if (code != null) return 'HTTP $code';
+    if (erreur.cause is TimeoutException) return 'délai dépassé';
+    return 'erreur réseau';
   }
 
   /// Réserve le prochain créneau libre pour le domaine [hote] (et pour
@@ -428,6 +657,11 @@ class ClientHttpPoli {
     _creneauxLibres[hote] = debut.add(delaiParDomaine);
     final attente = debut.difference(maintenant);
     if (attente > Duration.zero) {
+      Journal.actuel.debogage(
+        CategorieJournal.reseau,
+        'Attente de politesse ${attente.inMilliseconds} ms pour $hote'
+        '${limite == null ? '' : ' (limite ${limite.cle})'}',
+      );
       await _attendre(attente);
     }
   }
@@ -501,14 +735,60 @@ class ClientHttpPoli {
     return encodage.decode(reponse.bodyBytes);
   }
 
-  String _extrait(http.Response reponse) {
-    final texte = utf8
-        .decode(reponse.bodyBytes, allowMalformed: true)
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-    if (texte.length <= longueurMaxExtraitReponse) {
-      return texte;
+  /// Lève une [ErreurSource] si [reponse] n'est pas une image (voir
+  /// `exigerImage` dans [recupererOctetsAvecDetails]).
+  void _verifierImage(Uri uri, http.Response reponse, Duration duree) {
+    final octets = reponse.bodyBytes;
+    if (detecterFormatImage(octets) != null) {
+      return;
     }
-    return '${texte.substring(0, longueurMaxExtraitReponse)}…';
+    String? typeContenu;
+    for (final entree in reponse.headers.entries) {
+      if (entree.key.toLowerCase() == 'content-type') {
+        typeContenu = entree.value;
+      }
+    }
+    // Type MIME sans paramètres (« image/jpeg; charset=… » → image/jpeg),
+    // insensible à la casse (RFC 9110 : les types ne le sont pas).
+    final type = typeContenu?.split(';').first.trim().toLowerCase() ?? '';
+    // Format sans signature connue (SVG, TIFF, JPEG XL…) annoncé comme
+    // image : accepté, sauf si c'est en fait une page HTML (E10).
+    // Un corps vide n'est jamais une image, même annoncé comme tel.
+    if (octets.isNotEmpty &&
+        type.startsWith('image/') &&
+        !estContenuHtml(octets)) {
+      return;
+    }
+    final extraitCourt = extraitTexteImprimable(octets);
+    // Seulement le type détecté (« page HTML », « JSON »…) : pas d'extrait.
+    Journal.actuel.erreur(
+      CategorieJournal.reseau,
+      'GET ${masquerDonneesSensibles(uri.toString())} : image refusée '
+      '(Content-Type : ${type.isEmpty ? 'absent' : type} ; '
+      'contenu : ${decrireContenuNonImage(octets)}, ${octets.length} o)',
+    );
+    throw ErreurSource(
+      uri.toString(),
+      "Réponse qui n'est pas une image "
+      '(Content-Type : ${type.isEmpty ? 'absent' : type} ; '
+      'contenu : ${decrireContenuNonImage(octets)})'
+      '${extraitCourt == null ? '' : ' : $extraitCourt'}',
+      codeStatut: reponse.statusCode,
+      octetsRecus: octets.length,
+      duree: duree,
+      extraitReponse: _extrait(reponse),
+    );
+  }
+
+  /// Début du corps de [reponse], nettoyé par `extraireDebutReponse`, ou
+  /// `null` si le corps est binaire : des octets binaires décodés en texte
+  /// rendraient le message illisible (retour du client sur la 0.2.1-test).
+  String? _extrait(http.Response reponse) {
+    if (!estContenuTexte(reponse.bodyBytes)) {
+      return null;
+    }
+    return extraireDebutReponse(
+      utf8.decode(reponse.bodyBytes, allowMalformed: true),
+    );
   }
 }

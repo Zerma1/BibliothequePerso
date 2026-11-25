@@ -3,22 +3,60 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
 import '../modeles/categorie.dart';
 import '../modeles/chapitre.dart';
 import '../modeles/constantes.dart';
+import '../modeles/journal.dart';
 import '../modeles/liste_lecture.dart';
 import '../modeles/source.dart';
 import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
+import '../services/classement_listes.dart';
+import '../services/constantes_services.dart';
 import '../services/service_bibliotheque.dart';
+import '../services/service_categories.dart';
 import '../services/service_telechargement.dart';
 import 'constantes_etat.dart';
 import 'description_erreur.dart';
 import 'etat_lecteur.dart';
 import 'outils_chapitres.dart';
+
+// L'interface affiche les sites du titre sans importer les services.
+export '../services/service_bibliotheque.dart'
+    show DiagnosticLisibilite, SiteDuTitre;
+
+/// Couverture proposée par le site, pour le choix du client.
+///
+/// Recopie de `CouvertureSite` (couche sources) : les états ne dépendent
+/// que des services (PLAYBOOK.md section 4).
+class CouvertureProposee {
+  /// Crée la couverture proposée.
+  const CouvertureProposee({
+    required this.url,
+    this.urlMiniature,
+    this.volume,
+    this.langue,
+  });
+
+  /// Adresse de l'image en taille réelle (celle qui sera retenue).
+  final String url;
+
+  /// Adresse d'une version réduite, plus légère pour la liste de choix.
+  final String? urlMiniature;
+
+  /// Volume illustré (« 1 », « 10.5 »…), ou `null`.
+  final String? volume;
+
+  /// Langue de l'édition, ou `null`.
+  final String? langue;
+
+  /// Image à afficher dans la liste de choix (miniature si possible).
+  String get urlAffichee => urlMiniature ?? url;
+}
 
 /// Fiche d'un titre et actions sur ses chapitres et ses listes.
 class EtatTitre extends EtatNotifiant {
@@ -29,10 +67,15 @@ class EtatTitre extends EtatNotifiant {
   ///
   /// [maintenant] permet aux tests de fixer l'heure du compte à rebours des
   /// suppressions prévues.
+  ///
+  /// Avec [serviceCategories], la fiche montre les catégories ramenées à
+  /// leur groupe, sans doublon de même sens (« survie » seulement, pas
+  /// aussi « survival ») ; sans lui, les catégories telles qu'enregistrées.
   EtatTitre(
     this._service,
     this.idTitre, {
     ServiceTelechargement? serviceTelechargement,
+    this._serviceCategories,
     DateTime Function()? maintenant,
   }) : _serviceTelechargement = serviceTelechargement,
        _maintenant = maintenant ?? (() => DateTime.now().toUtc()) {
@@ -45,6 +88,7 @@ class EtatTitre extends EtatNotifiant {
 
   final ServiceBibliotheque _service;
   final ServiceTelechargement? _serviceTelechargement;
+  final ServiceCategories? _serviceCategories;
   final DateTime Function() _maintenant;
   StreamSubscription<void>? _abonnement;
 
@@ -100,6 +144,17 @@ class EtatTitre extends EtatNotifiant {
 
   Titre? _titre;
   Source? _source;
+
+  /// Sites du titre (étape 8), le principal d'abord.
+  List<SiteDuTitre> _sites = const <SiteDuTitre>[];
+
+  /// Site choisi dans le filtre des chapitres, `null` = tous les sites.
+  int? _idSiteFiltre;
+
+  /// Noms des sites qui n'ont pas répondu à la dernière actualisation.
+  List<String> _sitesSansReponse = const <String>[];
+
+  bool _estEnModificationSites = false;
   List<Categorie> _categories = const <Categorie>[];
   List<ListeLecture> _listes = const <ListeLecture>[];
   Set<int> _idsListesDuTitre = const <int>{};
@@ -157,6 +212,233 @@ class EtatTitre extends EtatNotifiant {
   int get nombreNumerosNonLus =>
       _groupes.where((groupe) => !groupe.estLu).length;
 
+  /// Nom du site où se lit [chapitre] s'il est externe (« Lire sur … »),
+  /// ou `null` pour un chapitre hébergé par le site source.
+  String? nomSiteExterneDe(Chapitre chapitre) => chapitre.estExterne
+      ? ServiceBibliotheque.nomSiteExterne(chapitre.urlExterne!)
+      : null;
+
+  // ------------------------------------------- Sites du titre (étape 8)
+
+  /// Sites du titre, le principal d'abord (section « Sites » de la fiche).
+  List<SiteDuTitre> get sites => _sites;
+
+  /// Sites qui fournissent des chapitres : les sites lus, et les liens seuls
+  /// qui gardent des chapitres lus d'avant leur passage en lien seul (filtre
+  /// des chapitres par site).
+  List<SiteDuTitre> get sitesAvecChapitres => <SiteDuTitre>[
+    for (final site in _sites)
+      if (!site.estLienSeul || site.nombreChapitres > 0) site,
+  ];
+
+  /// `true` si les chapitres du titre viennent de plus d'un site : chaque
+  /// chapitre affiche alors le nom de son site, et le filtre par site
+  /// apparaît. Un lien seul sans chapitre ne compte pas (tâche T4).
+  bool get aPlusieursSites => sitesAvecChapitres.length > 1;
+
+  /// Site choisi dans le filtre des chapitres, `null` = tous les sites.
+  int? get idSiteFiltre => _idSiteFiltre;
+
+  /// `true` pendant l'ajout, le retrait ou le changement de site principal.
+  bool get estEnModificationSites => _estEnModificationSites;
+
+  /// Noms des sites qui n'ont pas répondu à la dernière actualisation (vide
+  /// si tous ont répondu).
+  List<String> get sitesSansReponse => _sitesSansReponse;
+
+  /// Identifiant du site d'où vient [chapitre] : un chapitre sans site connu
+  /// (enregistré avant l'étape 8) vient du site principal.
+  int? idSiteDe(Chapitre chapitre) => chapitre.idSource ?? _titre?.idSource;
+
+  /// Nom du site d'où vient [chapitre], ou `null` s'il est inconnu.
+  String? nomSiteDe(Chapitre chapitre) {
+    final idSource = idSiteDe(chapitre);
+    for (final site in _sites) {
+      if (site.idSource == idSource) return site.nomSite;
+    }
+    return null;
+  }
+
+  /// Nombre de chapitres du site [idSource] que le retrait de ce site
+  /// supprime.
+  ///
+  /// Même filtre que `supprimerChapitresNonConservesSource` (couche
+  /// données) : sont épargnés les chapitres lus, téléchargés (marqueur ou
+  /// archive enregistrée), gardés et ceux dont le téléchargement est en
+  /// cours. Le site est lu sur `idSource` seul (pas de repli sur le site
+  /// principal, comme la requête) : l'annonce n'est jamais supérieure à la
+  /// réalité.
+  int nombreChapitresRetiresAvecSite(int idSource) => _chapitres
+      .where(
+        (chapitre) =>
+            chapitre.idSource == idSource &&
+            !chapitre.estLu &&
+            !chapitre.estTelecharge &&
+            chapitre.nomArchive == null &&
+            !chapitre.estGarde &&
+            !_estEnTelechargement(chapitre),
+      )
+      .length;
+
+  /// `true` si le téléchargement de [chapitre] est en cours dans la file
+  /// connue de la fiche.
+  bool _estEnTelechargement(Chapitre chapitre) {
+    final id = chapitre.id;
+    return id != null &&
+        _telechargements[id]?.statut == StatutTelechargement.enCours;
+  }
+
+  /// Nombre de chapitres téléchargés du site [idSource] : leur archive sera
+  /// supprimée 24 heures après le retrait de ce site (sauf si le client la
+  /// garde).
+  int nombreTelechargesDuSite(int idSource) => _chapitres
+      .where(
+        (chapitre) => idSiteDe(chapitre) == idSource && chapitre.estTelecharge,
+      )
+      .length;
+
+  /// Filtre la liste des chapitres sur le site [idSource] (`null` = tous les
+  /// sites). Local : aucune lecture de la base.
+  void filtrerParSite(int? idSource) {
+    if (_idSiteFiltre == idSource) return;
+    _idSiteFiltre = idSource;
+    _regrouper();
+    notifier();
+  }
+
+  /// Ajoute un autre site au titre : [url] est l'adresse du même titre sur
+  /// ce site. Renvoie le nombre de chapitres trouvés sur ce site.
+  ///
+  /// Les règles de téléchargement sont ensuite appliquées (une version
+  /// hébergée peut remplacer une version « lecture sur le site »), puis la
+  /// fiche est relue.
+  Future<ResultatAction<int>> ajouterSite(String url) async {
+    if (url.trim().isEmpty) {
+      return const ResultatAction<int>.echec(
+        DescriptionErreur(NatureErreur.adresseVide),
+      );
+    }
+    return _modifierSites(() async {
+      final resultat = await _service.ajouterSiteAuTitre(idTitre, url.trim());
+      return resultat.nombreNouveauxChapitres;
+    });
+  }
+
+  /// `true` si l'échec [erreur] d'un ajout de site permet de proposer
+  /// « Ajouter quand même comme simple lien » (tâche T4) : site illisible,
+  /// injoignable ou non configuré, mais adresse valide et pas déjà liée.
+  static bool peutAjouterCommeLienSeul(DescriptionErreur erreur) {
+    final cause = erreur.cause;
+    return cause != null && ServiceBibliotheque.peutAjouterCommeLienSeul(cause);
+  }
+
+  /// Enregistre [url] comme **lien seul** du titre (tâche T4) : aucune
+  /// requête au site, aucun chapitre lu ; le client l'ouvre dans son
+  /// navigateur.
+  Future<ResultatAction<int>> ajouterLienSeul(String url) async {
+    if (url.trim().isEmpty) {
+      return const ResultatAction<int>.echec(
+        DescriptionErreur(NatureErreur.adresseVide),
+      );
+    }
+    return _modifierSites(() async {
+      final resultat = await _service.ajouterSiteAuTitre(
+        idTitre,
+        url.trim(),
+        lienSeul: true,
+      );
+      return resultat.nombreNouveauxChapitres;
+    });
+  }
+
+  /// Passe le site secondaire [idSource] en lien seul ; renvoie le nombre
+  /// de chapitres supprimés (non lus, non téléchargés). Ses archives passent
+  /// en suppression prévue (24 h), comme pour un retrait.
+  Future<ResultatAction<int>> passerEnLienSeul(int idSource) =>
+      _modifierSites(() => _service.marquerLienSeul(idTitre, idSource, true));
+
+  /// Essaie de lire le lien seul [idSource] (**ce site seulement**, une
+  /// requête). Le service lit d'abord le site ; il ne redevient un site lu
+  /// que si la lecture réussit. Sinon il reste lien seul et l'erreur de
+  /// lecture est renvoyée. Renvoie le nombre de chapitres trouvés.
+  Future<ResultatAction<int>> essayerDeLire(int idSource) => _modifierSites(
+    () async => (await _service.essayerDeLireLienSeul(
+      idTitre,
+      idSource,
+    )).nombreNouveauxChapitres,
+  );
+
+  /// Diagnostic de lisibilité de [url] (tâche T3, « Pourquoi ce site n'est
+  /// pas lisible ? ») : une requête au plus, faite par le service.
+  Future<ResultatAction<DiagnosticLisibilite>> diagnostiquerSite(
+    String url,
+  ) async {
+    try {
+      return ResultatAction<DiagnosticLisibilite>.reussite(
+        await _service.diagnostiquerSite(url.trim()),
+      );
+    } catch (erreur, pile) {
+      return ResultatAction<DiagnosticLisibilite>.echec(
+        DescriptionErreur.depuis(erreur, pile),
+      );
+    }
+  }
+
+  /// Retire le site secondaire [idSource] ; renvoie le nombre de chapitres
+  /// supprimés. Les archives de ce site passent en suppression prévue (24 h).
+  Future<ResultatAction<int>> retirerSite(int idSource) =>
+      _modifierSites(() => _service.retirerSiteDuTitre(idTitre, idSource));
+
+  /// Fait du site [idSource] le site principal (fiche, couverture, résumé
+  /// relus sur ce site).
+  Future<ResultatAction<int>> definirSitePrincipal(int idSource) =>
+      _modifierSites(() async {
+        final resultat = await _service.definirSitePrincipal(idTitre, idSource);
+        return resultat.nombreNouveauxChapitres;
+      });
+
+  /// Déroulement commun aux actions sur les sites : action du service,
+  /// règles de téléchargement du titre, puis relecture de la fiche (sites,
+  /// chapitres, file et suppressions prévues à jour d'un coup).
+  Future<ResultatAction<int>> _modifierSites(
+    Future<int> Function() action,
+  ) async {
+    _estEnModificationSites = true;
+    notifier();
+    try {
+      final nombre = await action();
+      final service = _serviceTelechargement;
+      if (service != null) {
+        try {
+          await service.appliquerRegles(idTitre);
+        } catch (erreur, pile) {
+          // L'action du client est faite ; les règles seront réappliquées
+          // plus tard (démarrage, mises à jour).
+          Journal.actuel.avertissement(
+            CategorieJournal.telechargement,
+            'Règles de téléchargement non appliquées au titre n°$idTitre',
+            erreur: erreur,
+            pile: pile,
+          );
+        }
+      }
+      final numero = ++_numeroLecture;
+      final donnees = await _lireBase();
+      if (numero == _numeroLecture) _appliquer(donnees);
+      return ResultatAction<int>.reussite(nombre);
+    } on _TitreIntrouvable {
+      _signalerIntrouvable();
+      return const ResultatAction<int>.echec(
+        DescriptionErreur(NatureErreur.introuvable),
+      );
+    } catch (erreur, pile) {
+      return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnModificationSites = false;
+      notifier();
+    }
+  }
+
   /// État hors-ligne d'un chapitre (téléchargé, en file, en cours…).
   EtatHorsLigne etatHorsLigne(Chapitre chapitre) {
     final id = chapitre.id;
@@ -183,6 +465,7 @@ class EtatTitre extends EtatNotifiant {
         return;
       }
       _appliquer(donnees);
+      _noterOuverture();
     } on _TitreIntrouvable {
       if (numero != _numeroLecture) {
         return;
@@ -208,15 +491,31 @@ class EtatTitre extends EtatNotifiant {
       );
     }
     _estEnActualisation = true;
+    _sitesSansReponse = const <String>[];
     notifier();
     try {
       final resultat = await _service.actualiserTitre(titre);
+      // Étape 8 : un site en panne n'empêche pas les autres ; l'écran dit
+      // lesquels n'ont pas répondu.
+      _sitesSansReponse = <String>[
+        for (final idSource in resultat.erreursParSite.keys)
+          ?_sites
+              .where((site) => site.idSource == idSource)
+              .firstOrNull
+              ?.nomSite,
+      ];
       // Nouvelle génération : un chargement plus ancien encore en cours ne
       // doit pas écraser les données relues après l'actualisation.
       final numero = ++_numeroLecture;
       final donnees = await _lireBase();
       if (numero == _numeroLecture) {
         _appliquer(donnees);
+      }
+      // E11 : les nouveaux chapitres d'un titre favori ou suivi entrent dans
+      // la file tout de suite, sans attendre la prochaine recherche de mises
+      // à jour (erreur journalisée par `_appliquerRegles`).
+      if (resultat.nombreNouveauxChapitres > 0) {
+        await _appliquerRegles();
       }
       return ResultatAction<int>.reussite(resultat.nombreNouveauxChapitres);
     } on _TitreIntrouvable {
@@ -320,6 +619,7 @@ class EtatTitre extends EtatNotifiant {
       await _service.ajouterTitreALaListe(idListe, idTitre);
       _idsListesDuTitre = <int>{..._idsListesDuTitre, idListe};
       notifier();
+      await _relireListesDuTitre();
       await _appliquerReglesSiSysteme(idListe);
       return const ResultatAction<bool>.reussite(true);
     } catch (erreur, pile) {
@@ -337,6 +637,7 @@ class EtatTitre extends EtatNotifiant {
           if (id != idListe) id,
       };
       notifier();
+      await _relireListesDuTitre();
       await _appliquerReglesSiSysteme(idListe);
       return const ResultatAction<bool>.reussite(true);
     } catch (erreur, pile) {
@@ -344,13 +645,118 @@ class EtatTitre extends EtatNotifiant {
     }
   }
 
+  /// `true` si [liste] est tenue automatiquement par l'application (« En
+  /// attente ») : sa puce est affichée sans pouvoir être cochée.
+  bool estListeAutomatique(ListeLecture liste) =>
+      ClassementListes.listesAutomatiques.contains(liste.nom);
+
+  /// Relit les listes du titre : le service a pu le placer dans « En
+  /// attente » ou l'en retirer après un changement de liste.
+  Future<void> _relireListesDuTitre() async {
+    try {
+      final listes = await _service.chargerListesDuTitre(idTitre);
+      _idsListesDuTitre = <int>{
+        for (final liste in listes)
+          if (liste.id != null) liste.id!,
+      };
+      notifier();
+    } catch (erreur, pile) {
+      // L'action du client est faite ; seule la puce « En attente » peut
+      // rester en retard jusqu'au prochain chargement.
+      Journal.actuel.avertissement(
+        CategorieJournal.bibliotheque,
+        'Listes du titre n°$idTitre illisibles',
+        erreur: erreur,
+        pile: pile,
+      );
+    }
+  }
+
+  // ------------------------------------------------------------ Couvertures
+
+  /// `true` si le client a choisi une couverture (du site ou de l'appareil)
+  /// à la place de celle fournie par le site.
+  bool get aCouvertureChoisie => _titre?.couvertureChoisie != null;
+
+  /// Couvertures proposées par le site (MangaDex : une par volume) ; liste
+  /// vide si le site n'en propose qu'une. Lecture réseau.
+  Future<ResultatAction<List<CouvertureProposee>>>
+  recupererCouverturesDuSite() async {
+    final titre = _titre;
+    if (titre == null) {
+      return const ResultatAction<List<CouvertureProposee>>.echec(
+        DescriptionErreur(NatureErreur.introuvable),
+      );
+    }
+    try {
+      final couvertures = await _service.recupererCouverturesDuSite(titre);
+      return ResultatAction<List<CouvertureProposee>>.reussite(
+        <CouvertureProposee>[
+          for (final couverture in couvertures)
+            CouvertureProposee(
+              url: couverture.url,
+              urlMiniature: couverture.urlMiniature,
+              volume: couverture.volume,
+              langue: couverture.langue,
+            ),
+        ],
+      );
+    } catch (erreur, pile) {
+      return ResultatAction<List<CouvertureProposee>>.echec(
+        DescriptionErreur.depuis(erreur, pile),
+      );
+    }
+  }
+
+  /// Retient la couverture du site à [url] (téléchargée et enregistrée sur
+  /// l'appareil).
+  Future<ResultatAction<bool>> choisirCouverture(String url) =>
+      _changerCouverture(() => _service.choisirCouverture(idTitre, url));
+
+  /// Retient l'image de l'appareil à [chemin] comme couverture (une copie
+  /// est gardée avec le titre).
+  Future<ResultatAction<bool>> choisirCouvertureLocale(String chemin) =>
+      _changerCouverture(
+        () => _service.choisirCouvertureLocale(idTitre, chemin),
+      );
+
+  /// Revient à la couverture fournie par le site.
+  Future<ResultatAction<bool>> retablirCouvertureDuSite() =>
+      _changerCouverture(() => _service.retablirCouvertureDuSite(idTitre));
+
+  bool _estEnChangementCouverture = false;
+
+  /// `true` pendant le téléchargement ou l'enregistrement d'une couverture.
+  bool get estEnChangementCouverture => _estEnChangementCouverture;
+
+  Future<ResultatAction<bool>> _changerCouverture(
+    Future<Titre> Function() action,
+  ) async {
+    _estEnChangementCouverture = true;
+    notifier();
+    try {
+      final titre = await action();
+      // Le nombre de non-lus n'est pas relu par le service : on garde le
+      // compte local.
+      _titre = titre.copierAvec(nombreChapitresNonLus: nombreNonLus);
+      return const ResultatAction<bool>.reussite(true);
+    } catch (erreur, pile) {
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnChangementCouverture = false;
+      notifier();
+    }
+  }
+
   // ------------------------------------------------------- Téléchargements
 
   /// Ajoute [chapitre] à la file de téléchargement (ou relance un échec).
+  ///
+  /// Refusé pour un chapitre externe (jamais téléchargé).
   Future<ResultatAction<bool>> telecharger(Chapitre chapitre) async {
     final service = _serviceTelechargement;
     final id = chapitre.id;
-    if (service == null || id == null) {
+    if (service == null || id == null || chapitre.estExterne) {
       return const ResultatAction<bool>.echec(
         DescriptionErreur(NatureErreur.introuvable),
       );
@@ -395,6 +801,11 @@ class EtatTitre extends EtatNotifiant {
     chapitre,
     (service, id) => service.annulerSuppression(id),
   );
+
+  /// « Ne plus garder » : [chapitre] suit de nouveau les règles (sa
+  /// suppression peut être prévue dans 24 heures s'il n'est plus voulu).
+  Future<ResultatAction<bool>> nePlusGarder(Chapitre chapitre) =>
+      _agirSurArchive(chapitre, (service, id) => service.retirerGarde(id));
 
   /// Bouton « Supprimer maintenant » d'une suppression prévue (ou choix
   /// d'un doublon à retirer) : l'archive est effacée tout de suite.
@@ -470,16 +881,23 @@ class EtatTitre extends EtatNotifiant {
     if (!resultat.estReussi) {
       return const ResultatAction<int?>.reussite(null);
     }
-    await _appliquerRegles();
+    // `actualiser` applique déjà les règles quand il trouve des chapitres :
+    // inutile de relancer le calcul une seconde fois.
+    if ((resultat.donnee ?? 0) == 0) {
+      await _appliquerRegles();
+    }
     return ResultatAction<int?>.reussite(resultat.donnee);
   }
 
   /// Crée l'état du lecteur ouvert sur [chapitre], ou `null` si les
   /// téléchargements ne sont pas disponibles.
+  ///
+  /// Toujours `null` pour un chapitre externe : il ne se lit que sur le site
+  /// de l'éditeur (PLAYBOOK.md section 10).
   EtatLecteur? creerEtatLecteur(Chapitre chapitre) {
     final service = _serviceTelechargement;
     final id = chapitre.id;
-    if (service == null || id == null) return null;
+    if (service == null || id == null || chapitre.estExterne) return null;
     return EtatLecteur(
       serviceBibliotheque: _service,
       serviceTelechargement: service,
@@ -488,15 +906,245 @@ class EtatTitre extends EtatNotifiant {
     );
   }
 
-  /// Applique les règles de conservation si [idListe] est Favoris ou Suivis
-  /// (les seules listes qui déclenchent des téléchargements).
+  /// Applique les règles de conservation si [idListe] est Favoris, Suivis
+  /// ou Terminés (ou si la liste est introuvable).
+  ///
+  /// Seules Favoris et Suivis (et l'archive complète) comptent pour la
+  /// politique de téléchargement : Terminés ne l'arrête pas (un titre à la
+  /// fois Suivis et Terminés reste téléchargé, voir `ClassementListes`). Le
+  /// déclenchement sur Terminés ne fait que relire la politique, sans effet
+  /// propre.
   Future<void> _appliquerReglesSiSysteme(int idListe) async {
     final liste = _listes.where((liste) => liste.id == idListe).firstOrNull;
     if (liste == null ||
         liste.nom == nomListeFavoris ||
-        liste.nom == nomListeSuivis) {
+        liste.nom == nomListeSuivis ||
+        liste.nom == nomListeTermines) {
       await _appliquerRegles();
     }
+  }
+
+  // ------------------------------------ Description personnelle (client)
+
+  bool _estEnEnregistrementDescription = false;
+
+  /// `true` pendant l'enregistrement de la description personnelle.
+  bool get estEnEnregistrementDescription => _estEnEnregistrementDescription;
+
+  /// Nombre maximal de caractères de la description personnelle (au-delà,
+  /// le service refuse l'enregistrement).
+  static const int longueurMaxDescription = longueurMaxDescriptionPerso;
+
+  /// Description personnelle du titre (distincte du résumé du site), ou
+  /// `null` s'il n'y en a pas.
+  String? get descriptionPerso => _titre?.descriptionPerso;
+
+  /// Enregistre la description personnelle ; `null` ou un texte vide
+  /// l'efface. La fiche est relue ensuite.
+  ///
+  /// Décision du client : la fiche venant du site n'est pas modifiable,
+  /// seule cette description lui appartient.
+  Future<ResultatAction<bool>> enregistrerDescriptionPerso(
+    String? texte,
+  ) async {
+    if (_estEnEnregistrementDescription) {
+      return const ResultatAction<bool>.reussite(false);
+    }
+    _estEnEnregistrementDescription = true;
+    notifier();
+    try {
+      await _service.enregistrerDescriptionPerso(idTitre, texte);
+      final numero = ++_numeroLecture;
+      final donnees = await _lireBase();
+      if (numero == _numeroLecture) _appliquer(donnees);
+      return const ResultatAction<bool>.reussite(true);
+    } on _TitreIntrouvable {
+      _signalerIntrouvable();
+      return const ResultatAction<bool>.echec(
+        DescriptionErreur(NatureErreur.introuvable),
+      );
+    } catch (erreur, pile) {
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnEnregistrementDescription = false;
+      notifier();
+    }
+  }
+
+  // ------------------------------------------- Sélection de chapitres (X10)
+
+  /// Lignes sélectionnées, par identifiant de leur version retenue
+  /// (`GroupeChapitres.retenu`) : une ligne = un numéro, toutes langues.
+  Set<int> _idsSelection = const <int>{};
+
+  /// Sélection d'avant le glisser en cours : le glisser y ajoute la plage
+  /// entre la ligne de départ et la ligne survolée.
+  Set<int> _selectionAvantGlisser = const <int>{};
+
+  /// Ligne où le glisser a commencé, ou `null`.
+  int? _ancreGlisser;
+
+  bool _estEnSelection = false;
+  bool _estEnMarquageLot = false;
+
+  /// `true` en mode sélection (cases à cocher, barre d'actions).
+  bool get estEnSelection => _estEnSelection;
+
+  /// `true` pendant l'enregistrement d'un marquage en lot.
+  bool get estEnMarquageLot => _estEnMarquageLot;
+
+  /// Nombre de lignes sélectionnées (parmi celles affichées).
+  int get nombreSelectionnes => _groupesSelectionnes.length;
+
+  /// `true` si toutes les lignes affichées sont sélectionnées.
+  bool get toutEstSelectionne =>
+      _groupes.isNotEmpty && nombreSelectionnes == _groupes.length;
+
+  /// Seule ligne sélectionnée (parmi celles affichées), ou `null` s'il y en
+  /// a zéro ou plusieurs.
+  GroupeChapitres? get groupeSelectionneUnique {
+    final choisis = _groupesSelectionnes;
+    return choisis.length == 1 ? choisis.single : null;
+  }
+
+  /// `true` si la ligne [groupe] est sélectionnée.
+  bool estSelectionne(GroupeChapitres groupe) =>
+      _idsSelection.contains(groupe.retenu.id);
+
+  List<GroupeChapitres> get _groupesSelectionnes => <GroupeChapitres>[
+    for (final groupe in _groupes)
+      if (_idsSelection.contains(groupe.retenu.id)) groupe,
+  ];
+
+  /// Entre en mode sélection avec [groupe] sélectionné (appui long).
+  void commencerSelection(GroupeChapitres groupe) {
+    final id = groupe.retenu.id;
+    if (id == null) return;
+    _estEnSelection = true;
+    _idsSelection = <int>{..._idsSelection, id};
+    notifier();
+  }
+
+  /// Ajoute ou retire [groupe] de la sélection (appui ou case en mode
+  /// sélection). La sélection reste ouverte même vide : le client la ferme
+  /// avec « Annuler ».
+  void basculerSelection(GroupeChapitres groupe) {
+    final id = groupe.retenu.id;
+    if (id == null) return;
+    _estEnSelection = true;
+    _idsSelection = _idsSelection.contains(id)
+        ? (Set<int>.of(_idsSelection)..remove(id))
+        : <int>{..._idsSelection, id};
+    notifier();
+  }
+
+  /// Début d'un glisser de sélection sur [groupe] (appui long suivi d'un
+  /// glisser, ou clic maintenu à la souris).
+  void commencerGlisser(GroupeChapitres groupe) {
+    final id = groupe.retenu.id;
+    if (id == null) return;
+    _estEnSelection = true;
+    _selectionAvantGlisser = _idsSelection;
+    _ancreGlisser = id;
+    _idsSelection = <int>{..._idsSelection, id};
+    notifier();
+  }
+
+  /// Le glisser survole [groupe] : la sélection devient celle d'avant le
+  /// glisser, plus toutes les lignes entre la ligne de départ et celle-ci.
+  void etendreGlisser(GroupeChapitres groupe) {
+    final ancre = _ancreGlisser;
+    if (ancre == null) return;
+    final debut = _groupes.indexWhere((g) => g.retenu.id == ancre);
+    final fin = _groupes.indexWhere((g) => g.retenu.id == groupe.retenu.id);
+    if (debut < 0 || fin < 0) return;
+    final plage = <int>{
+      for (var i = math.min(debut, fin); i <= math.max(debut, fin); i++)
+        ?_groupes[i].retenu.id,
+    };
+    final nouvelle = <int>{..._selectionAvantGlisser, ...plage};
+    if (setEquals(nouvelle, _idsSelection)) return;
+    _idsSelection = nouvelle;
+    notifier();
+  }
+
+  /// Fin du glisser de sélection.
+  void terminerGlisser() {
+    _ancreGlisser = null;
+    _selectionAvantGlisser = const <int>{};
+  }
+
+  /// Sélectionne toutes les lignes affichées (filtre de site compris).
+  void toutSelectionner() {
+    _estEnSelection = true;
+    _idsSelection = <int>{for (final groupe in _groupes) ?groupe.retenu.id};
+    notifier();
+  }
+
+  /// Quitte le mode sélection sans rien changer.
+  void annulerSelection() {
+    _estEnSelection = false;
+    _idsSelection = const <int>{};
+    terminerGlisser();
+    notifier();
+  }
+
+  /// Marque lues (ou non lues si [lu] vaut `false`) toutes les versions des
+  /// lignes sélectionnées, en une fois, puis quitte le mode sélection.
+  /// Renvoie le nombre de chapitres dont l'état a changé.
+  Future<ResultatAction<int>> marquerSelection({bool lu = true}) async {
+    final ids = <int>{
+      for (final groupe in _groupesSelectionnes)
+        for (final chapitre in groupe.versions) ?chapitre.id,
+    };
+    if (ids.isEmpty) return const ResultatAction<int>.reussite(0);
+    _estEnMarquageLot = true;
+    notifier();
+    try {
+      final nombre = await _service.marquerChapitresLus(idTitre, ids, lu: lu);
+      _marquerLocalement((chapitre) => ids.contains(chapitre.id), lu);
+      _estEnSelection = false;
+      _idsSelection = const <int>{};
+      terminerGlisser();
+      notifier();
+      await _appliquerRegles();
+      return ResultatAction<int>.reussite(nombre);
+    } catch (erreur, pile) {
+      return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnMarquageLot = false;
+      notifier();
+    }
+  }
+
+  /// « Marquer lus jusqu'ici » : tous les chapitres de numéro inférieur ou
+  /// égal à [numero] (toutes langues, tous sites) deviennent lus. Renvoie
+  /// le nombre de chapitres dont l'état a changé.
+  Future<ResultatAction<int>> marquerLusJusqua(double numero) async {
+    _estEnMarquageLot = true;
+    notifier();
+    try {
+      final nombre = await _service.marquerLusJusqua(idTitre, numero);
+      _marquerLocalement((chapitre) => chapitre.numero <= numero, true);
+      notifier();
+      await _appliquerRegles();
+      return ResultatAction<int>.reussite(nombre);
+    } catch (erreur, pile) {
+      return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnMarquageLot = false;
+      notifier();
+    }
+  }
+
+  /// Mise à jour locale après un marquage en lot (la liste ne saute pas).
+  void _marquerLocalement(bool Function(Chapitre) choisi, bool lu) {
+    _chapitres = <Chapitre>[
+      for (final chapitre in _chapitres)
+        choisi(chapitre) ? chapitre.copierAvec(estLu: lu) : chapitre,
+    ];
+    _mettreAJourNonLus();
+    _regrouper();
   }
 
   /// Demande au service d'appliquer les règles de conservation à ce titre.
@@ -509,7 +1157,12 @@ class EtatTitre extends EtatNotifiant {
     try {
       await service.appliquerRegles(idTitre);
     } catch (erreur, pile) {
-      debugPrint('Règles de téléchargement non appliquées : $erreur\n$pile');
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Règles de téléchargement non appliquées au titre n°$idTitre',
+        erreur: erreur,
+        pile: pile,
+      );
     }
     await _relireTelechargements(relireChapitres: true);
   }
@@ -590,7 +1243,12 @@ class EtatTitre extends EtatNotifiant {
         notifier();
       } catch (erreur, pile) {
         // Un échec de lecture de la file ne doit pas masquer la fiche.
-        debugPrint('File de téléchargement illisible : $erreur\n$pile');
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Fiche du titre n°$idTitre : file de téléchargement illisible',
+          erreur: erreur,
+          pile: pile,
+        );
       }
     } while (_relectureRedemandee);
   }
@@ -606,7 +1264,10 @@ class EtatTitre extends EtatNotifiant {
     final source = idSource == null
         ? null
         : await _service.chargerSource(idSource);
-    final categories = await _service.chargerCategoriesDuTitre(idTitre);
+    final serviceCategories = _serviceCategories;
+    final categories = serviceCategories == null
+        ? await _service.chargerCategoriesDuTitre(idTitre)
+        : await serviceCategories.chargerCategoriesEffectivesDuTitre(idTitre);
     final listes = await _service.chargerListes();
     final listesDuTitre = await _service.chargerListesDuTitre(idTitre);
     final chapitres = await _service.chargerChapitres(idTitre);
@@ -627,9 +1288,12 @@ class EtatTitre extends EtatNotifiant {
         ? const <List<Chapitre>>[]
         : await service.chargerDoublons(idTitre);
 
+    final sites = await _service.chargerSitesDuTitre(idTitre);
+
     return (
       titre: titre,
       source: source,
+      sites: sites,
       categories: categories,
       listes: listes,
       idsListesDuTitre: <int>{
@@ -663,6 +1327,12 @@ class EtatTitre extends EtatNotifiant {
   void _appliquer(_DonneesTitre donnees) {
     _titre = donnees.titre;
     _source = donnees.source;
+    _sites = donnees.sites;
+    // Un site retiré entre-temps ne peut plus servir de filtre.
+    if (_idSiteFiltre != null &&
+        !_sites.any((site) => site.idSource == _idSiteFiltre)) {
+      _idSiteFiltre = null;
+    }
     _categories = donnees.categories;
     _listes = donnees.listes;
     _idsListesDuTitre = donnees.idsListesDuTitre;
@@ -675,8 +1345,25 @@ class EtatTitre extends EtatNotifiant {
   }
 
   /// Une ligne par numéro (chaque oneshot à part), la plus récente en haut.
+  ///
+  /// Avec un filtre de site, seuls les chapitres de ce site sont regroupés.
+  /// La politique reçoit le site principal et les sites liés, comme dans
+  /// `ServiceTelechargement` : la version mise en avant est celle qu'il
+  /// télécharge.
   void _regrouper() {
-    _groupes = regrouperParNumero(_chapitres, _langues).reversed.toList();
+    final filtre = _idSiteFiltre;
+    final chapitres = filtre == null
+        ? _chapitres
+        : _chapitres.where((chapitre) => idSiteDe(chapitre) == filtre).toList();
+    final idPrincipal = _titre?.idSource;
+    _groupes = regrouperParNumero(
+      chapitres,
+      _langues,
+      idSourcePrincipale: idPrincipal,
+      idsSourcesLiees: _sites.isEmpty
+          ? null
+          : <int>{?idPrincipal, for (final site in _sites) site.idSource},
+    ).reversed.toList();
     _mettreAJourCompteARebours();
   }
 
@@ -697,10 +1384,34 @@ class EtatTitre extends EtatNotifiant {
 
   @override
   void dispose() {
+    if (_ouvertureNotee) {
+      Journal.actuel.debogage(
+        CategorieJournal.interface,
+        'Fiche du titre n°$idTitre fermée',
+      );
+    }
     _minuterieCompteARebours?.cancel();
     _minuterieCompteARebours = null;
     unawaited(_abonnement?.cancel());
     super.dispose();
+  }
+
+  /// `true` une fois l'ouverture de la fiche notée dans le journal.
+  bool _ouvertureNotee = false;
+
+  /// Note l'ouverture de la fiche au premier chargement réussi (le service
+  /// ne voit pas la navigation) ; « Réessayer » et les relectures ne la
+  /// notent pas une seconde fois.
+  void _noterOuverture() {
+    if (_ouvertureNotee) return;
+    _ouvertureNotee = true;
+    final titre = _titre;
+    Journal.actuel.info(
+      CategorieJournal.interface,
+      'Fiche ouverte : titre n°$idTitre'
+      '${titre == null ? '' : ' « ${titre.nom} »'} '
+      '(${_chapitres.length} chapitre(s))',
+    );
   }
 
   void _signalerIntrouvable() {
@@ -720,6 +1431,7 @@ class EtatTitre extends EtatNotifiant {
 typedef _DonneesTitre = ({
   Titre titre,
   Source? source,
+  List<SiteDuTitre> sites,
   List<Categorie> categories,
   List<ListeLecture> listes,
   Set<int> idsListesDuTitre,

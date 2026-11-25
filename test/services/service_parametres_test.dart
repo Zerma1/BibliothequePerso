@@ -62,6 +62,34 @@ void main() {
     expect((await parametres.chargerReglagesTelechargement()).suivisAvant, 5);
   });
 
+  group('téléchargements simultanés', () {
+    test('valent 3 tant que rien n\'est choisi', () async {
+      expect(await parametres.chargerTelechargementsSimultanes(), 3);
+    });
+
+    test('sont ramenés entre 1 et 32 à l\'enregistrement', () async {
+      await parametres.enregistrerTelechargementsSimultanes(12);
+      expect(await parametres.chargerTelechargementsSimultanes(), 12);
+      await parametres.enregistrerTelechargementsSimultanes(0);
+      expect(await parametres.chargerTelechargementsSimultanes(), 1);
+      await parametres.enregistrerTelechargementsSimultanes(1000);
+      expect(await parametres.chargerTelechargementsSimultanes(), 32);
+    });
+
+    test('une valeur hors bornes écrite en base retombe sur 3', () async {
+      await depot.enregistrerEntier(
+        ServiceParametres.cleTelechargementsSimultanes,
+        500,
+      );
+      expect(await parametres.chargerTelechargementsSimultanes(), 3);
+      await depot.enregistrerEntier(
+        ServiceParametres.cleTelechargementsSimultanes,
+        0,
+      );
+      expect(await parametres.chargerTelechargementsSimultanes(), 3);
+    });
+  });
+
   test(
     'les chapitres gardés se relisent, valeurs illisibles ignorées',
     () async {

@@ -4,9 +4,13 @@ library;
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
+import '../etat/description_erreur.dart';
 import '../etat/etat_sources.dart';
 import '../modeles/source.dart';
+import '../widgets/bouton_rapport_erreur.dart';
+import '../widgets/champs_reglages_generiques.dart';
 import '../widgets/constantes_interface.dart';
+import '../widgets/section_diagnostic_site.dart';
 import '../widgets/textes.dart';
 
 /// Formulaire d'ajout d'un site par son adresse.
@@ -14,6 +18,10 @@ import '../widgets/textes.dart';
 /// Le type est détecté automatiquement ; le client peut le corriger si la
 /// détection se trompe (PLAYBOOK.md section 6, étape 2 bis). En cas de
 /// réussite, l'écran se ferme et renvoie le message de confirmation.
+///
+/// Tâche T3 : aide « Critères de lecture », réglages avancés (sélecteurs
+/// CSS) pour un site générique, et diagnostic « Pourquoi ce site n'est pas
+/// lisible ? » après un refus.
 class EcranAjoutSite extends StatefulWidget {
   /// Crée l'écran.
   const EcranAjoutSite({super.key});
@@ -27,17 +35,38 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
   final TextEditingController _url = TextEditingController();
   final TextEditingController _nom = TextEditingController();
   final TextEditingController _langue = TextEditingController();
+
+  /// Un champ par réglage avancé d'un site générique (sélecteurs CSS).
+  final Map<String, TextEditingController> _reglages =
+      <String, TextEditingController>{
+        for (final cle in EtatSources.clesReglagesGeneriques)
+          cle: TextEditingController(),
+      };
   TypeSource? _typeForce;
   String _nomPropose = '';
   String? _messageErreur;
+
+  /// Erreur du dernier essai, gardée pour le rapport d'erreur exportable.
+  DescriptionErreur? _erreur;
+
+  /// Adresse refusée par le dernier essai (objet du diagnostic).
+  String _urlRefusee = '';
 
   @override
   void dispose() {
     _url.dispose();
     _nom.dispose();
     _langue.dispose();
+    for (final controleur in _reglages.values) {
+      controleur.dispose();
+    }
     super.dispose();
   }
+
+  /// `true` si les réglages avancés peuvent servir : type générique choisi,
+  /// ou détection automatique (qui peut conclure à un site générique).
+  bool get _reglagesUtiles =>
+      _typeForce == null || _typeForce == TypeSource.generique;
 
   String? _validerUrl(String? valeur) {
     if (valeur == null || valeur.trim().isEmpty) {
@@ -49,27 +78,41 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
   }
 
   String? _validerLangue(String? valeur) {
-    final langue = valeur?.trim() ?? '';
-    if (langue.isEmpty) {
-      return null;
-    }
-    final estCode =
-        langue.length == longueurCodeLangue &&
-        RegExp(r'^[a-zA-Z]+$').hasMatch(langue);
-    return estCode ? null : Textes.erreurLangue;
+    // Variantes régionales acceptées (« pt-br ») : même règle que le service.
+    return EtatSources.languesValides(valeur ?? '')
+        ? null
+        : Textes.erreurLangue;
   }
 
   Future<void> _ajouter() async {
     final formulaire = _cleFormulaire.currentState;
+    final reglages = _reglagesUtiles
+        ? <String, String>{
+            for (final entree in _reglages.entries)
+              entree.key: entree.value.text,
+          }
+        : const <String, String>{};
     if (formulaire == null || !formulaire.validate()) {
+      // Un réglage avancé refusé peut se trouver dans la section repliée :
+      // son message (qui nomme le champ) est aussi repris sous le
+      // formulaire, à côté du bouton.
+      setState(() {
+        _messageErreur = EtatSources.erreurReglagesGeneriques(reglages);
+        _erreur = null;
+      });
       return;
     }
-    setState(() => _messageErreur = null);
+    setState(() {
+      _messageErreur = null;
+      _erreur = null;
+    });
+    final url = _url.text.trim();
     final resultat = await context.read<EtatSources>().ajouterSite(
       _url.text,
       nom: _nom.text,
       langueParDefaut: _langue.text,
       typeForce: _typeForce,
+      reglagesGeneriques: reglages,
     );
     if (!mounted) {
       return;
@@ -77,11 +120,13 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
     final erreur = resultat.erreur;
     final ajout = resultat.donnee;
     if (erreur != null || ajout == null) {
-      setState(
-        () => _messageErreur = erreur == null
+      setState(() {
+        _erreur = erreur;
+        _urlRefusee = url;
+        _messageErreur = erreur == null
             ? Textes.erreurInattendue
-            : Textes.messageErreur(erreur),
-      );
+            : Textes.messageErreur(erreur);
+      });
       return;
     }
     Navigator.of(context).pop(
@@ -124,7 +169,18 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
                     onChanged: (valeur) =>
                         setState(() => _nomPropose = etat.proposerNom(valeur)),
                   ),
-                  const SizedBox(height: espacementMoyen),
+                  // Aide repliée par défaut, juste sous l'adresse : le client
+                  // la trouve au moment où il se demande quoi coller, sans
+                  // qu'elle allonge le formulaire.
+                  const ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    leading: Icon(Icons.info_outline),
+                    title: Text(Textes.criteresLecture),
+                    expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                    childrenPadding: EdgeInsets.only(bottom: espacementPetit),
+                    children: <Widget>[Text(Textes.aideCriteresLecture)],
+                  ),
+                  const SizedBox(height: espacementPetit),
                   TextFormField(
                     controller: _nom,
                     enabled: !enCours,
@@ -140,7 +196,6 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
                   TextFormField(
                     controller: _langue,
                     enabled: !enCours,
-                    maxLength: longueurCodeLangue,
                     decoration: const InputDecoration(
                       labelText: Textes.champLangue,
                       helperText: Textes.aideLangue,
@@ -149,8 +204,13 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
                     validator: _validerLangue,
                   ),
                   const SizedBox(height: espacementPetit),
+                  // isExpanded : le menu prend la largeur du formulaire au lieu
+                  // de celle du libellé le plus long (ex. « Scan-Manga (lecture
+                  // sur le site) »), qui débordait sur un écran étroit ; les
+                  // libellés trop longs sont alors tronqués avec des points.
                   DropdownButtonFormField<TypeSource?>(
                     initialValue: _typeForce,
+                    isExpanded: true,
                     decoration: const InputDecoration(
                       labelText: Textes.champTypeSite,
                       helperText: Textes.aideTypeSite,
@@ -163,13 +223,24 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
                       for (final type in TypeSource.values)
                         DropdownMenuItem<TypeSource?>(
                           value: type,
-                          child: Text(Textes.libelleTypeSource(type)),
+                          child: Text(
+                            Textes.libelleTypeSource(type),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                     ],
                     onChanged: enCours
                         ? null
                         : (type) => setState(() => _typeForce = type),
                   ),
+                  // Réglages repliés : la plupart des sites se lisent sans
+                  // eux (heuristiques) ; masqués pour un type qui ne s'en
+                  // sert pas.
+                  if (_reglagesUtiles)
+                    ChampsReglagesGeneriques(
+                      controleurs: _reglages,
+                      estActive: !enCours,
+                    ),
                   const SizedBox(height: espacementGrand),
                   if (enCours) ...<Widget>[
                     const LinearProgressIndicator(),
@@ -187,6 +258,26 @@ class _EtatEcranAjoutSite extends State<EcranAjoutSite> {
                         color: Theme.of(context).colorScheme.error,
                       ),
                     ),
+                    // Le rapport aide à faire diagnostiquer un site que la
+                    // détection ne sait pas lire (étape 6).
+                    if (_erreur != null && !enCours) ...<Widget>[
+                      const SizedBox(height: espacementPetit),
+                      BoutonRapportErreur(
+                        erreur: _erreur!,
+                        action: Textes.actionRapportAjoutSite,
+                      ),
+                      // Seulement quand le site est en cause : une adresse
+                      // vide n'a rien à analyser.
+                      if (_erreur!.nature == NatureErreur.site ||
+                          _erreur!.nature == NatureErreur.refus) ...<Widget>[
+                        const SizedBox(height: espacementPetit),
+                        SectionDiagnosticSite(
+                          key: ValueKey<String>(_urlRefusee),
+                          diagnostiquer: () =>
+                              etat.diagnostiquerSite(_urlRefusee),
+                        ),
+                      ],
+                    ],
                     const SizedBox(height: espacementMoyen),
                   ],
                   FilledButton.icon(

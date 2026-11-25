@@ -10,11 +10,13 @@ import 'package:provider/provider.dart';
 
 import '../etat/etat_lecteur.dart';
 import '../etat/outils_chapitres.dart';
+import '../modeles/chapitre.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/indicateur_hors_ligne.dart';
 import '../widgets/messages.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
+import 'ecran_navigateur.dart';
 
 /// Lecteur d'un chapitre : pages lues directement dans l'archive `.zip`,
 /// chargées au fur et à mesure du défilement, zoom, position « page X / N »
@@ -84,6 +86,8 @@ class EcranLecteur extends StatelessWidget {
         return const VueChargement();
       case NatureContenu.nonTelecharge:
         return _VueNonTelecharge(etat: etat);
+      case NatureContenu.externe:
+        return _VueExterne(etat: etat);
       case NatureContenu.texte:
         // Clé par chapitre : un nouveau chapitre repart en haut de page.
         return _VueTexte(key: ValueKey<int?>(chapitre?.id), etat: etat);
@@ -177,6 +181,21 @@ class _VueNonTelecharge extends StatelessWidget {
                     : Textes.telecharger,
               ),
             ),
+          // « Lire en ligne » : navigateur intégré (Windows, Android) ; au
+          // retour, le chapitre a peut-être été enregistré depuis la page.
+          if (chapitre != null && EcranNavigateur.estDisponible(context))
+            OutlinedButton.icon(
+              onPressed: () async {
+                await EcranNavigateur.ouvrir(
+                  context,
+                  chapitre.urlChapitre,
+                  idTitre: etat.idTitre,
+                );
+                await etat.charger();
+              },
+              icon: const Icon(Icons.public),
+              label: const Text(Textes.lireEnLigne),
+            ),
           if (chapitre != null)
             OutlinedButton.icon(
               onPressed: () => ouvrirLienExterne(context, chapitre.urlChapitre),
@@ -184,6 +203,61 @@ class _VueNonTelecharge extends StatelessWidget {
               label: const Text(Textes.ouvrirSurLeSite),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Chapitre publié sur un site externe : rien à lire ici, seulement le lien
+/// vers le site de l'éditeur (PLAYBOOK.md section 10).
+class _VueExterne extends StatelessWidget {
+  const _VueExterne({required this.etat});
+
+  final EtatLecteur etat;
+
+  @override
+  Widget build(BuildContext context) {
+    final chapitre = etat.chapitre;
+    final site = chapitre == null ? null : etat.nomSiteExterneDe(chapitre);
+    if (chapitre == null || site == null) return const VueChargement();
+    return VueVide(
+      message: Textes.lecteurChapitreExterne(site),
+      icone: iconeLienExterne,
+      action: _BoutonLireSurSite(
+        chapitre: chapitre,
+        site: site,
+        idTitre: etat.idTitre,
+      ),
+    );
+  }
+}
+
+/// Bouton « Lire sur `site` » d'un chapitre externe : ouvre la page dans le
+/// navigateur intégré (Windows, Android), sinon dans le navigateur du
+/// système.
+class _BoutonLireSurSite extends StatelessWidget {
+  const _BoutonLireSurSite({
+    required this.chapitre,
+    required this.site,
+    required this.idTitre,
+  });
+
+  final Chapitre chapitre;
+  final String site;
+  final int idTitre;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: () => EcranNavigateur.ouvrir(
+        context,
+        chapitre.urlExterne!,
+        idTitre: idTitre,
+      ),
+      icon: const Icon(iconeLienExterne),
+      label: Text(
+        '${Textes.lireSur(site)} : '
+        '${Textes.nomChapitre(chapitre.nom, chapitre.numero)}',
       ),
     );
   }
@@ -206,6 +280,15 @@ class _EtatVueImages extends State<_VueImages> {
   /// Clés des pages actuellement construites : servent à savoir laquelle
   /// est au milieu de l'écran (position « page X / N »).
   final Map<int, GlobalKey> _clesPages = <int, GlobalKey>{};
+
+  /// Proportion (hauteur / largeur) de chaque page déjà décodée, gardée
+  /// pour tout le chapitre. En remontant, une page reconstruite (et parfois
+  /// relue dans l'archive, l'état oubliant les octets des pages éloignées)
+  /// réserve d'emblée sa hauteur réelle au lieu de la hauteur provisoire :
+  /// sinon elle grandissait au-dessus de l'écran une fois décodée et tout
+  /// le contenu visible était repoussé vers le bas (sauts signalés par le
+  /// client sur la 0.2.0-test).
+  final Map<int, double> _proportionsPages = <int, double>{};
 
   @override
   void initState() {
@@ -301,6 +384,12 @@ class _EtatVueImages extends State<_VueImages> {
                       etat: etat,
                       index: index,
                       hauteurProvisoire: hauteurProvisoire,
+                      proportionConnue: _proportionsPages[index],
+                      // Pas de setState : la page décodée a déjà sa taille
+                      // réelle ; la valeur ne sert qu'aux prochaines
+                      // constructions de cette page.
+                      surProportion: (proportion) =>
+                          _proportionsPages[index] = proportion,
                     ),
                   ),
                 );
@@ -348,11 +437,21 @@ class _PageLecteur extends StatefulWidget {
     required this.etat,
     required this.index,
     required this.hauteurProvisoire,
+    required this.proportionConnue,
+    required this.surProportion,
   });
 
   final EtatLecteur etat;
   final int index;
+
+  /// Hauteur réservée tant que la proportion de la page est inconnue.
   final double hauteurProvisoire;
+
+  /// Proportion (hauteur / largeur) de la page si elle a déjà été décodée.
+  final double? proportionConnue;
+
+  /// Appelé avec la proportion de la page dès qu'elle est décodée.
+  final ValueChanged<double> surProportion;
 
   @override
   State<_PageLecteur> createState() => _EtatPageLecteur();
@@ -383,62 +482,118 @@ class _EtatPageLecteur extends State<_PageLecteur> {
     setState(() => _lecture = widget.etat.page(widget.index));
   }
 
+  /// Image écoutée pour connaître sa proportion une fois décodée.
+  ImageProvider? _imageEcoutee;
+  ImageStream? _flux;
+  ImageStreamListener? _ecouteur;
+
+  /// Écoute le décodage de [image] (une seule fois par image) pour
+  /// transmettre sa proportion au lecteur. Le décodage est celui de
+  /// l'`Image` affichée (même clé dans le cache d'images) : rien n'est
+  /// décodé deux fois.
+  void _ecouterProportion(BuildContext context, ImageProvider image) {
+    if (image == _imageEcoutee) return;
+    _arreterEcoute();
+    _imageEcoutee = image;
+    final ecouteur = ImageStreamListener((info, _) {
+      final largeur = info.image.width;
+      if (largeur > 0) widget.surProportion(info.image.height / largeur);
+    }, onError: (_, _) {});
+    _ecouteur = ecouteur;
+    _flux = image.resolve(createLocalImageConfiguration(context))
+      ..addListener(ecouteur);
+  }
+
+  void _arreterEcoute() {
+    final ecouteur = _ecouteur;
+    if (ecouteur != null) _flux?.removeListener(ecouteur);
+    _flux = null;
+    _ecouteur = null;
+    _imageEcoutee = null;
+  }
+
+  @override
+  void dispose() {
+    _arreterEcoute();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final etat = widget.etat;
     final index = widget.index;
     final hauteurProvisoire = widget.hauteurProvisoire;
-    return FutureBuilder<Uint8List>(
-      future: _lecture,
-      builder: (context, instantane) {
-        if (instantane.hasError) {
-          return SizedBox(
-            height: hauteurProvisoire / 2,
-            child: VueErreur(
-              message: Textes.pageIllisible,
-              surReessayer: _relire,
-            ),
-          );
-        }
-        final octets = instantane.data;
-        if (octets == null) {
-          // Hauteur provisoire : la liste ne « saute » pas trop quand la
-          // page arrive.
-          return SizedBox(
-            height: hauteurProvisoire,
-            child: const VueChargement(),
-          );
-        }
-        // Largeur réellement affichée (plafonnée par la colonne de lecture)
-        // : l'image est décodée à cette taille en pixels physiques et non à
-        // sa taille d'origine, souvent bien plus grande. Une page de
-        // webtoon décodée en entier peut peser des dizaines de Mo.
-        return LayoutBuilder(
-          builder: (context, contraintes) {
-            final largeur = contraintes.maxWidth;
-            final largeurDecodage = largeur.isFinite && largeur > 0
+    final proportion = widget.proportionConnue;
+    // Largeur réellement affichée (plafonnée par la colonne de lecture) :
+    // elle donne la hauteur réservée d'une page dont la proportion est
+    // connue, et la taille de décodage de l'image.
+    return LayoutBuilder(
+      builder: (context, contraintes) {
+        final largeur = contraintes.maxWidth;
+        final largeurValide = largeur.isFinite && largeur > 0;
+        // Hauteur réelle si la page a déjà été affichée, sinon provisoire.
+        // Elle ne change donc jamais pour une page déjà vue : en remontant,
+        // rien ne grandit au-dessus de l'écran.
+        final hauteurReservee = proportion != null && largeurValide
+            ? largeur * proportion
+            : hauteurProvisoire;
+        return FutureBuilder<Uint8List>(
+          future: _lecture,
+          builder: (context, instantane) {
+            if (instantane.hasError) {
+              return SizedBox(
+                height: proportion == null
+                    ? hauteurProvisoire / 2
+                    : hauteurReservee,
+                child: VueErreur(
+                  message: Textes.pageIllisible,
+                  surReessayer: _relire,
+                ),
+              );
+            }
+            final octets = instantane.data;
+            if (octets == null) {
+              return SizedBox(
+                height: hauteurReservee,
+                child: const VueChargement(),
+              );
+            }
+            // Décodage à la largeur affichée en pixels physiques et non à
+            // la taille d'origine, souvent bien plus grande : une page de
+            // webtoon décodée en entier peut peser des dizaines de Mo.
+            final largeurDecodage = largeurValide
                 ? (largeur * MediaQuery.devicePixelRatioOf(context)).round()
                 : null;
-            return Image.memory(
-              octets,
+            final image = ResizeImage.resizeIfNeeded(
+              largeurDecodage,
+              null,
+              MemoryImage(octets),
+            );
+            _ecouterProportion(context, image);
+            final vue = Image(
+              image: image,
               width: double.infinity,
               fit: BoxFit.fitWidth,
-              cacheWidth: largeurDecodage,
               gaplessPlayback: true,
               semanticLabel: Textes.pageSurTotal(index + 1, etat.nombrePages),
               // Tant que l'image n'est pas décodée, elle n'a pas de hauteur :
-              // on garde la hauteur provisoire, sinon toutes les pages
+              // on garde la hauteur réservée, sinon toutes les pages
               // suivantes entreraient d'un coup dans l'écran (et seraient
               // toutes lues).
               frameBuilder: (context, enfant, image, estSynchrone) =>
                   image == null && !estSynchrone
-                  ? SizedBox(height: hauteurProvisoire, child: enfant)
+                  ? SizedBox(height: hauteurReservee, child: enfant)
                   : enfant,
               errorBuilder: (_, _, _) => SizedBox(
                 height: hauteurProvisoire / 2,
                 child: const Center(child: Text(Textes.pageIllisible)),
               ),
             );
+            // Proportion connue : hauteur fixée, identique avant et après
+            // le décodage.
+            return proportion == null
+                ? vue
+                : SizedBox(height: hauteurReservee, child: vue);
           },
         );
       },
@@ -456,6 +611,11 @@ class _PiedChapitre extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final suivant = etat.chapitreSuivant;
+    final externes = etat.chapitresExternesSuivants;
+    final premierExterne = externes.firstOrNull;
+    final site = premierExterne == null
+        ? null
+        : etat.nomSiteExterneDe(premierExterne);
     return Padding(
       padding: const EdgeInsets.all(espacementGrand),
       child: Column(
@@ -463,7 +623,24 @@ class _PiedChapitre extends StatelessWidget {
         children: <Widget>[
           Text(Textes.finDuChapitre, style: theme.textTheme.titleMedium),
           const SizedBox(height: espacementMoyen),
-          if (suivant == null)
+          // Les chapitres publiés chez l'éditeur sont sautés par « Chapitre
+          // suivant » : leur lien est proposé ici, juste avant.
+          if (premierExterne != null && site != null) ...<Widget>[
+            Text(
+              Textes.chapitresExternesSuivants(externes.length, site),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: espacementPetit),
+            _BoutonLireSurSite(
+              chapitre: premierExterne,
+              site: site,
+              idTitre: etat.idTitre,
+            ),
+            const SizedBox(height: espacementMoyen),
+          ],
+          if (suivant == null && premierExterne != null)
+            const SizedBox.shrink()
+          else if (suivant == null)
             const Text(Textes.dernierChapitre, textAlign: TextAlign.center)
           else
             FilledButton.icon(

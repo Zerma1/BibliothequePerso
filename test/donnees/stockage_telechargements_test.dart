@@ -526,11 +526,17 @@ void main() {
 
     test('noms numérotés : avec et sans langue', () {
       expect(
-        StockageTelechargements.nomFichierNumerote(chapitre(1, langue: 'fr'), 1),
+        StockageTelechargements.nomFichierNumerote(
+          chapitre(1, langue: 'fr'),
+          1,
+        ),
         'ch1.fr.zip',
       );
       expect(
-        StockageTelechargements.nomFichierNumerote(chapitre(1, langue: 'fr'), 2),
+        StockageTelechargements.nomFichierNumerote(
+          chapitre(1, langue: 'fr'),
+          2,
+        ),
         'ch1.fr.2.zip',
       );
       // Sans langue : « _ » pour ne pas confondre avec le chapitre 1.2.
@@ -570,23 +576,24 @@ void main() {
       await nouvelle.abandonner();
     });
 
-    test('un .part présent sur le disque (autre isolat) réserve le nom', () async {
-      final etranger = File(
-        p.join(racine, 'manga', 'One Punch Man', 'ch0.fr.zip.part'),
-      );
-      await etranger.create(recursive: true);
-      final ecriture = await stockage.ouvrirEcriture(titreTest, oneshot('a'));
-      expect(ecriture.nomArchive, endsWith('ch0.fr.2.zip'));
-      await ecriture.abandonner();
-      expect(await etranger.exists(), isTrue);
-    });
+    test(
+      'un .part présent sur le disque (autre isolat) réserve le nom',
+      () async {
+        final etranger = File(
+          p.join(racine, 'manga', 'One Punch Man', 'ch0.fr.zip.part'),
+        );
+        await etranger.create(recursive: true);
+        final ecriture = await stockage.ouvrirEcriture(titreTest, oneshot('a'));
+        expect(ecriture.nomArchive, endsWith('ch0.fr.2.zip'));
+        await ecriture.abandonner();
+        expect(await etranger.exists(), isTrue);
+      },
+    );
 
     test('le nomArchive enregistré survit au renommage du titre', () async {
       final ecriture = await ecrire(oneshot('a'), 7);
-      final enregistre = oneshot('a').copierAvec(
-        nomArchive: ecriture.nomArchive,
-        langue: 'en',
-      );
+      final enregistre = oneshot('a')
+          .copierAvec(nomArchive: ecriture.nomArchive, langue: 'en');
       final renomme = titre('One-Punch Man (nouveau nom)');
       expect(await stockage.estTelecharge(renomme, enregistre), isTrue);
       expect(await stockage.compterPages(renomme, enregistre), 1);
@@ -617,7 +624,10 @@ void main() {
       await ecriture.finaliser();
       expect(ecriture.nomArchive, 'roman/Mushoku Tensei/ch1.en.zip');
       expect(await stockage.existeArchive(ecriture.nomArchive), isTrue);
-      expect(await stockage.lireTexteArchive(ecriture.nomArchive), '<p>Texte</p>');
+      expect(
+        await stockage.lireTexteArchive(ecriture.nomArchive),
+        '<p>Texte</p>',
+      );
       expect(await stockage.compterPagesArchive(ecriture.nomArchive), 0);
       expect(await stockage.supprimerArchive(ecriture.nomArchive), isTrue);
       expect(await stockage.supprimerArchive(ecriture.nomArchive), isFalse);

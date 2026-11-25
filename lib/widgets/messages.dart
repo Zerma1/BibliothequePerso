@@ -5,16 +5,36 @@ import 'package:material_ui/material_ui.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../etat/description_erreur.dart';
+import '../etat/journal_interface.dart';
 import 'textes.dart';
 
-/// Affiche [texte] dans une barre temporaire en bas de l'écran.
-void afficherMessage(BuildContext context, String texte) {
+/// Durée d'affichage d'un message d'erreur : plus longue que les 4 s par
+/// défaut, car un refus du service est souvent une phrase complète avec une
+/// consigne (par exemple « chapitres en cours de déplacement… »).
+const Duration dureeMessageErreur = Duration(seconds: 10);
+
+/// Affiche [texte] dans une barre temporaire en bas de l'écran. Avec
+/// [estErreur], la barre reste plus longtemps et peut être fermée.
+void afficherMessage(
+  BuildContext context,
+  String texte, {
+  bool estErreur = false,
+}) {
   final messager = ScaffoldMessenger.of(context);
   // Un message plus ancien encore visible est remplacé : le client voit
   // toujours le résultat de sa dernière action.
   messager
     ..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(content: Text(texte)));
+    ..showSnackBar(
+      estErreur
+          ? SnackBar(
+              content: Text(texte),
+              duration: dureeMessageErreur,
+              // Le client peut fermer un long message une fois lu.
+              showCloseIcon: true,
+            )
+          : SnackBar(content: Text(texte)),
+    );
 }
 
 /// Affiche l'erreur d'une action échouée, ou [succes] si elle a réussi.
@@ -25,7 +45,7 @@ void afficherResultat<T>(
 }) {
   final erreur = resultat.erreur;
   if (erreur != null) {
-    afficherMessage(context, Textes.messageErreur(erreur));
+    afficherMessage(context, Textes.messageErreur(erreur), estErreur: true);
   } else if (succes != null) {
     afficherMessage(context, succes);
   }
@@ -67,14 +87,21 @@ Future<void> ouvrirLienExterne(BuildContext context, String url) async {
   final messager = ScaffoldMessenger.of(context);
   final uri = Uri.tryParse(url);
   var estOuvert = false;
+  Object? erreurOuverture;
   if (uri != null) {
     try {
       estOuvert = await launchUrl(uri, mode: LaunchMode.externalApplication);
     } catch (erreur) {
-      debugPrint('Ouverture du lien impossible ($url) : $erreur');
+      erreurOuverture = erreur;
     }
   }
   if (!estOuvert) {
+    // Une seule ligne par échec (adresse invalide, refus du système ou
+    // exception), avec l'adresse pour comprendre ce qui n'a pas marché.
+    noterProblemeInterface(
+      'Ouverture du lien impossible ($url)',
+      erreur: erreurOuverture,
+    );
     messager
       ..hideCurrentSnackBar()
       ..showSnackBar(const SnackBar(content: Text(Textes.lienImpossible)));

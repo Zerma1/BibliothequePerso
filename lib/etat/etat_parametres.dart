@@ -3,10 +3,12 @@
 /// suivis) et « Mises à jour » (nombre de recherches par jour).
 library;
 
-import 'package:flutter/foundation.dart';
+import 'dart:async';
 
+import '../modeles/journal.dart';
 import '../services/planification_mises_a_jour.dart';
 import '../services/politique_telechargement.dart';
+import '../services/service_bibliotheque.dart';
 import '../services/service_parametres.dart';
 import '../services/service_telechargement.dart';
 import 'description_erreur.dart';
@@ -33,10 +35,19 @@ enum LimiteTelechargement {
 /// téléchargements ou en suppriment : on évite de le faire à chaque appui).
 class EtatParametres extends EtatNotifiant {
   /// Crée l'état ; appeler [charger] pour lire les réglages.
-  EtatParametres(this._serviceParametres, this._serviceTelechargement);
+  ///
+  /// [serviceBibliotheque] sert à recalculer la liste « En attente » quand
+  /// les langues changent (sans lui, elle l'est à la prochaine recherche de
+  /// nouveaux chapitres).
+  EtatParametres(
+    this._serviceParametres,
+    this._serviceTelechargement, {
+    this._serviceBibliotheque,
+  });
 
   final ServiceParametres _serviceParametres;
   final ServiceTelechargement _serviceTelechargement;
+  final ServiceBibliotheque? _serviceBibliotheque;
 
   /// Valeur maximale d'une limite (même borne que le service).
   static const int limiteMaximale = ServiceParametres.limiteMaximale;
@@ -130,6 +141,9 @@ class EtatParametres extends EtatNotifiant {
     try {
       await _serviceParametres.enregistrerVerificationsParJour(borne);
       _planification = PlanificationMisesAJour(borne);
+      // L'écart « En attente » ne dépasse jamais l'intervalle normal : le
+      // service le ramène, on relit la valeur appliquée.
+      _heuresEnAttente = await _serviceParametres.chargerHeuresEnAttente();
       return ResultatAction<PlanificationMisesAJour>.reussite(_planification);
     } catch (erreur, pile) {
       return ResultatAction<PlanificationMisesAJour>.echec(
@@ -141,6 +155,37 @@ class EtatParametres extends EtatNotifiant {
     }
   }
 
+  int _heuresEnAttente = 1;
+  bool _estEnEnregistrementEnAttente = false;
+
+  /// Écart en heures entre deux vérifications des titres « En attente ».
+  int get heuresEnAttente => _heuresEnAttente;
+
+  /// Écart maximal autorisé : l'intervalle des vérifications normales.
+  int get maximumHeuresEnAttente =>
+      ServiceParametres.maximumHeuresEnAttente(verificationsParJour);
+
+  /// `true` pendant l'enregistrement de l'écart « En attente ».
+  bool get estEnEnregistrementEnAttente => _estEnEnregistrementEnAttente;
+
+  /// Change l'écart des vérifications des titres « En attente » (ramené
+  /// entre 1 h et l'intervalle normal) et l'enregistre aussitôt. L'écran
+  /// prévient ensuite `EtatMisesAJour.replanifier`.
+  Future<ResultatAction<int>> modifierHeuresEnAttente(int heures) async {
+    _estEnEnregistrementEnAttente = true;
+    notifier();
+    try {
+      await _serviceParametres.enregistrerHeuresEnAttente(heures);
+      _heuresEnAttente = await _serviceParametres.chargerHeuresEnAttente();
+      return ResultatAction<int>.reussite(_heuresEnAttente);
+    } catch (erreur, pile) {
+      return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnEnregistrementEnAttente = false;
+      notifier();
+    }
+  }
+
   /// Relit la date de la dernière vérification (après une recherche).
   Future<void> rechargerDerniereVerification() async {
     try {
@@ -148,7 +193,12 @@ class EtatParametres extends EtatNotifiant {
           .chargerDerniereVerification();
       notifier();
     } catch (erreur, pile) {
-      debugPrint('Date de vérification illisible : $erreur\n$pile');
+      Journal.actuel.avertissement(
+        CategorieJournal.parametres,
+        'Date de la dernière vérification illisible',
+        erreur: erreur,
+        pile: pile,
+      );
     }
   }
 
@@ -229,15 +279,139 @@ class EtatParametres extends EtatNotifiant {
       // Relues : le service nettoie les codes et borne leur nombre.
       _langues = await _serviceParametres.chargerLangues();
       try {
+        // Un titre peut entrer dans « En attente » (plus aucun chapitre dans
+        // les langues) ou en sortir : classement recalculé (base seulement).
+        await _serviceBibliotheque?.classerTousEnAttente();
+      } catch (erreur, pile) {
+        Journal.actuel.avertissement(
+          CategorieJournal.bibliotheque,
+          'Classement « En attente » non refait après les langues',
+          erreur: erreur,
+          pile: pile,
+        );
+      }
+      try {
         await _serviceTelechargement.appliquerReglesATous();
       } catch (erreur, pile) {
-        debugPrint('Règles non appliquées après les langues : $erreur\n$pile');
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Règles non appliquées après les langues',
+          erreur: erreur,
+          pile: pile,
+        );
       }
       return const ResultatAction<bool>.reussite(true);
     } catch (erreur, pile) {
       return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
     } finally {
       _estEnEnregistrementLangues = false;
+      notifier();
+    }
+  }
+
+  // -------------------------------------------------- Archive complète (X7)
+
+  bool _archiveComplete = ServiceParametres.archiveCompleteParDefaut;
+  bool _estEnEnregistrementArchive = false;
+
+  /// `true` si « Archive complète » est active : tous les chapitres de tous
+  /// les titres sont téléchargés, et aucun n'est supprimé automatiquement.
+  bool get archiveComplete => _archiveComplete;
+
+  /// `true` pendant l'enregistrement de « Archive complète ».
+  bool get estEnEnregistrementArchive => _estEnEnregistrementArchive;
+
+  /// Active ou désactive « Archive complète » (enregistré aussitôt), puis
+  /// applique les règles à toute la bibliothèque : à l'activation, tous les
+  /// chapitres de tous les titres entrent dans la file.
+  Future<ResultatAction<bool>> modifierArchiveComplete(bool active) async {
+    _estEnEnregistrementArchive = true;
+    notifier();
+    try {
+      await _serviceParametres.enregistrerArchiveComplete(active);
+      _archiveComplete = await _serviceParametres.chargerArchiveComplete();
+      try {
+        await _serviceTelechargement.appliquerReglesATous();
+      } catch (erreur, pile) {
+        // Réglage enregistré : il sera appliqué au prochain démarrage ou à
+        // la prochaine recherche de nouveaux chapitres.
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Règles non appliquées (archive complète)',
+          erreur: erreur,
+          pile: pile,
+        );
+      }
+      return ResultatAction<bool>.reussite(_archiveComplete);
+    } catch (erreur, pile) {
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnEnregistrementArchive = false;
+      notifier();
+    }
+  }
+
+  // ------------------------------------------ Téléchargements simultanés
+
+  /// Borne basse de la jauge (même borne que le service).
+  static const int minimumTelechargementsSimultanes =
+      ServiceParametres.minimumTelechargementsSimultanes;
+
+  /// Borne haute de la jauge (même borne que le service).
+  static const int maximumTelechargementsSimultanes =
+      ServiceParametres.maximumTelechargementsSimultanes;
+
+  int _telechargementsSimultanes =
+      ServiceParametres.telechargementsSimultanesParDefautClient;
+
+  /// Valeur affichée pendant que le client fait glisser la jauge (rien
+  /// n'est enregistré avant qu'il la lâche), ou `null`.
+  int? _apercuSimultanes;
+  bool _estEnEnregistrementSimultanes = false;
+
+  /// Nombre de chapitres téléchargés en même temps (valeur affichée).
+  int get telechargementsSimultanes =>
+      _apercuSimultanes ?? _telechargementsSimultanes;
+
+  /// `true` pendant l'enregistrement du nombre de téléchargements
+  /// simultanés.
+  bool get estEnEnregistrementSimultanes => _estEnEnregistrementSimultanes;
+
+  /// Affiche [nombre] pendant le glissement de la jauge, sans l'enregistrer.
+  void previsualiserTelechargementsSimultanes(int nombre) {
+    final borne = nombre.clamp(
+      minimumTelechargementsSimultanes,
+      maximumTelechargementsSimultanes,
+    );
+    if (borne == _apercuSimultanes) return;
+    _apercuSimultanes = borne;
+    notifier();
+  }
+
+  /// Enregistre le nombre de téléchargements simultanés (ramené entre les
+  /// bornes) puis relance la file : un traitement en cours relit le réglage
+  /// et remplit aussitôt les emplacements libres.
+  Future<ResultatAction<int>> modifierTelechargementsSimultanes(
+    int nombre,
+  ) async {
+    _estEnEnregistrementSimultanes = true;
+    _apercuSimultanes = nombre.clamp(
+      minimumTelechargementsSimultanes,
+      maximumTelechargementsSimultanes,
+    );
+    notifier();
+    try {
+      await _serviceParametres.enregistrerTelechargementsSimultanes(nombre);
+      _telechargementsSimultanes = await _serviceParametres
+          .chargerTelechargementsSimultanes();
+      // Ne lève jamais d'erreur et peut durer toute la file : pas attendu.
+      unawaited(_serviceTelechargement.lancerTraitement());
+      return ResultatAction<int>.reussite(_telechargementsSimultanes);
+    } catch (erreur, pile) {
+      return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _apercuSimultanes = null;
+      _estEnEnregistrementSimultanes = false;
       notifier();
     }
   }
@@ -249,10 +423,14 @@ class EtatParametres extends EtatNotifiant {
     notifier();
     try {
       final reglages = await _serviceParametres.chargerReglagesTelechargement();
+      _archiveComplete = await _serviceParametres.chargerArchiveComplete();
       _langues = await _serviceParametres.chargerLangues();
       _planification = await _serviceParametres.chargerPlanification();
+      _heuresEnAttente = await _serviceParametres.chargerHeuresEnAttente();
       _derniereVerification = await _serviceParametres
           .chargerDerniereVerification();
+      _telechargementsSimultanes = await _serviceParametres
+          .chargerTelechargementsSimultanes();
       _enregistres = reglages;
       _brouillon = reglages;
       _estCharge = true;
@@ -295,6 +473,23 @@ class EtatParametres extends EtatNotifiant {
     notifier();
   }
 
+  /// Applique les règles de téléchargement à toute la bibliothèque, par
+  /// exemple après un import (nouveaux titres suivis, archive complète
+  /// activée par le fichier). Une erreur est seulement journalisée : les
+  /// règles seront appliquées au prochain démarrage.
+  Future<void> appliquerReglesATous() async {
+    try {
+      await _serviceTelechargement.appliquerReglesATous();
+    } catch (erreur, pile) {
+      Journal.actuel.avertissement(
+        CategorieJournal.telechargement,
+        'Règles non appliquées',
+        erreur: erreur,
+        pile: pile,
+      );
+    }
+  }
+
   /// Enregistre le brouillon puis applique les règles à tous les titres
   /// favoris et suivis.
   Future<ResultatAction<bool>> enregistrer() async {
@@ -308,7 +503,12 @@ class EtatParametres extends EtatNotifiant {
       } catch (erreur, pile) {
         // Les réglages sont enregistrés : ils seront appliqués au prochain
         // démarrage ou à la prochaine lecture.
-        debugPrint('Règles non appliquées après réglage : $erreur\n$pile');
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Règles non appliquées après réglage',
+          erreur: erreur,
+          pile: pile,
+        );
       }
       return const ResultatAction<bool>.reussite(true);
     } catch (erreur, pile) {

@@ -31,18 +31,45 @@ const int codeHttpTropDeRequetes = 429;
 /// Longueur maximale d'un extrait de corps de réponse cité dans une erreur.
 const int longueurMaxExtraitReponse = 300;
 
-/// User-Agent d'un navigateur courant, envoyé par défaut (PLAYBOOK.md
-/// section 6) aux sites qui refusent les clients non navigateurs.
-const String userAgentNavigateur =
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-    '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-
-/// User-Agent honnête de l'application, utilisé pour l'API MangaDex.
+/// User-Agent honnête de l'application, envoyé par défaut à **tous** les
+/// sites (tâche T1 du 2026-11-17).
 ///
-/// La documentation MangaDex (https://api.mangadex.org/docs/2-limitations/)
-/// exige : « The request MUST have a User-Agent header, and it must not be
-/// spoofed ». On n'y envoie donc pas le User-Agent d'un navigateur.
+/// Auparavant, les sites autres que MangaDex recevaient le User-Agent d'un
+/// navigateur. Or un client qui annonce un navigateur sans en avoir le
+/// comportement (pas de JavaScript, empreinte réseau différente) est repéré
+/// par les protections anti-robot (Cloudflare : page « Just a moment… » chez
+/// le client sur Scan-Manga). La documentation MangaDex
+/// (https://api.mangadex.org/docs/2-limitations/) exige de toute façon :
+/// « The request MUST have a User-Agent header, and it must not be
+/// spoofed ».
 const String userAgentApplication = 'BibliothequePerso/0.1 (usage personnel)';
+
+/// Codes HTTP par lesquels une protection anti-robot (Cloudflare…) sert sa
+/// page de défi : 403 (accès refusé), 503 (« vérification en cours ») et 429
+/// (trop de requêtes).
+const Set<int> codesHttpDefiAntiRobot = <int>{403, 429, 503};
+
+/// Marqueurs du corps d'une page de défi anti-robot (comparés en
+/// minuscules) : titre « Just a moment... » de Cloudflare, dossier de ses
+/// scripts de défi (`/cdn-cgi/challenge-platform/`) et préfixe de ses
+/// paramètres (`cf-chl`, `__cf_chl_opt`).
+const List<String> marqueursDefiAntiRobot = <String>[
+  'just a moment',
+  'challenge-platform',
+  'cf-chl',
+  'cf_chl',
+];
+
+/// Titres de page d'un défi anti-robot servi en 200 (comparés en
+/// minuscules). Une page normale peut contenir `challenge-platform` (script
+/// de détection injecté par Cloudflare sur les pages ordinaires, vu sur
+/// Scan-Manga) : une réponse 200 n'est prise pour un défi que si son titre
+/// en est aussi un.
+const List<String> titresDefiAntiRobot = <String>[
+  'just a moment',
+  'attention required',
+  'un instant',
+];
 
 /// Domaine du site public MangaDex (URLs des titres et des chapitres).
 const String domaineMangaDex = 'mangadex.org';
@@ -62,6 +89,16 @@ const int taillePageMaxFluxMangaDex = 500;
 /// `limit` « maximum: 100 »).
 const int taillePageRechercheMangaDex = 20;
 
+/// Taille de page de `GET /cover` (api.yaml, operationId `get-cover` :
+/// `limit` « default: 10, maximum: 100 »).
+const int taillePageCouverturesMangaDex = 100;
+
+/// Largeur (en pixels) de la miniature de couverture utilisée pour le choix
+/// du client. docs/03-manga/covers : « two premade thumbnail sizes for each
+/// cover, with respective widths of 256 and 512 pixels »,
+/// `…/:cover-filename.{256, 512}.jpg`.
+const int largeurMiniatureCouvertureMangaDex = 512;
+
 /// Plafond `offset + limit` des collections MangaDex (docs/2-limitations :
 /// « Requests where offset + size > 10.000 will be rejected »).
 const int plafondOffsetMangaDex = 10000;
@@ -78,6 +115,89 @@ const Duration delaiMinimalAtHomeMangaDex = Duration(milliseconds: 1500);
 /// not api.mangadex.org) »).
 const String urlSignalementMangaDexAtHome =
     'https://api.mangadex.network/report';
+
+/// Domaine de Scan-Manga (sans `www.`), reconnu sans requête par
+/// `DetecteurTypeSite.verifierDomaine`.
+const String domaineScanManga = 'scan-manga.com';
+
+/// Durée pendant laquelle `SourceScanManga` réutilise la page d'un titre
+/// qu'il vient de télécharger : la fiche et la liste des chapitres viennent
+/// de la même page, inutile de la demander deux fois de suite au site.
+const Duration dureeCachePageScanManga = Duration(minutes: 1);
+
+/// Domaine de WEBTOON (sans `www.` ni `m.`), reconnu sans requête par
+/// `DetecteurTypeSite.verifierDomaine`.
+const String domaineWebtoons = 'webtoons.com';
+
+/// Nombre maximal de pages de la liste des épisodes lues pour un titre
+/// WEBTOON (une dizaine d'épisodes par page, 1 s entre deux pages) : au-delà,
+/// les épisodes les plus anciens ne sont pas listés.
+const int nombreMaxPagesListeWebtoons = 100;
+
+/// Durée pendant laquelle `SourceWebtoons` réutilise la première page de la
+/// liste d'un titre : la fiche et les épisodes en viennent tous deux.
+const Duration dureeCachePageWebtoons = Duration(minutes: 1);
+
+/// Durée pendant laquelle `SourceMadara` et `SourceMangaThemesia` réutilisent
+/// la page d'un titre qu'ils viennent de télécharger : la fiche et la liste
+/// des chapitres viennent de la même page.
+const Duration dureeCachePageWordPress = Duration(minutes: 1);
+
+/// Nombre maximal de pages de la liste des chapitres d'un titre Madara
+/// (requêtes `ajax/chapters/?t=<n>`, 1 s entre deux pages) : au-delà, les
+/// chapitres suivants ne sont pas listés.
+const int nombreMaxPagesChapitresMadara = 50;
+
+/// Codes HTTP par lesquels un site Madara signale qu'il n'a pas le point
+/// d'accès `POST <fiche>ajax/chapters/` (400 Bad Request, 404 Not Found,
+/// 405 Method Not Allowed) : `SourceMadara` passe alors à l'ancien appel
+/// `admin-ajax.php`.
+const Set<int> codesHttpSansAjaxChapitresMadara = <int>{400, 404, 405};
+
+/// Durée pendant laquelle `SourceGenerique` réutilise une page qu'il vient
+/// de télécharger : la fiche et la liste des chapitres viennent de la même
+/// page, et une adresse de chapitre collée est résolue une seule fois.
+const Duration dureeCachePageGenerique = Duration(minutes: 1);
+
+/// Nombre minimal d'images d'un même conteneur pour que `SourceGenerique`
+/// y voie la zone de lecture d'un chapitre : en dessous, il s'agit plutôt
+/// d'un logo, d'une bannière ou d'un bouton de dons.
+const int nombreMinImagesChapitreGenerique = 3;
+
+/// Nombre minimal de pages distinctes, de même forme d'adresse, pour qu'un
+/// groupe de liens reconnus par leur seul texte (« Chapitre 3 » sans numéro
+/// dans l'adresse) soit pris par `SourceGenerique` pour une liste de
+/// chapitres : un lien isolé d'un article (wiki, blog) n'en est pas une.
+const int nombreMinLiensTexteGenerique = 2;
+
+/// Nombre maximal de pages essayées par `SourceGenerique` pour remonter
+/// d'une adresse de chapitre à la page qui liste les chapitres (une requête
+/// chacune, 1 s entre deux).
+const int nombreMaxCandidatsPageListe = 3;
+
+/// Longueur minimale (en caractères) d'un bloc de texte pour être pris pour
+/// le résumé d'un titre par `SourceGenerique`.
+const int longueurMinResumeGenerique = 40;
+
+/// Longueur maximale (en caractères) d'un nom de genre lu par
+/// `SourceGenerique` : un genre est un mot ou deux ; un texte plus long est
+/// un bloc entier (description, menu), pas un tag.
+const int longueurMaxGenreGenerique = 40;
+
+/// Longueur maximale (en caractères) de la valeur d'une ligne
+/// « Libellé : valeur » lue par `SourceGenerique` (auteur, statut, type) :
+/// au-delà, le texte capturé est un paragraphe entier, pas une valeur.
+const int longueurMaxValeurLibelleGenerique = 200;
+
+/// Longueur maximale (en caractères) du texte visible d'une page pour que
+/// `verifierLisibilite` la juge construite par des scripts : une page
+/// lisible en contient bien davantage.
+const int longueurMaxTextePageScripts = 200;
+
+/// Nombre de liens (`a[href]`) à partir duquel une page n'est plus jugée
+/// construite par des scripts par `verifierLisibilite` : en dessous,
+/// le HTML reçu n'est qu'une coquille vide remplie ensuite en JavaScript.
+const int nombreMinLiensPageLisible = 3;
 
 /// Texte dont la présence dans l'URL de base désigne un serveur MangaDex
 /// (docs/04-chapter/retrieving-chapter : signaler chaque image chargée

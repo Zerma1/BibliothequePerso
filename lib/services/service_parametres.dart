@@ -3,6 +3,8 @@
 library;
 
 import '../donnees/depot_parametres.dart';
+import '../modeles/constantes.dart';
+import '../modeles/journal.dart';
 import 'constantes_services.dart';
 import 'erreur_service.dart';
 import 'planification_mises_a_jour.dart';
@@ -50,6 +52,36 @@ class ServiceParametres {
   /// réglage du client mais la table `parametres` est le seul stockage commun
   /// aux deux isolats.
   static const String cleVerrouTelechargement = 'telechargement.verrou';
+
+  /// Clé : dossier des chapitres téléchargés choisi par le client (chemin
+  /// complet : disque local, lecteur réseau, chemin UNC, dossier monté).
+  /// Absente (valeur par défaut) : dossier par défaut de l'application.
+  ///
+  /// Lue au démarrage seulement (`ServiceDossierChapitres.creerStockage`) :
+  /// un changement s'applique au prochain démarrage. Écrite par
+  /// `ServiceDossierChapitres.changerDossierChapitres`.
+  // Pas de méthode d'instance ici : `ServiceParametres` est implémenté par de
+  // faux services dans les tests de l'interface, qui devraient tous suivre ;
+  // la lecture et l'écriture passent par `ServiceDossierChapitres`.
+  static const String cleDossierChapitres = 'telechargement.dossier';
+
+  /// Clé : dossier vers lequel un déplacement des archives a commencé sans
+  /// se terminer (erreur, application fermée). Tant qu'elle existe, le
+  /// contrôle des archives manquantes au démarrage est suspendu : les
+  /// archives déjà déplacées ne sont pas perdues, elles sont dans ce
+  /// dossier.
+  static const String cleDeplacementDossierEnCours =
+      'telechargement.dossier.deplacement_en_cours';
+
+  /// Clé : « Journal détaillé (débogage) », entier 1 (activé) ou 0
+  /// (désactivé, par défaut). Activé, le journal de fichier garde aussi les
+  /// entrées de débogage.
+  ///
+  /// Lue et écrite par `ServiceJournal` (même raison que
+  /// [cleDossierChapitres] : pas de nouvelle méthode d'instance ici, que
+  /// tous les faux `ServiceParametres` des tests de l'interface devraient
+  /// suivre).
+  static const String cleJournalDetaille = 'journal.detaille';
 
   /// Valeur maximale acceptée pour une limite, pour éviter qu'une faute de
   /// frappe (1000 au lieu de 10) ne lance des centaines de téléchargements.
@@ -111,7 +143,18 @@ class ServiceParametres {
       cleSuivisApres,
       bornerAvantApres(reglages.suivisApres),
     );
+    _journaliser(
+      'téléchargement : favoris ${borner(reglages.favorisLusConserves)} '
+      'lus gardés, suivis ${borner(reglages.suivisInitial)} au départ, '
+      '${bornerAvantApres(reglages.suivisAvant)} avant, '
+      '${bornerAvantApres(reglages.suivisApres)} après',
+    );
   }
+
+  /// Note un réglage modifié dans le journal (valeurs seulement : aucun
+  /// réglage du client n'est une donnée sensible).
+  static void _journaliser(String description) =>
+      Journal.actuel.info(CategorieJournal.parametres, 'Réglage $description');
 
   /// Remet les réglages de téléchargement à leurs valeurs par défaut.
   Future<void> reinitialiserReglagesTelechargement() async {
@@ -123,6 +166,100 @@ class ServiceParametres {
     ]) {
       await _depot.supprimer(cle);
     }
+    _journaliser('téléchargement : valeurs par défaut rétablies');
+  }
+
+  /// Clé : « Archive complète » (retour du client sur la 0.2.1-test, X7).
+  /// Activée, **tous** les chapitres connus de **tous** les titres de la
+  /// bibliothèque sont voulus (une version par numéro, dans les langues du
+  /// client), et aucune archive n'est supprimée automatiquement : le dossier
+  /// des chapitres (en général un NAS) garde tout, au cas où les sites
+  /// retireraient des chapitres. Voir `PolitiqueTelechargement.archiveComplete`.
+  ///
+  /// Enregistrée comme un entier (1 activée, 0 désactivée) : la table
+  /// `parametres` ne stocke que du texte, et `DepotParametres` sait déjà lire
+  /// et écrire les entiers.
+  static const String cleArchiveComplete = 'telechargement.archive_complete';
+
+  /// « Archive complète » tant que le client n'a rien choisi : désactivée
+  /// (les règles favoris / suivis s'appliquent).
+  static const bool archiveCompleteParDefaut = false;
+
+  /// `true` si le client a activé « Archive complète » ([cleArchiveComplete]).
+  /// Une valeur illisible vaut [archiveCompleteParDefaut].
+  Future<bool> chargerArchiveComplete() async {
+    final valeur = await _depot.chargerEntier(cleArchiveComplete);
+    // Toute valeur autre que 0 ou 1 (écrite à la main, base abîmée) est
+    // ignorée : activer l'archive complète par erreur lancerait des milliers
+    // de téléchargements.
+    if (valeur == 1) return true;
+    if (valeur == 0) return false;
+    return archiveCompleteParDefaut;
+  }
+
+  /// Active ou désactive « Archive complète » ([cleArchiveComplete]).
+  ///
+  /// N'applique pas les règles : l'appelant lance ensuite
+  /// `ServiceTelechargement.appliquerReglesATous` (mise en file de tous les
+  /// chapitres à l'activation ; à la désactivation, les archives qui ne sont
+  /// plus voulues passent en suppression différée de 24 h).
+  Future<void> enregistrerArchiveComplete(bool active) async {
+    await _depot.enregistrerEntier(cleArchiveComplete, active ? 1 : 0);
+    _journaliser('« Archive complète » ${active ? 'activée' : 'désactivée'}');
+  }
+
+  /// Clé : nombre de chapitres téléchargés en même temps (jauge des
+  /// Paramètres, de [minimumTelechargementsSimultanes] à
+  /// [maximumTelechargementsSimultanes]).
+  static const String cleTelechargementsSimultanes =
+      'telechargement.simultanes';
+
+  /// Téléchargements simultanés tant que le client n'a rien choisi.
+  static const int telechargementsSimultanesParDefautClient =
+      telechargementsSimultanesParDefaut;
+
+  /// Borne basse de la jauge : un chapitre à la fois.
+  static const int minimumTelechargementsSimultanes =
+      telechargementsSimultanesMinimum;
+
+  /// Borne haute de la jauge (demande du client).
+  static const int maximumTelechargementsSimultanes =
+      telechargementsSimultanesMaximum;
+
+  /// Nombre de chapitres téléchargés en même temps
+  /// ([telechargementsSimultanesParDefautClient] si rien n'est enregistré ou
+  /// si la valeur est hors bornes).
+  ///
+  /// Relu par `ServiceTelechargement` au début de chaque traitement de la
+  /// file et à chaque relance (`lancerTraitement`) : pas de cache à
+  /// invalider, la tâche de fond Android voit aussi le choix du client.
+  Future<int> chargerTelechargementsSimultanes() async {
+    final valeur = await _depot.chargerEntier(cleTelechargementsSimultanes);
+    // Une valeur hors bornes (écrite à la main, base abîmée) est ignorée
+    // plutôt que ramenée à la borne : 1000 deviendrait sinon 32 sans que le
+    // client l'ait choisi.
+    if (valeur == null ||
+        valeur < minimumTelechargementsSimultanes ||
+        valeur > maximumTelechargementsSimultanes) {
+      return telechargementsSimultanesParDefautClient;
+    }
+    return valeur;
+  }
+
+  /// Enregistre le nombre de téléchargements simultanés (ramené entre
+  /// [minimumTelechargementsSimultanes] et
+  /// [maximumTelechargementsSimultanes]).
+  ///
+  /// Pour qu'un traitement déjà en cours en tienne compte tout de suite,
+  /// l'appelant relance ensuite `ServiceTelechargement.lancerTraitement` (qui
+  /// relit le réglage sans lancer de second traitement).
+  Future<void> enregistrerTelechargementsSimultanes(int nombre) async {
+    final borne = nombre.clamp(
+      minimumTelechargementsSimultanes,
+      maximumTelechargementsSimultanes,
+    );
+    await _depot.enregistrerEntier(cleTelechargementsSimultanes, borne);
+    _journaliser('téléchargement : $borne chapitre(s) en même temps');
   }
 
   /// Nombre de recherches de mises à jour par jour (2 par défaut : 00:00 et
@@ -138,18 +275,119 @@ class ServiceParametres {
   }
 
   /// Enregistre le nombre de recherches par jour (ramené entre 1 et 24).
-  Future<void> enregistrerVerificationsParJour(int nombre) =>
-      _depot.enregistrerEntier(
-        cleVerificationsParJour,
-        nombre.clamp(
-          PlanificationMisesAJour.minimumParJour,
-          PlanificationMisesAJour.maximumParJour,
-        ),
-      );
+  Future<void> enregistrerVerificationsParJour(int nombre) async {
+    final borne = nombre.clamp(
+      PlanificationMisesAJour.minimumParJour,
+      PlanificationMisesAJour.maximumParJour,
+    );
+    await _depot.enregistrerEntier(cleVerificationsParJour, borne);
+    _journaliser('mises à jour : $borne vérification(s) par jour');
+  }
 
   /// Planification correspondant au réglage enregistré.
   Future<PlanificationMisesAJour> chargerPlanification() async =>
       PlanificationMisesAJour(await chargerVerificationsParJour());
+
+  /// Clé : écart en heures entre deux vérifications des titres « En
+  /// attente ».
+  static const String cleHeuresEnAttente = 'mises_a_jour.en_attente.heures';
+
+  /// Clé : date (UTC, ISO 8601) de la dernière vérification des titres « En
+  /// attente ».
+  static const String cleDerniereVerificationEnAttente =
+      'mises_a_jour.en_attente.derniere';
+
+  /// Écart maximal (en heures) accepté pour les titres « En attente » avec
+  /// [verificationsParJour] vérifications normales par jour : l'intervalle
+  /// normal, au moins 1 h (décision de l'étape 6 : la surveillance accrue
+  /// n'est jamais plus lente que la normale).
+  static int maximumHeuresEnAttente(int verificationsParJour) {
+    final parJour = verificationsParJour.clamp(
+      PlanificationMisesAJour.minimumParJour,
+      PlanificationMisesAJour.maximumParJour,
+    );
+    final heures = Duration.hoursPerDay ~/ parJour;
+    return heures < 1 ? 1 : heures;
+  }
+
+  /// Écart en heures entre deux vérifications des titres « En attente » (1
+  /// par défaut : à chaque heure pleine), ramené entre 1 et l'intervalle
+  /// normal ([maximumHeuresEnAttente]) : si le client réduit ensuite
+  /// l'intervalle normal, la valeur suit.
+  Future<int> chargerHeuresEnAttente() async {
+    final maximum = maximumHeuresEnAttente(await chargerVerificationsParJour());
+    final valeur = await _depot.chargerEntier(cleHeuresEnAttente);
+    if (valeur == null || valeur < 1) {
+      return heuresEnAttenteParDefaut.clamp(1, maximum);
+    }
+    return valeur > maximum ? maximum : valeur;
+  }
+
+  /// Enregistre l'écart des vérifications « En attente » (ramené entre 1 et
+  /// l'intervalle normal).
+  Future<void> enregistrerHeuresEnAttente(int heures) async {
+    final maximum = maximumHeuresEnAttente(await chargerVerificationsParJour());
+    final borne = heures.clamp(1, maximum);
+    await _depot.enregistrerEntier(cleHeuresEnAttente, borne);
+    _journaliser('« En attente » : vérification toutes les $borne h');
+  }
+
+  /// Planification des vérifications des titres « En attente » (toutes les
+  /// [chargerHeuresEnAttente] heures pleines).
+  Future<PlanificationMisesAJour> chargerPlanificationEnAttente() async =>
+      PlanificationMisesAJour.toutesLesHeures(await chargerHeuresEnAttente());
+
+  /// Date de la dernière vérification des titres « En attente », ou `null`.
+  Future<DateTime?> chargerDerniereVerificationEnAttente() async {
+    final texte = await _depot.chargerTexte(cleDerniereVerificationEnAttente);
+    return texte == null ? null : DateTime.tryParse(texte)?.toUtc();
+  }
+
+  /// Enregistre la date de la dernière vérification des titres « En
+  /// attente ».
+  Future<void> enregistrerDerniereVerificationEnAttente(DateTime date) =>
+      _depot.enregistrerTexte(
+        cleDerniereVerificationEnAttente,
+        date.toUtc().toIso8601String(),
+      );
+
+  /// Clé : niveaux de contenu affichés dans la bibliothèque et demandés à la
+  /// recherche (« safe,suggestive,erotica »).
+  static const String cleNiveauxContenu = 'bibliotheque.niveaux_contenu';
+
+  /// Niveaux de contenu choisis par le client, dans l'ordre de
+  /// `niveauxContenu` (du plus sage au plus explicite). Par défaut
+  /// `niveauxContenuParDefaut` (tout sauf `pornographic`). Les valeurs
+  /// inconnues sont ignorées ; une liste vide enregistrée reste vide (le
+  /// client n'affiche alors que les titres sans niveau connu).
+  Future<List<String>> chargerNiveauxContenu() async {
+    final texte = await _depot.chargerTexte(cleNiveauxContenu);
+    if (texte == null) return List<String>.of(niveauxContenuParDefaut);
+    return nettoyerNiveauxContenu(texte.split(','));
+  }
+
+  /// Enregistre les niveaux de contenu choisis (valeurs inconnues ignorées).
+  Future<void> enregistrerNiveauxContenu(Iterable<String> niveaux) async {
+    final texte = nettoyerNiveauxContenu(niveaux).join(',');
+    await _depot.enregistrerTexte(cleNiveauxContenu, texte);
+    _journaliser('niveaux de contenu : « $texte »');
+  }
+
+  /// Remet le filtre de niveau de contenu à sa valeur par défaut.
+  Future<void> reinitialiserNiveauxContenu() async {
+    await _depot.supprimer(cleNiveauxContenu);
+    _journaliser('niveaux de contenu : valeur par défaut rétablie');
+  }
+
+  /// Garde les niveaux connus (`niveauxContenu`), sans doublon, dans l'ordre
+  /// du plus sage au plus explicite.
+  static List<String> nettoyerNiveauxContenu(Iterable<String> niveaux) {
+    final choisis = niveaux.map((n) => n.trim().toLowerCase()).toSet();
+    return <String>[
+      for (final niveau in niveauxContenu)
+        if (choisis.contains(niveau)) niveau,
+    ];
+  }
 
   /// Langues de lecture du client (codes ISO 639-1 par ordre de préférence,
   /// la première étant la langue favorite). Jamais vide : [languesParDefaut]
@@ -172,15 +410,22 @@ class ServiceParametres {
       throw const ErreurService('Choisissez au moins une langue de lecture.');
     }
     await _depot.enregistrerTexte(cleLangues, propres.join(','));
+    _journaliser('langues de lecture : « ${propres.join(',')} »');
   }
 
   /// Nettoie une liste de codes de langue : minuscules, sans espaces, codes
   /// invalides et doublons retirés (le premier garde sa place), au plus
-  /// [nombreMaximalLangues]. « pt-br » est accepté (variante régionale).
+  /// [nombreMaximalLangues].
+  ///
+  /// Variantes régionales (tâche P3) : un code `xx-yy` est accepté tel quel
+  /// (`pt-br`, `es-la`, `zh-hk`), distinct de sa langue de base `xx` ; la
+  /// forme `pt_BR` (souvent vue dans les réglages système) devient `pt-br`.
+  /// La correspondance avec les chapitres (exacte d'abord, langue de base
+  /// en repli) est décrite par `PolitiqueTelechargement.rangLangue`.
   static List<String> nettoyerLangues(Iterable<String> langues) {
     final propres = <String>[];
     for (final langue in langues) {
-      final code = langue.trim().toLowerCase();
+      final code = langue.trim().toLowerCase().replaceAll('_', '-');
       if (!_motifLangue.hasMatch(code) || propres.contains(code)) continue;
       propres.add(code);
       if (propres.length >= nombreMaximalLangues) break;
@@ -192,18 +437,18 @@ class ServiceParametres {
 
   /// Clé : chapitres que le client a choisi de garder (« Garder » sur une
   /// suppression prévue), identifiants séparés par des virgules.
-  // LIMITE : stocké dans `parametres` faute de colonne dédiée dans
-  // `chapitres` ; une colonne (migration) serait plus propre et éviterait la
-  // lecture-écriture non atomique entre deux isolats (le dernier qui écrit
-  // gagne ; le risque est de perdre un « Garder » fait au même instant).
+  ///
+  /// Ancien stockage (avant la migration 5) : le choix est désormais la
+  /// colonne `chapitres.est_garde`. `ServiceTelechargement` reprend ces
+  /// identifiants une fois puis supprime la clé ; rien n'y est plus écrit.
   static const String cleChapitresGardes = 'telechargement.gardes';
 
   /// Nombre maximal de chapitres gardés mémorisés : borne la taille du texte
   /// enregistré (les plus anciens sont oubliés au-delà).
   static const int nombreMaximalChapitresGardes = 5000;
 
-  /// Chapitres que les règles ne doivent jamais supprimer automatiquement
-  /// (choix « Garder » du client). Valeurs illisibles ignorées.
+  /// Chapitres gardés mémorisés par l'ancien stockage ([cleChapitresGardes]),
+  /// à reprendre dans `chapitres.est_garde`. Valeurs illisibles ignorées.
   Future<Set<int>> chargerChapitresGardes() async {
     final texte = await _depot.chargerTexte(cleChapitresGardes) ?? '';
     return <int>{
@@ -211,8 +456,15 @@ class ServiceParametres {
     };
   }
 
-  /// Enregistre les chapitres gardés (au plus
+  /// Supprime l'ancien stockage des chapitres gardés, une fois repris en
+  /// base.
+  Future<void> supprimerChapitresGardes() =>
+      _depot.supprimer(cleChapitresGardes);
+
+  /// Enregistre les chapitres gardés dans l'ancien stockage (au plus
   /// [nombreMaximalChapitresGardes], les derniers ajoutés étant conservés).
+  ///
+  /// Gardé pour les tests de la reprise : le service n'y écrit plus.
   Future<void> enregistrerChapitresGardes(Iterable<int> ids) async {
     final liste = ids.toSet().toList();
     final bornee = liste.length > nombreMaximalChapitresGardes
@@ -239,6 +491,37 @@ class ServiceParametres {
   /// Libère le verrou de la file.
   Future<void> supprimerVerrouTelechargement() =>
       _depot.supprimer(cleVerrouTelechargement);
+
+  /// Clé : identifiants des sources par défaut déjà proposées au client
+  /// (« mangadex,scan-manga »). Une source proposée puis supprimée par le
+  /// client n'est jamais recréée (tâche R9).
+  static const String cleSourcesParDefautProposees =
+      'sources.par_defaut.proposees';
+
+  /// Identifiants des sources par défaut déjà proposées (vide si aucune).
+  Future<Set<String>> chargerSourcesParDefautProposees() async {
+    final texte = await _depot.chargerTexte(cleSourcesParDefautProposees) ?? '';
+    return <String>{
+      for (final morceau in texte.split(','))
+        if (morceau.trim().isNotEmpty) morceau.trim(),
+    };
+  }
+
+  /// Enregistre les identifiants des sources par défaut déjà proposées
+  /// (vides et identifiants contenant une virgule ignorés).
+  Future<void> enregistrerSourcesParDefautProposees(
+    Iterable<String> identifiants,
+  ) {
+    final propres = <String>{
+      for (final identifiant in identifiants)
+        if (identifiant.trim().isNotEmpty && !identifiant.contains(','))
+          identifiant.trim(),
+    };
+    return _depot.enregistrerTexte(
+      cleSourcesParDefautProposees,
+      propres.join(','),
+    );
+  }
 
   /// Date de la dernière recherche de mises à jour, ou `null`.
   Future<DateTime?> chargerDerniereVerification() async {

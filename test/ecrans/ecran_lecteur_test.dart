@@ -3,6 +3,7 @@ import 'package:bibliotheque_perso/ecrans/ecran_lecteur.dart';
 import 'package:bibliotheque_perso/etat/etat_lecteur.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
+import 'package:bibliotheque_perso/widgets/constantes_interface.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -112,11 +113,104 @@ void main() {
     expect(find.textContaining('file d\'attente'), findsOneWidget);
   });
 
+  testWidgets('R4 : le pied propose le lien du chapitre externe sauté', (
+    tester,
+  ) async {
+    bibliotheque.chapitresParTitre[1]!.insert(
+      1,
+      const Chapitre(
+        id: 4,
+        idTitre: 1,
+        urlChapitre: 'u15',
+        nom: 'Chez l\'éditeur',
+        numero: 1.5,
+        urlExterne: 'https://mangaplus.shueisha.co.jp/viewer/1',
+      ),
+    );
+    telechargement.textes[1] = '<p>Court.</p>';
+    telechargement.pages.remove(1);
+    await afficher(tester, 1);
+
+    expect(
+      find.text(Textes.chapitresExternesSuivants(1, 'MANGA Plus')),
+      findsOneWidget,
+    );
+    expect(find.textContaining(Textes.lireSur('MANGA Plus')), findsOneWidget);
+    // « Chapitre suivant » saute le chapitre externe.
+    expect(
+      find.text('${Textes.chapitreSuivant} : ${Textes.nomChapitre('Deux', 2)}'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('R4 : un chapitre externe affiche seulement son lien', (
+    tester,
+  ) async {
+    bibliotheque.chapitresParTitre[1]!.add(
+      const Chapitre(
+        id: 4,
+        idTitre: 1,
+        urlChapitre: 'u4',
+        nom: 'Quatre',
+        numero: 4,
+        urlExterne: 'https://mangaplus.shueisha.co.jp/viewer/4',
+      ),
+    );
+    await afficher(tester, 4);
+
+    expect(
+      find.text(Textes.lecteurChapitreExterne('MANGA Plus')),
+      findsOneWidget,
+    );
+    expect(find.text(Textes.telecharger), findsNothing);
+    expect(telechargement.journal, isNot(contains('telecharger:4')));
+  });
+
   testWidgets('chapitre texte lisible', (tester) async {
     telechargement.textes[2] = '<p>Il était une fois.</p>';
     telechargement.pages.remove(2);
     await afficher(tester, 2);
 
     expect(find.text('Il était une fois.'), findsOneWidget);
+  });
+
+  testWidgets('en remontant, une page déjà vue garde sa hauteur réelle dès '
+      'sa reconstruction (retour 0.2.0-test : sauts vers le bas)', (
+    tester,
+  ) async {
+    telechargement.ajouterChapitreTelecharge(3, nombrePages: 20);
+    await afficher(tester, 3);
+    // Hauteur provisoire d'une page jamais décodée (écran de 1200 px).
+    final hauteurProvisoire = 1200 * fractionHauteurPageProvisoire;
+    final pagesProvisoires = find.byWidgetPredicate(
+      (widget) => widget is SizedBox && widget.height == hauteurProvisoire,
+    );
+
+    /// Laisse le moteur décoder les images (hors temps simulé).
+    Future<void> decoder() async {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+    }
+
+    // Descente jusqu'en bas : chaque page est décodée une fois.
+    for (var i = 0; i < 60; i++) {
+      await decoder();
+      if (find.text(Textes.finDuChapitre).evaluate().isNotEmpty) break;
+      await tester.drag(find.byType(ListView), const Offset(0, -500));
+      await decoder();
+    }
+    expect(find.text(Textes.finDuChapitre), findsOneWidget);
+
+    // Remontée sans laisser décoder : les pages reconstruites (parfois
+    // relues dans l'archive) réservent déjà leur hauteur réelle, aucune
+    // n'est provisoire.
+    for (var i = 0; i < 60; i++) {
+      await tester.drag(find.byType(ListView), const Offset(0, 500));
+      await tester.pump();
+      expect(pagesProvisoires, findsNothing);
+    }
+    expect(find.text(Textes.pageSurTotal(1, 20)), findsOneWidget);
   });
 }

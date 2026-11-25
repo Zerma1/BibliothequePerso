@@ -2,12 +2,15 @@
 import 'package:bibliotheque_perso/ecrans/ecran_parametres.dart';
 import 'package:bibliotheque_perso/etat/etat_parametres.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
+import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/widgets/constantes_interface.dart';
+import 'package:bibliotheque_perso/widgets/section_pliable.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../etat/outils_tests_etat.dart';
+import '../widgets/outils_sections_pliables.dart';
 
 void main() {
   late FauxServiceBibliotheque bibliotheque;
@@ -29,7 +32,9 @@ void main() {
     );
   });
 
-  Future<void> afficher(WidgetTester tester) async {
+  /// Affiche l'écran ; avec [toutDeplier], toutes les sections sont
+  /// dépliées (seule « Mes langues » l'est au départ).
+  Future<void> afficher(WidgetTester tester, {bool toutDeplier = true}) async {
     tester.view.physicalSize = const Size(900, 4000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -43,7 +48,63 @@ void main() {
     );
     await tester.pump();
     await tester.pump();
+    if (toutDeplier) await deplierParametres(tester);
   }
+
+  group('sections pliables (retour 0.2.0-test)', () {
+    testWidgets('seule « Mes langues » est dépliée au départ ; les autres '
+        'montrent un résumé', (tester) async {
+      await afficher(tester, toutDeplier: false);
+
+      // Cinq sections : pas de service d'export ici (section masquée).
+      expect(find.byType(SectionPliable), findsNWidgets(5));
+      // Mes langues : dépliée.
+      expect(find.text(Textes.ajouterLangue), findsOneWidget);
+      expect(
+        find.text(Textes.listeLangues(<String>['fr', 'en'])),
+        findsOneWidget,
+      );
+      // Les autres : repliées, avec leur résumé.
+      expect(find.text(Textes.verificationsParJour), findsNothing);
+      expect(find.text(Textes.resumeRecherches(2)), findsOneWidget);
+      expect(find.text(Textes.resumeTelechargements), findsOneWidget);
+      expect(find.text(Textes.nombreSites(1)), findsOneWidget);
+      expect(find.byTooltip(Textes.modifierSite), findsNothing);
+      expect(
+        find.text(Textes.versionComplete(versionApplication)),
+        findsOneWidget,
+      );
+      expect(find.text(Textes.creditMangaDexComplet), findsNothing);
+
+      // Déplier puis replier une section.
+      await basculerSection(tester, Textes.sectionSites);
+      expect(find.byTooltip(Textes.modifierSite), findsOneWidget);
+      await basculerSection(tester, Textes.sectionSites);
+      expect(find.byTooltip(Textes.modifierSite), findsNothing);
+    });
+
+    testWidgets('un brouillon non enregistré est signalé section repliée', (
+      tester,
+    ) async {
+      await afficher(tester, toutDeplier: false);
+      await basculerSection(tester, Textes.sectionTelechargements);
+      await tester.tap(find.byTooltip(Textes.augmenter).first);
+      await tester.pump();
+      await basculerSection(tester, Textes.sectionTelechargements);
+
+      expect(find.text(Textes.modificationsNonEnregistrees), findsOneWidget);
+      expect(find.text(Textes.resumeTelechargements), findsNothing);
+    });
+
+    testWidgets('erreur de lecture des réglages : message et « Réessayer » '
+        'dans la section dépliée', (tester) async {
+      parametres.erreurLecture = const ErreurService('Base occupée.');
+      await afficher(tester, toutDeplier: false);
+
+      expect(find.text('Base occupée.'), findsOneWidget);
+      expect(find.text(Textes.reessayer), findsOneWidget);
+    });
+  });
 
   group('Mes langues', () {
     testWidgets('affiche les langues en français, la favorite d\'abord', (
@@ -140,8 +201,9 @@ void main() {
     final enregistrer = find.widgetWithText(FilledButton, Textes.enregistrer);
     expect(tester.widget<FilledButton>(enregistrer).onPressed, isNull);
 
-    // + sur la première limite (favoris : 10 → 11).
-    await tester.tap(find.byTooltip(Textes.augmenter).at(1));
+    // + sur la première limite (favoris : 10 → 11) ; les deux premiers « + »
+    // sont ceux des recherches par jour et de la surveillance « En attente ».
+    await tester.tap(find.byTooltip(Textes.augmenter).at(2));
     await tester.pump();
     expect(
       find.text(

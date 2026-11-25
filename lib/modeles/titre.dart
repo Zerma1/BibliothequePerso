@@ -1,6 +1,9 @@
 /// Modèle `Titre` : une œuvre (manga, manhwa, roman…) suivie sur une source.
 library;
 
+import 'dart:convert';
+
+import 'erreur_base_de_donnees.dart';
 import 'outils_modeles.dart';
 import 'titre_alternatif.dart';
 
@@ -29,6 +32,38 @@ enum TypeTitre {
   autre,
 }
 
+/// Champ d'un titre que le client peut modifier à la main (migration 10).
+///
+/// Un champ modifié à la main est « verrouillé » : l'actualisation depuis le
+/// site (`DepotTitres.enregistrerTitre`) ne l'écrase plus, jusqu'à ce que le
+/// client le rende au site (`DepotTitres.rendreChampsAuSite`).
+///
+/// Stocké en base sous son nom (`Enum.name`, colonne `titres.champs_manuels`) :
+/// ne jamais renommer une valeur existante sans migration. Un nom inconnu lu
+/// en base est ignoré.
+enum ChampTitre {
+  /// Nom principal ([Titre.nom]).
+  nom,
+
+  /// Autres noms ([Titre.titresAlternatifs], table `titres_alternatifs`).
+  titresAlternatifs,
+
+  /// Résumé ([Titre.resume]).
+  resume,
+
+  /// Auteur ([Titre.auteur]).
+  auteur,
+
+  /// Statut affiché par le site ([Titre.statut]).
+  statut,
+
+  /// Catégories du titre (table `titres_categories`).
+  categories,
+
+  /// Niveau de contenu ([Titre.niveauContenu]).
+  niveauContenu,
+}
+
 /// Une œuvre enregistrée dans la bibliothèque.
 ///
 /// [titresAlternatifs] et [nombreChapitresNonLus] ne sont pas des colonnes de la
@@ -52,9 +87,14 @@ class Titre {
     this.dateDerniereVerification,
     this.nombreChapitresNonLus = 0,
     this.languesPreferees,
+    this.niveauContenu,
+    this.couvertureChoisie,
+    Set<ChampTitre> champsManuels = const <ChampTitre>{},
+    this.descriptionPerso,
   }) : titresAlternatifs = List<TitreAlternatif>.unmodifiable(
          titresAlternatifs,
-       );
+       ),
+       champsManuels = Set<ChampTitre>.unmodifiable(champsManuels);
 
   static const String _entite = 'Titre';
 
@@ -105,6 +145,46 @@ class Titre {
   /// depuis le site (voir `DepotTitres.enregistrerLanguesPreferees`).
   final String? languesPreferees;
 
+  /// Niveau de contenu indiqué par le site, tel que MangaDex le nomme
+  /// (`safe`, `suggestive`, `erotica`, `pornographic` : voir
+  /// `niveauxContenu` dans `constantes.dart`), ou `null` si le site ne le
+  /// donne pas.
+  ///
+  /// Texte libre plutôt qu'énumération : une valeur inconnue ajoutée un jour
+  /// par MangaDex ne doit pas rendre la ligne illisible.
+  final String? niveauContenu;
+
+  /// Couverture choisie par le client : URL d'une autre couverture du site
+  /// (MangaDex : une par volume) ou chemin d'une image de l'appareil, ou
+  /// `null` pour la couverture du site ([urlCouverture]).
+  ///
+  /// Choix du client : jamais écrasé par une ré-actualisation du titre
+  /// depuis le site (voir `DepotTitres.enregistrerCouvertureChoisie`).
+  final String? couvertureChoisie;
+
+  /// Champs modifiés à la main par le client (ensemble non modifiable) :
+  /// l'actualisation depuis le site ne les écrase pas (migration 10).
+  ///
+  /// Écrits seulement par `DepotTitres.enregistrerModificationManuelle` et
+  /// `DepotTitres.rendreChampsAuSite` (et à l'insertion d'un titre) : une
+  /// mise à jour par `enregistrerTitre` ne les modifie jamais.
+  final Set<ChampTitre> champsManuels;
+
+  /// Description personnelle écrite par le client (migration 12), distincte
+  /// du résumé du site ([resume]), ou `null` s'il n'en a pas écrit.
+  ///
+  /// Choix du client : jamais écrasée par une ré-actualisation du titre
+  /// depuis le site (voir `DepotTitres.enregistrerDescriptionPerso`).
+  final String? descriptionPerso;
+
+  /// Indique si [champ] a été modifié à la main (verrouillé contre
+  /// l'actualisation depuis le site).
+  bool estManuel(ChampTitre champ) => champsManuels.contains(champ);
+
+  /// Couverture à afficher : [couvertureChoisie] si le client en a choisi
+  /// une, sinon [urlCouverture].
+  String? get couvertureAffichee => couvertureChoisie ?? urlCouverture;
+
   /// [languesPreferees] découpées en liste (`fr,en` → `['fr', 'en']`), vide
   /// si aucune langue n'est choisie pour ce titre.
   List<String> get listeLanguesPreferees {
@@ -137,7 +217,63 @@ class Titre {
         dateDerniereVerification,
       ),
       'langues_preferees': languesPreferees,
+      'niveau_contenu': niveauContenu,
+      'couverture_choisie': couvertureChoisie,
+      'champs_manuels': encoderChampsManuels(champsManuels),
+      'description_perso': descriptionPerso,
     };
+  }
+
+  /// Convertit des champs manuels en texte JSON pour la colonne
+  /// `titres.champs_manuels` : tableau des noms, dans l'ordre de
+  /// [ChampTitre.values] (texte identique pour un même ensemble).
+  static String encoderChampsManuels(Set<ChampTitre> champs) {
+    return jsonEncode(<String>[
+      for (final champ in ChampTitre.values)
+        if (champs.contains(champ)) champ.name,
+    ]);
+  }
+
+  /// Lit le texte JSON de la colonne `titres.champs_manuels`.
+  ///
+  /// `null` ou un texte vide donne un ensemble vide ; un nom inconnu est
+  /// ignoré. Lève une `ErreurBaseDeDonnees` si le texte n'est pas un tableau
+  /// JSON de textes.
+  static Set<ChampTitre> decoderChampsManuels(String? texte) {
+    if (texte == null || texte.trim().isEmpty) {
+      return const <ChampTitre>{};
+    }
+    final Object? decode;
+    try {
+      decode = jsonDecode(texte);
+    } on FormatException catch (erreur) {
+      throw ErreurBaseDeDonnees(
+        'Donnée invalide pour $_entite : la colonne « champs_manuels » '
+        'n\'est pas du JSON valide ($texte).',
+        cause: erreur,
+      );
+    }
+    if (decode is! List<Object?>) {
+      throw ErreurBaseDeDonnees(
+        'Donnée invalide pour $_entite : la colonne « champs_manuels » doit '
+        'être un tableau JSON, reçu « $texte ».',
+      );
+    }
+    final champs = <ChampTitre>{};
+    for (final element in decode) {
+      if (element is! String) {
+        throw ErreurBaseDeDonnees(
+          'Donnée invalide pour $_entite : la colonne « champs_manuels » ne '
+          'doit contenir que des textes, reçu « $texte ».',
+        );
+      }
+      for (final champ in ChampTitre.values) {
+        if (champ.name == element) {
+          champs.add(champ);
+        }
+      }
+    }
+    return champs;
   }
 
   /// Construit un titre depuis une ligne SQLite.
@@ -167,15 +303,29 @@ class Titre {
       nombreChapitresNonLus:
           map.lireEntierOptionnel('nombre_chapitres_non_lus', _entite) ?? 0,
       languesPreferees: map.lireTexteOptionnel('langues_preferees', _entite),
+      niveauContenu: map.lireTexteOptionnel('niveau_contenu', _entite),
+      couvertureChoisie: map.lireTexteOptionnel('couverture_choisie', _entite),
+      champsManuels: decoderChampsManuels(
+        map.lireTexteOptionnel('champs_manuels', _entite),
+      ),
+      descriptionPerso: map.lireTexteOptionnel('description_perso', _entite),
     );
   }
 
   /// Renvoie une copie avec les champs donnés remplacés.
   ///
   /// LIMITE : un champ nullable ne peut pas être remis à `null` par cette
-  /// méthode (un argument `null` signifie « inchangé »), sauf
-  /// [languesPreferees] : `effacerLanguesPreferees: true` le remet à `null`
-  /// (retour au réglage général) et l'emporte sur [languesPreferees].
+  /// méthode (un argument `null` signifie « inchangé »), sauf :
+  /// - [languesPreferees] : `effacerLanguesPreferees: true` le remet à
+  ///   `null` (retour au réglage général) ;
+  /// - [couvertureChoisie] : `effacerCouvertureChoisie: true` le remet à
+  ///   `null` (retour à la couverture du site) ;
+  /// - [niveauContenu] : `effacerNiveauContenu: true` le remet à `null` ;
+  /// - [descriptionPerso] : `effacerDescriptionPerso: true` le remet à
+  ///   `null`.
+  ///
+  /// Un indicateur `effacer…` l'emporte sur la valeur donnée pour le même
+  /// champ.
   Titre copierAvec({
     int? id,
     int? idSource,
@@ -191,6 +341,13 @@ class Titre {
     int? nombreChapitresNonLus,
     String? languesPreferees,
     bool effacerLanguesPreferees = false,
+    String? niveauContenu,
+    bool effacerNiveauContenu = false,
+    String? couvertureChoisie,
+    bool effacerCouvertureChoisie = false,
+    Set<ChampTitre>? champsManuels,
+    String? descriptionPerso,
+    bool effacerDescriptionPerso = false,
   }) {
     return Titre(
       id: id ?? this.id,
@@ -210,6 +367,16 @@ class Titre {
       languesPreferees: effacerLanguesPreferees
           ? null
           : languesPreferees ?? this.languesPreferees,
+      niveauContenu: effacerNiveauContenu
+          ? null
+          : niveauContenu ?? this.niveauContenu,
+      couvertureChoisie: effacerCouvertureChoisie
+          ? null
+          : couvertureChoisie ?? this.couvertureChoisie,
+      champsManuels: champsManuels ?? this.champsManuels,
+      descriptionPerso: effacerDescriptionPerso
+          ? null
+          : descriptionPerso ?? this.descriptionPerso,
     );
   }
 
@@ -229,7 +396,12 @@ class Titre {
             listesEgales(other.titresAlternatifs, titresAlternatifs) &&
             other.dateDerniereVerification == dateDerniereVerification &&
             other.nombreChapitresNonLus == nombreChapitresNonLus &&
-            other.languesPreferees == languesPreferees;
+            other.languesPreferees == languesPreferees &&
+            other.niveauContenu == niveauContenu &&
+            other.couvertureChoisie == couvertureChoisie &&
+            other.champsManuels.length == champsManuels.length &&
+            other.champsManuels.containsAll(champsManuels) &&
+            other.descriptionPerso == descriptionPerso;
   }
 
   @override
@@ -247,6 +419,10 @@ class Titre {
     dateDerniereVerification,
     nombreChapitresNonLus,
     languesPreferees,
+    niveauContenu,
+    couvertureChoisie,
+    Object.hashAllUnordered(champsManuels),
+    descriptionPerso,
   );
 
   @override

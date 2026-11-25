@@ -363,4 +363,111 @@ void main() {
     expect(etat.erreur!.nature, NatureErreur.introuvable);
     expect(etat.titre, isNull);
   });
+
+  group('E11 : actualisation et règles de téléchargement', () {
+    late FauxServiceBibliotheque faux;
+    late FauxServiceTelechargement telechargement;
+    late EtatTitre etatFaux;
+
+    setUp(() async {
+      faux = FauxServiceBibliotheque()..ajouterTitreDeTest('Titre');
+      telechargement = FauxServiceTelechargement(faux);
+      etatFaux = EtatTitre(faux, 1, serviceTelechargement: telechargement);
+      await etatFaux.charger();
+    });
+
+    tearDown(() => etatFaux.dispose());
+
+    test('des nouveaux chapitres trouvés appliquent les règles', () async {
+      faux.nombreNouveaux = 2;
+
+      final resultat = await etatFaux.actualiser();
+
+      expect(resultat.donnee, 2);
+      expect(telechargement.reglesAppliquees, <int>[1]);
+    });
+
+    test('sans nouveau chapitre, aucune règle n\'est appliquée', () async {
+      faux.nombreNouveaux = 0;
+
+      await etatFaux.actualiser();
+
+      expect(telechargement.reglesAppliquees, isEmpty);
+    });
+
+    test(
+      'une erreur des règles ne fait pas échouer l\'actualisation',
+      () async {
+        faux.nombreNouveaux = 1;
+        telechargement.erreurRegles = const ErreurService('file indisponible');
+
+        final resultat = await etatFaux.actualiser();
+
+        expect(resultat.estReussi, isTrue);
+        expect(resultat.donnee, 1);
+        expect(telechargement.reglesAppliquees, <int>[1]);
+      },
+    );
+  });
+
+  group('R4 : chapitres sur un site externe', () {
+    late FauxServiceBibliotheque faux;
+    late FauxServiceTelechargement telechargement;
+    late EtatTitre etatFaux;
+    const urlMangaPlus = 'https://mangaplus.shueisha.co.jp/viewer/1000486';
+
+    setUp(() async {
+      faux = FauxServiceBibliotheque()
+        ..ajouterTitreDeTest(
+          'Ruri Dragon',
+          chapitres: const <Chapitre>[
+            Chapitre(id: 1, urlChapitre: 'u1', nom: 'Un', numero: 1),
+            Chapitre(
+              id: 2,
+              urlChapitre: 'u2',
+              nom: 'Deux',
+              numero: 2,
+              urlExterne: urlMangaPlus,
+            ),
+          ],
+        );
+      telechargement = FauxServiceTelechargement(faux);
+      etatFaux = EtatTitre(faux, 1, serviceTelechargement: telechargement);
+      await etatFaux.charger();
+    });
+
+    tearDown(() => etatFaux.dispose());
+
+    Chapitre chapitre(int id) =>
+        etatFaux.chapitres.firstWhere((chapitre) => chapitre.id == id);
+
+    test('un chapitre externe a son état et le nom de son site', () {
+      expect(
+        etatFaux.etatHorsLigne(chapitre(2)).statut,
+        StatutHorsLigne.externe,
+      );
+      expect(etatFaux.nomSiteExterneDe(chapitre(2)), isNotEmpty);
+      expect(etatFaux.nomSiteExterneDe(chapitre(1)), isNull);
+    });
+
+    test('il compte dans les non-lus et se marque lu', () async {
+      expect(etatFaux.nombreNonLus, 2);
+
+      final resultat = await etatFaux.marquerLu(chapitre(2));
+
+      expect(resultat.estReussi, isTrue);
+      expect(etatFaux.nombreNonLus, 1);
+    });
+
+    test('il ne se télécharge pas et n\'ouvre pas le lecteur', () async {
+      final resultat = await etatFaux.telecharger(chapitre(2));
+
+      expect(resultat.estReussi, isFalse);
+      expect(telechargement.file, isEmpty);
+      expect(etatFaux.creerEtatLecteur(chapitre(2)), isNull);
+      final lecteur = etatFaux.creerEtatLecteur(chapitre(1));
+      expect(lecteur, isNotNull);
+      lecteur!.dispose();
+    });
+  });
 }

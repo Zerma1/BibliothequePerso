@@ -1,0 +1,14 @@
+Rapport d'erreur — Bibliothèque perso
+Date (UTC) : 2026-11-17T08:20:51.591884Z
+Action : Ajout d'un autre site à un titre
+Version : 0.1.0
+Système : windows
+Type de site détecté : scanManga
+Adresse : https://www.scan-manga.com/6678/Potion-danomi-de-Ikinobimasu.html
+Domaine : www.scan-manga.com
+Code HTTP : 403
+Message : Réponse HTTP 403 : <!DOCTYPE html><html lang="en-US"><head><title>Just a moment...</title><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=Edge"><meta name="robots" content="noindex,nofollow"><meta name="viewport" content="width=device-width,initial-scal…
+Octets reçus : 5746
+Durée (ms) : 142
+Début de la réponse :
+<!DOCTYPE html><html lang="en-US"><head><title>Just a moment...</title><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=Edge"><meta name="robots" content="noindex,nofollow"><meta name="viewport" content="width=device-width,initial-scal…

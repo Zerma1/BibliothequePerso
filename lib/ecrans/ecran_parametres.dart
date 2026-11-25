@@ -1,22 +1,30 @@
-/// Écran Paramètres : règles de téléchargement, sites et « À propos ».
+/// Écran Paramètres : règles de téléchargement, sites, journal et « À
+/// propos ».
 library;
 
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../etat/description_erreur.dart';
+import '../etat/etat_export.dart';
 import '../etat/etat_mises_a_jour.dart';
 import '../etat/etat_parametres.dart';
 import '../etat/etat_sources.dart';
 import '../modeles/source.dart';
 import '../widgets/constantes_interface.dart';
+import '../widgets/dialogue_import.dart';
+import '../widgets/dialogue_site.dart';
 import '../widgets/editeur_langues.dart';
 import '../widgets/messages.dart';
+import '../widgets/section_categories_regroupees.dart';
+import '../widgets/section_dossier_chapitres.dart';
+import '../widgets/section_journal.dart';
+import '../widgets/section_pliable.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
 
-/// Réglages de l'application, en trois sections : « Téléchargements »,
-/// « Sites » et « À propos ».
+/// Réglages de l'application : langues, mises à jour, téléchargements,
+/// sites, sauvegarde et export, puis « À propos ».
 class EcranParametres extends StatelessWidget {
   /// Crée l'écran.
   const EcranParametres({super.key});
@@ -33,17 +41,26 @@ class EcranParametres extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: largeurMaxFormulaire),
           child: ListView(
             padding: const EdgeInsets.all(espacementMoyen),
+            // Une carte repliable par thème (retour du client sur la
+            // 0.2.0-test) : l'écran tient sur une page, le client déplie ce
+            // qu'il veut régler. Seule la première section est dépliée au
+            // départ ; le pliage est ensuite mémorisé pendant la session.
             children: const <Widget>[
               // Les langues d'abord : c'est le réglage qui décide de ce qui
               // est téléchargé, avant les limites de nombre.
               _SectionLangues(),
-              SizedBox(height: espacementGrand),
               _SectionMisesAJour(),
-              SizedBox(height: espacementGrand),
               _SectionTelechargements(),
-              SizedBox(height: espacementGrand),
+              // Juste après les règles de téléchargement : il s'agit de
+              // l'endroit où ces chapitres sont rangés.
+              SectionDossierChapitres(),
               _SectionSites(),
-              SizedBox(height: espacementGrand),
+              // Après les sites : les catégories viennent d'eux.
+              SectionCategoriesRegroupees(),
+              _SectionExport(),
+              // Juste avant « À propos » : on vient y chercher le journal à
+              // joindre à un retour de test, comme la version.
+              SectionJournal(),
               _SectionAPropos(),
             ],
           ),
@@ -53,18 +70,32 @@ class EcranParametres extends StatelessWidget {
   }
 }
 
-/// Titre d'une section.
-class _TitreSection extends StatelessWidget {
-  const _TitreSection(this.texte);
+/// Contenu d'une section qui lit les réglages ([EtatParametres]) :
+/// erreur avec « Réessayer », chargement, puis [contenu] une fois les
+/// réglages lus. Chaque section gère ces cas elle-même, puisqu'elle peut
+/// être la seule dépliée.
+class _ContenuReglages extends StatelessWidget {
+  const _ContenuReglages({required this.etat, required this.contenu});
 
-  final String texte;
+  final EtatParametres etat;
+  final Widget Function() contenu;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: espacementPetit),
-      child: Text(texte, style: Theme.of(context).textTheme.titleLarge),
-    );
+    final erreur = etat.erreur;
+    if (erreur != null) {
+      return VueErreur(
+        message: Textes.messageErreur(erreur),
+        surReessayer: etat.charger,
+      );
+    }
+    if (!etat.estCharge) {
+      return const Padding(
+        padding: EdgeInsets.all(espacementGrand),
+        child: VueChargement(),
+      );
+    }
+    return contenu();
   }
 }
 
@@ -89,30 +120,40 @@ class _SectionLangues extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final etat = context.watch<EtatParametres>();
-    if (!etat.estCharge) {
-      // Chargement et erreur sont affichés par la section Téléchargements
-      // (même lecture des réglages).
-      return const _TitreSection(Textes.sectionLangues);
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        const _TitreSection(Textes.sectionLangues),
-        Text(
-          Textes.explicationMesLangues,
-          style: Theme.of(context).textTheme.bodyMedium,
-        ),
-        const SizedBox(height: espacementPetit),
-        EditeurLangues(
-          langues: etat.langues,
-          nombreMaximal: EtatParametres.nombreMaximalLangues,
-          estOccupe: etat.estEnEnregistrementLangues,
-          surAjouter: (code) => _executer(context, etat.ajouterLangue(code)),
-          surRetirer: (code) => _executer(context, etat.retirerLangue(code)),
-          surDeplacer: (code, decalage) =>
-              _executer(context, etat.deplacerLangue(code, decalage)),
-          surChoisirFavorite: (code) =>
-              _executer(context, etat.choisirFavorite(code)),
+    return SectionPliable(
+      identifiant: 'parametres.langues',
+      titre: Textes.sectionLangues,
+      icone: Icons.translate,
+      resume: etat.estCharge ? Textes.listeLangues(etat.langues) : null,
+      // Première section, dépliée au départ : c'est le réglage le plus
+      // structurant.
+      estDeplieeAuDepart: true,
+      enfants: <Widget>[
+        _ContenuReglages(
+          etat: etat,
+          contenu: () => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Text(
+                Textes.explicationMesLangues,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: espacementPetit),
+              EditeurLangues(
+                langues: etat.langues,
+                nombreMaximal: EtatParametres.nombreMaximalLangues,
+                estOccupe: etat.estEnEnregistrementLangues,
+                surAjouter: (code) =>
+                    _executer(context, etat.ajouterLangue(code)),
+                surRetirer: (code) =>
+                    _executer(context, etat.retirerLangue(code)),
+                surDeplacer: (code, decalage) =>
+                    _executer(context, etat.deplacerLangue(code, decalage)),
+                surChoisirFavorite: (code) =>
+                    _executer(context, etat.choisirFavorite(code)),
+              ),
+            ],
+          ),
         ),
       ],
     );
@@ -152,7 +193,6 @@ class _SectionMisesAJour extends StatelessWidget {
   Widget build(BuildContext context) {
     final etat = context.watch<EtatParametres>();
     final misesAJour = context.watch<EtatMisesAJour>();
-    final theme = Theme.of(context);
     final nombre = etat.verificationsParJour;
     final occupe = etat.estEnEnregistrementPlanification;
     // La date en base est relue au chargement ; une recherche faite depuis
@@ -163,15 +203,33 @@ class _SectionMisesAJour extends StatelessWidget {
         ? enMemoire
         : (enMemoire != null && enMemoire.isAfter(enBase) ? enMemoire : enBase);
     final prochaine = misesAJour.prochaineEcheance;
-    if (!etat.estCharge) {
-      // Chargement et erreur sont affichés par la section Téléchargements
-      // (même lecture des réglages).
-      return const _TitreSection(Textes.sectionMisesAJour);
-    }
+    return SectionPliable(
+      identifiant: 'parametres.recherches',
+      titre: Textes.sectionMisesAJour,
+      icone: Icons.update,
+      resume: etat.estCharge ? Textes.resumeRecherches(nombre) : null,
+      enfants: <Widget>[
+        _ContenuReglages(
+          etat: etat,
+          contenu: () =>
+              _contenu(context, etat, nombre, occupe, derniere, prochaine),
+        ),
+      ],
+    );
+  }
+
+  Widget _contenu(
+    BuildContext context,
+    EtatParametres etat,
+    int nombre,
+    bool occupe,
+    DateTime? derniere,
+    DateTime? prochaine,
+  ) {
+    final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        const _TitreSection(Textes.sectionMisesAJour),
         Text(
           Textes.explicationVerificationsParJour,
           style: theme.textTheme.bodyMedium,
@@ -219,8 +277,74 @@ class _SectionMisesAJour extends StatelessWidget {
             Textes.prochaineRecherche(prochaine),
             style: theme.textTheme.bodySmall,
           ),
+        const SizedBox(height: espacementMoyen),
+        // Surveillance accrue des titres « En attente » (étape 6) : même
+        // présentation que le nombre de recherches, juste en dessous.
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Text(
+                Textes.heuresEnAttente,
+                style: theme.textTheme.titleSmall,
+              ),
+            ),
+            IconButton(
+              tooltip: Textes.diminuer,
+              icon: const Icon(Icons.remove_circle_outline),
+              onPressed:
+                  etat.estEnEnregistrementEnAttente || etat.heuresEnAttente <= 1
+                  ? null
+                  : () => _modifierEnAttente(
+                      context,
+                      etat,
+                      etat.heuresEnAttente - 1,
+                    ),
+            ),
+            Text(
+              Textes.valeurHeures(etat.heuresEnAttente),
+              style: theme.textTheme.titleMedium,
+            ),
+            IconButton(
+              tooltip: Textes.augmenter,
+              icon: const Icon(Icons.add_circle_outline),
+              onPressed:
+                  etat.estEnEnregistrementEnAttente ||
+                      etat.heuresEnAttente >= etat.maximumHeuresEnAttente
+                  ? null
+                  : () => _modifierEnAttente(
+                      context,
+                      etat,
+                      etat.heuresEnAttente + 1,
+                    ),
+            ),
+          ],
+        ),
+        Text(
+          Textes.explicationHeuresEnAttente,
+          style: theme.textTheme.bodySmall,
+        ),
       ],
     );
+  }
+
+  Future<void> _modifierEnAttente(
+    BuildContext context,
+    EtatParametres etat,
+    int heures,
+  ) async {
+    final misesAJour = context.read<EtatMisesAJour>();
+    final resultat = await etat.modifierHeuresEnAttente(heures);
+    if (resultat.estReussi) {
+      // Minuteur (ordinateur) ou tâche de fond (Android) recalés.
+      await misesAJour.replanifier();
+    }
+    if (context.mounted) {
+      afficherResultat(
+        context,
+        resultat,
+        succes: Textes.surveillanceEnregistree,
+      );
+    }
   }
 }
 
@@ -241,68 +365,153 @@ class _SectionTelechargements extends StatelessWidget {
   Widget build(BuildContext context) {
     final etat = context.watch<EtatParametres>();
     final theme = Theme.of(context);
-    final erreur = etat.erreur;
-    Widget contenu;
-    if (erreur != null) {
-      contenu = VueErreur(
-        message: Textes.messageErreur(erreur),
-        surReessayer: etat.charger,
+    return SectionPliable(
+      identifiant: 'parametres.telechargements',
+      titre: Textes.sectionTelechargements,
+      icone: Icons.download_for_offline_outlined,
+      // Un brouillon non enregistré reste visible section repliée : le
+      // client ne l'oublie pas.
+      resume: etat.estCharge && etat.estModifie
+          ? Textes.modificationsNonEnregistrees
+          : Textes.resumeTelechargements,
+      enfants: <Widget>[
+        _ContenuReglages(
+          etat: etat,
+          contenu: () => _contenu(context, theme, etat),
+        ),
+      ],
+    );
+  }
+
+  /// Interrupteur « Archive complète » : l'activation est confirmée (elle
+  /// peut lancer des milliers de téléchargements), la désactivation non.
+  Future<void> _basculerArchive(
+    BuildContext context,
+    EtatParametres etat,
+    bool active,
+  ) async {
+    if (active) {
+      final confirme = await showDialog<bool>(
+        context: context,
+        builder: (contexteDialogue) => AlertDialog(
+          title: const Text(Textes.activerArchiveComplete),
+          content: const Text(Textes.confirmationArchiveComplete),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(contexteDialogue).pop(false),
+              child: const Text(Textes.annuler),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(contexteDialogue).pop(true),
+              child: const Text(Textes.activer),
+            ),
+          ],
+        ),
       );
-    } else if (!etat.estCharge) {
-      contenu = const Padding(
-        padding: EdgeInsets.all(espacementGrand),
-        child: VueChargement(),
-      );
-    } else {
-      contenu = Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Text(
-            Textes.introReglesTelechargement,
-            style: theme.textTheme.bodyMedium,
-          ),
-          const SizedBox(height: espacementMoyen),
-          for (final limite in LimiteTelechargement.values)
-            _LigneLimite(etat: etat, limite: limite),
-          const SizedBox(height: espacementPetit),
-          // Boutons qui passent à la ligne sur un écran étroit.
-          Wrap(
-            alignment: WrapAlignment.end,
-            spacing: espacementPetit,
-            runSpacing: espacementPetit,
-            children: <Widget>[
-              TextButton(
-                onPressed: etat.estParDefaut ? null : etat.remettreParDefaut,
-                child: const Text(Textes.valeursParDefaut),
-              ),
-              TextButton(
-                onPressed: etat.estModifie ? etat.annulerModifications : null,
-                child: const Text(Textes.annulerModifications),
-              ),
-              FilledButton.icon(
-                onPressed: etat.estModifie && !etat.estEnEnregistrement
-                    ? () => _enregistrer(context, etat)
-                    : null,
-                icon: etat.estEnEnregistrement
-                    ? SizedBox.square(
-                        dimension: IconTheme.of(context).size,
-                        child: const CircularProgressIndicator(
-                          strokeWidth: epaisseurIndicateurBouton,
-                        ),
-                      )
-                    : const Icon(Icons.save_outlined),
-                label: const Text(Textes.enregistrer),
-              ),
-            ],
-          ),
-        ],
+      if (confirme != true || !context.mounted) return;
+    }
+    final resultat = await etat.modifierArchiveComplete(active);
+    if (context.mounted) {
+      afficherResultat(
+        context,
+        resultat,
+        succes: Textes.archiveCompleteModifiee(resultat.donnee ?? active),
       );
     }
+  }
+
+  /// Enregistre la jauge au lâcher ; seule une erreur est signalée (un
+  /// message à chaque réglage serait du bruit).
+  Future<void> _modifierSimultanes(
+    BuildContext context,
+    EtatParametres etat,
+    int nombre,
+  ) async {
+    final resultat = await etat.modifierTelechargementsSimultanes(nombre);
+    if (context.mounted) afficherResultat(context, resultat);
+  }
+
+  Widget _contenu(BuildContext context, ThemeData theme, EtatParametres etat) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        const _TitreSection(Textes.sectionTelechargements),
-        contenu,
+        // En tête de section : quand elle est active, les limites qui
+        // suivent ne s'appliquent plus (tout est gardé).
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          secondary: const Icon(Icons.inventory_2_outlined),
+          title: const Text(Textes.archiveComplete),
+          subtitle: const Text(Textes.explicationArchiveComplete),
+          value: etat.archiveComplete,
+          onChanged: etat.estEnEnregistrementArchive
+              ? null
+              : (active) => _basculerArchive(context, etat, active),
+        ),
+        const Divider(),
+        // Jauge plutôt que + / − : de 1 à 32, le client choisit d'un geste.
+        // Rien n'est enregistré pendant le glissement, seulement au lâcher.
+        Text(
+          Textes.telechargementsSimultanes(etat.telechargementsSimultanes),
+          style: theme.textTheme.titleSmall,
+        ),
+        Slider(
+          value: etat.telechargementsSimultanes.toDouble(),
+          min: EtatParametres.minimumTelechargementsSimultanes.toDouble(),
+          max: EtatParametres.maximumTelechargementsSimultanes.toDouble(),
+          divisions:
+              EtatParametres.maximumTelechargementsSimultanes -
+              EtatParametres.minimumTelechargementsSimultanes,
+          label: '${etat.telechargementsSimultanes}',
+          onChanged: etat.estEnEnregistrementSimultanes
+              ? null
+              : (valeur) =>
+                    etat.previsualiserTelechargementsSimultanes(valeur.round()),
+          onChangeEnd: (valeur) =>
+              _modifierSimultanes(context, etat, valeur.round()),
+        ),
+        Text(
+          Textes.explicationTelechargementsSimultanes,
+          style: theme.textTheme.bodySmall,
+        ),
+        const Divider(),
+        Text(
+          Textes.introReglesTelechargement,
+          style: theme.textTheme.bodyMedium,
+        ),
+        const SizedBox(height: espacementMoyen),
+        for (final limite in LimiteTelechargement.values)
+          _LigneLimite(etat: etat, limite: limite),
+        const SizedBox(height: espacementPetit),
+        // Boutons qui passent à la ligne sur un écran étroit.
+        Wrap(
+          alignment: WrapAlignment.end,
+          spacing: espacementPetit,
+          runSpacing: espacementPetit,
+          children: <Widget>[
+            TextButton(
+              onPressed: etat.estParDefaut ? null : etat.remettreParDefaut,
+              child: const Text(Textes.valeursParDefaut),
+            ),
+            TextButton(
+              onPressed: etat.estModifie ? etat.annulerModifications : null,
+              child: const Text(Textes.annulerModifications),
+            ),
+            FilledButton.icon(
+              onPressed: etat.estModifie && !etat.estEnEnregistrement
+                  ? () => _enregistrer(context, etat)
+                  : null,
+              icon: etat.estEnEnregistrement
+                  ? SizedBox.square(
+                      dimension: IconTheme.of(context).size,
+                      child: const CircularProgressIndicator(
+                        strokeWidth: epaisseurIndicateurBouton,
+                      ),
+                    )
+                  : const Icon(Icons.save_outlined),
+              label: const Text(Textes.enregistrer),
+            ),
+          ],
+        ),
       ],
     );
   }
@@ -364,63 +573,19 @@ class _LigneLimite extends StatelessWidget {
 class _SectionSites extends StatelessWidget {
   const _SectionSites();
 
+  // Dialogue commun avec l'onglet Sources (tâche X5) : même formulaire,
+  // type modifiable et suppression aux deux endroits.
   Future<void> _modifier(
     BuildContext context,
     EtatSources etat,
     Source source,
-  ) async {
-    final saisie = await showDialog<_SaisieSite>(
-      context: context,
-      builder: (_) => _DialogueSite(source: source),
-    );
-    if (saisie == null || !context.mounted) return;
-    final resultat = await etat.modifierSource(
-      source,
-      nom: saisie.nom,
-      langues: saisie.langues,
-      estActive: saisie.estActive,
-    );
-    if (context.mounted) {
-      afficherResultat(
-        context,
-        resultat,
-        succes: Textes.siteModifie(resultat.donnee?.nom ?? saisie.nom),
-      );
-    }
-  }
+  ) => modifierSiteAvecDialogue(context, etat, source);
 
   Future<void> _supprimer(
     BuildContext context,
     EtatSources etat,
     Source source,
-  ) async {
-    final confirme = await showDialog<bool>(
-      context: context,
-      builder: (contexteDialogue) => AlertDialog(
-        title: const Text(Textes.supprimerSite),
-        content: Text(Textes.confirmationSuppressionSite(source.nom)),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(contexteDialogue).pop(false),
-            child: const Text(Textes.annuler),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(contexteDialogue).pop(true),
-            child: const Text(Textes.supprimer),
-          ),
-        ],
-      ),
-    );
-    if (confirme != true || !context.mounted) return;
-    final resultat = await etat.supprimerSource(source);
-    if (context.mounted) {
-      afficherResultat(
-        context,
-        resultat,
-        succes: Textes.siteSupprime(source.nom),
-      );
-    }
-  }
+  ) => supprimerSiteAvecConfirmation(context, etat, source);
 
   @override
   Widget build(BuildContext context) {
@@ -475,145 +640,121 @@ class _SectionSites extends StatelessWidget {
         ],
       );
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[const _TitreSection(Textes.sectionSites), contenu],
+    return SectionPliable(
+      identifiant: 'parametres.sites',
+      titre: Textes.sectionSites,
+      icone: Icons.public_outlined,
+      resume: etat.estCharge && erreur == null
+          ? Textes.nombreSites(etat.sources.length)
+          : null,
+      enfants: <Widget>[contenu],
     );
   }
 }
 
-/// Valeurs saisies dans le dialogue d'un site.
-class _SaisieSite {
-  const _SaisieSite({
-    required this.nom,
-    required this.langues,
-    required this.estActive,
-  });
+// --------------------------------------------------------- Sauvegarde, export
 
-  final String nom;
-  final String langues;
-  final bool estActive;
-}
+/// Export des titres et des sites (JSON complet et Markdown lisible).
+/// Absente si l'application n'a pas de service d'export (tests).
+class _SectionExport extends StatelessWidget {
+  const _SectionExport();
 
-/// Dialogue de modification d'un site.
-class _DialogueSite extends StatefulWidget {
-  const _DialogueSite({required this.source});
-
-  final Source source;
-
-  @override
-  State<_DialogueSite> createState() => _EtatDialogueSite();
-}
-
-class _EtatDialogueSite extends State<_DialogueSite> {
-  final GlobalKey<FormState> _formulaire = GlobalKey<FormState>();
-  late final TextEditingController _nom = TextEditingController(
-    text: widget.source.nom,
-  );
-  late final TextEditingController _langues = TextEditingController(
-    text: widget.source.langueParDefaut,
-  );
-  late bool _estActive = widget.source.estActive;
-
-  /// Codes de deux lettres séparés par des virgules (espaces tolérés).
-  static final RegExp _formatLangues = RegExp(
-    '^[a-z]{$longueurCodeLangue}(,[a-z]{$longueurCodeLangue})*\$',
-  );
-
-  @override
-  void dispose() {
-    _nom.dispose();
-    _langues.dispose();
-    super.dispose();
-  }
-
-  String? _validerLangues(String? valeur) {
-    final langues = (valeur ?? '').replaceAll(' ', '').toLowerCase();
-    if (langues.isEmpty || _formatLangues.hasMatch(langues)) return null;
-    return Textes.erreurLangues;
-  }
-
-  void _valider() {
-    if (!(_formulaire.currentState?.validate() ?? false)) return;
-    Navigator.of(context).pop(
-      _SaisieSite(
-        nom: _nom.text,
-        langues: _langues.text,
-        estActive: _estActive,
+  Future<void> _exporter(BuildContext context, EtatExport etat) async {
+    final resultat = await etat.exporter();
+    if (!context.mounted) return;
+    final export = resultat.donnee;
+    if (export == null) {
+      afficherResultat(context, resultat);
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (contexteDialogue) => AlertDialog(
+        title: const Text(Textes.exportEnregistre),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: largeurMaxFormulaire),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Text(
+                  Textes.resumeExport(export.nombreTitres, export.nombreSites),
+                ),
+                const SizedBox(height: espacementPetit),
+                // Chemins sélectionnables : le client peut les copier pour
+                // retrouver ou envoyer les fichiers.
+                const Text(Textes.fichierJson),
+                SelectableText(export.cheminJson),
+                const SizedBox(height: espacementPetit),
+                const Text(Textes.fichierMarkdown),
+                SelectableText(export.cheminMarkdown),
+              ],
+            ),
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => ouvrirLienExterne(
+              contexteDialogue,
+              Uri.directory(etat.dossierExports).toString(),
+            ),
+            child: const Text(Textes.ouvrirDossier),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(contexteDialogue).pop(),
+            child: const Text(Textes.fermer),
+          ),
+        ],
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text(Textes.modifierSite),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: largeurMaxFormulaire),
-        child: Form(
-          key: _formulaire,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                Text(widget.source.urlBase),
-                const SizedBox(height: espacementMoyen),
-                TextFormField(
-                  controller: _nom,
-                  decoration: const InputDecoration(
-                    labelText: Textes.champNomSiteObligatoire,
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (valeur) => (valeur ?? '').trim().isEmpty
-                      ? Textes.erreurNomVide
-                      : null,
-                ),
-                const SizedBox(height: espacementMoyen),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text(Textes.siteActif),
-                  subtitle: const Text(Textes.aideSiteActif),
-                  value: _estActive,
-                  onChanged: (valeur) => setState(() => _estActive = valeur),
-                ),
-                // Réglage avancé, replié : « Mes langues » (Paramètres) et
-                // les langues de chaque titre suffisent dans presque tous
-                // les cas. Déplié d'office si le site a déjà des langues
-                // propres, pour que le client voie ce qui s'applique.
-                ExpansionTile(
-                  tilePadding: EdgeInsets.zero,
-                  initiallyExpanded: widget.source.langueParDefaut.isNotEmpty,
-                  title: const Text(Textes.reglageAvanceLangues),
-                  childrenPadding: const EdgeInsets.only(
-                    bottom: espacementPetit,
-                  ),
-                  children: <Widget>[
-                    TextFormField(
-                      controller: _langues,
-                      decoration: const InputDecoration(
-                        labelText: Textes.champLangues,
-                        helperText: Textes.aideLangues,
-                        helperMaxLines: 5,
-                        border: OutlineInputBorder(),
+    final EtatExport etat;
+    try {
+      etat = context.watch<EtatExport>();
+    } on ProviderNotFoundException {
+      return const SizedBox.shrink();
+    }
+    return SectionPliable(
+      identifiant: 'parametres.export',
+      titre: Textes.sectionSauvegardeExport,
+      icone: Icons.save_alt_outlined,
+      resume: Textes.resumeSauvegardeExport,
+      enfants: <Widget>[
+        const Text(Textes.explicationExport),
+        const SizedBox(height: espacementPetit),
+        // Les deux boutons côte à côte, et l'un sous l'autre sur un écran
+        // étroit.
+        Wrap(
+          spacing: espacementPetit,
+          runSpacing: espacementPetit,
+          children: <Widget>[
+            FilledButton.tonalIcon(
+              onPressed: etat.estEnCours || etat.estEnImport
+                  ? null
+                  : () => _exporter(context, etat),
+              icon: etat.estEnCours
+                  ? SizedBox.square(
+                      dimension: IconTheme.of(context).size,
+                      child: const CircularProgressIndicator(
+                        strokeWidth: epaisseurIndicateurBouton,
                       ),
-                      validator: _validerLangues,
-                    ),
-                  ],
-                ),
-              ],
+                    )
+                  : const Icon(Icons.save_alt_outlined),
+              label: const Text(Textes.exporterTitresEtSites),
             ),
-          ),
-        ),
-      ),
-      actions: <Widget>[
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text(Textes.annuler),
-        ),
-        FilledButton(
-          onPressed: _valider,
-          child: const Text(Textes.enregistrer),
+            if (etat.peutImporter)
+              OutlinedButton.icon(
+                onPressed: etat.estEnCours || etat.estEnImport
+                    ? null
+                    : () => ouvrirImport(context, etat),
+                icon: const Icon(Icons.upload_file_outlined),
+                label: const Text(Textes.importerUnExport),
+              ),
+          ],
         ),
       ],
     );
@@ -629,12 +770,15 @@ class _SectionAPropos extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        const _TitreSection(Textes.sectionAPropos),
+    return SectionPliable(
+      identifiant: 'parametres.aPropos',
+      titre: Textes.sectionAPropos,
+      icone: Icons.info_outline,
+      // Le numéro de version reste lisible section repliée.
+      resume: Textes.versionComplete(versionApplication),
+      enfants: <Widget>[
+        // Version déjà dans l'en-tête : pas de doublon ici.
         Text(Textes.titreApplication, style: theme.textTheme.titleMedium),
-        Text(Textes.versionComplete(versionApplication)),
         const SizedBox(height: espacementPetit),
         const Text(Textes.descriptionApplication),
         const SizedBox(height: espacementPetit),

@@ -12,6 +12,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../modeles/chapitre.dart';
+import '../modeles/journal.dart';
 import '../modeles/source.dart';
 import '../modeles/telechargement.dart';
 import '../modeles/titre.dart';
@@ -34,6 +35,10 @@ enum NatureContenu {
 
   /// Chapitre seulement listé : rien à lire hors-ligne.
   nonTelecharge,
+
+  /// Chapitre hébergé sur un site externe : il se lit seulement sur ce site
+  /// (PLAYBOOK.md section 10).
+  externe,
 }
 
 /// Lecteur d'un titre, ouvert sur un chapitre.
@@ -137,17 +142,51 @@ class EtatLecteur extends EtatNotifiant {
   /// Chapitre suivant (numéro supérieur), ou `null`.
   Chapitre? get chapitreSuivant => _voisin(1);
 
-  Chapitre? _voisin(int decalage) {
+  /// Chapitres externes qui suivent immédiatement le chapitre affiché (avant
+  /// le prochain chapitre lisible ici), dans l'ordre de lecture : le bouton
+  /// « Chapitre suivant » les saute, la fin du chapitre propose leur lien.
+  List<Chapitre> get chapitresExternesSuivants {
+    final index = _indexCourant();
+    if (index < 0) return const <Chapitre>[];
+    final externes = <Chapitre>[];
+    for (var i = index + 1; i < _groupes.length; i++) {
+      if (_groupes[i].versionLisible != null) break;
+      externes.add(_groupes[i].retenu);
+    }
+    return externes;
+  }
+
+  /// Nom du site où se lit [chapitre] s'il est externe, sinon `null`.
+  String? nomSiteExterneDe(Chapitre chapitre) => chapitre.estExterne
+      ? ServiceBibliotheque.nomSiteExterne(chapitre.urlExterne!)
+      : null;
+
+  /// Index du groupe du chapitre affiché, ou -1.
+  int _indexCourant() {
     final chapitre = _chapitre;
-    if (chapitre == null) return null;
+    if (chapitre == null) return -1;
     // Recherche par identifiant et non par numéro : les oneshots partagent
     // le numéro 0 mais forment chacun leur propre groupe.
-    final index = _groupes.indexWhere(
+    return _groupes.indexWhere(
       (g) => g.versions.any((version) => version.id == chapitre.id),
     );
-    final voisin = index + decalage;
-    if (index < 0 || voisin < 0 || voisin >= _groupes.length) return null;
-    return _groupes[voisin].versionALire;
+  }
+
+  /// Premier chapitre lisible dans l'application dans la direction
+  /// [decalage] : les numéros publiés seulement sur un site externe sont
+  /// sautés (ils ne s'ouvrent jamais dans le lecteur).
+  Chapitre? _voisin(int decalage) {
+    final index = _indexCourant();
+    if (index < 0) return null;
+    for (
+      var i = index + decalage;
+      i >= 0 && i < _groupes.length;
+      i += decalage
+    ) {
+      final lisible = _groupes[i].versionLisible;
+      if (lisible != null) return lisible;
+    }
+    return null;
   }
 
   /// Charge le titre, ses chapitres et ouvre le chapitre demandé.
@@ -189,7 +228,16 @@ class EtatLecteur extends EtatNotifiant {
     final langues = await _serviceBibliotheque.languesPourTitre(titre);
     // Ordre de lecture : numéros croissants, une version par numéro (celle
     // que le service télécharge, ou une autre déjà sur l'appareil).
-    _groupes = regrouperParNumero(chapitres, langues);
+    // Étape 8 : mêmes sites (principal, liés) que le service.
+    final liens = await _serviceBibliotheque.chargerLiensDuTitre(titre);
+    _groupes = regrouperParNumero(
+      chapitres,
+      langues,
+      idSourcePrincipale: idSource,
+      idsSourcesLiees: liens.isEmpty
+          ? null
+          : <int>{?idSource, for (final lien in liens) lien.idSource},
+    );
   }
 
   Chapitre? _trouver(int idChapitre) {
@@ -205,13 +253,22 @@ class EtatLecteur extends EtatNotifiant {
     final numero = ++_numeroOuverture;
     _chapitre = chapitre;
     _idChapitreDemande = chapitre.id!;
-    _proteger(chapitre.id!);
     _pages.clear();
     _telechargement = null;
     _nombrePages = 0;
     _pageCourante = 0;
     _texte = '';
     _erreur = null;
+    if (chapitre.estExterne) {
+      // Garde-fou : la fiche et la navigation n'ouvrent jamais un chapitre
+      // externe, mais s'il arrive ici, le lecteur ne lit rien et propose
+      // seulement le lien vers le site de l'éditeur.
+      _nature = NatureContenu.externe;
+      _noterOuverture(chapitre, 'chapitre externe (lien seulement)');
+      notifier();
+      return;
+    }
+    _proteger(chapitre.id!);
     _nature = NatureContenu.chargement;
     notifier();
     try {
@@ -224,6 +281,10 @@ class EtatLecteur extends EtatNotifiant {
         // de le télécharger ou de l'ouvrir sur le site.
         if (numero == _numeroOuverture) {
           _nature = NatureContenu.nonTelecharge;
+          _noterOuverture(
+            chapitre,
+            'non téléchargé (${telechargement?.statut.name ?? 'hors file'})',
+          );
           notifier();
         }
         return;
@@ -233,16 +294,23 @@ class EtatLecteur extends EtatNotifiant {
         if (numero != _numeroOuverture) return;
         _nombrePages = pages;
         _nature = NatureContenu.images;
+        _noterOuverture(chapitre, '$pages page(s) depuis le disque');
       } else {
         final html = await _serviceTelechargement.lireTexte(chapitre.id!);
         if (numero != _numeroOuverture) return;
         _texte = texteLisibleDepuisHtml(html ?? '');
         _nature = NatureContenu.texte;
+        _noterOuverture(chapitre, 'texte (${_texte.length} caractères)');
       }
       notifier();
     } catch (erreur, pile) {
       if (numero != _numeroOuverture) return;
       _erreur = DescriptionErreur.depuis(erreur, pile);
+      Journal.actuel.avertissement(
+        CategorieJournal.interface,
+        'Lecteur : chapitre n°${chapitre.id} du titre n°$idTitre illisible',
+        erreur: erreur,
+      );
       notifier();
     }
   }
@@ -357,6 +425,11 @@ class EtatLecteur extends EtatNotifiant {
     try {
       if (!chapitre.estLu) {
         await _serviceBibliotheque.marquerLu(id);
+        // Le service ne journalise pas ce marquage (simple écriture en base).
+        Journal.actuel.info(
+          CategorieJournal.interface,
+          'Lecteur : chapitre n°$id marqué lu (fin de lecture)',
+        );
         if (_chapitre?.id == id) {
           _chapitre = chapitre.copierAvec(estLu: true);
         }
@@ -367,7 +440,12 @@ class EtatLecteur extends EtatNotifiant {
     } catch (erreur, pile) {
       // L'échec du marquage ne doit pas interrompre la lecture.
       _idsMarques.remove(id);
-      debugPrint('Chapitre non marqué lu : $erreur\n$pile');
+      Journal.actuel.avertissement(
+        CategorieJournal.interface,
+        'Lecteur : chapitre n°$id non marqué lu',
+        erreur: erreur,
+        pile: pile,
+      );
     }
   }
 
@@ -455,13 +533,41 @@ class EtatLecteur extends EtatNotifiant {
         }
         notifier();
       } catch (erreur, pile) {
-        debugPrint('Lecteur : file illisible : $erreur\n$pile');
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Lecteur : file de téléchargement illisible',
+          erreur: erreur,
+          pile: pile,
+        );
       }
     } while (_relectureFileRedemandee);
   }
 
+  /// Note dans le journal le chapitre ouvert et ce que le lecteur affiche
+  /// (le service ne voit pas la lecture elle-même).
+  void _noterOuverture(Chapitre chapitre, String contenu) {
+    final numero = chapitre.numero;
+    // « 12 » plutôt que « 12.0 » : le numéro tel que le client le voit.
+    final numeroLisible = numero.isFinite && numero == numero.truncateToDouble()
+        ? numero.toInt().toString()
+        : numero.toString();
+    Journal.actuel.info(
+      CategorieJournal.interface,
+      'Lecteur : chapitre n°${chapitre.id} (numéro $numeroLisible) du titre '
+      'n°$idTitre ouvert : $contenu',
+    );
+  }
+
   @override
   void dispose() {
+    final chapitre = _chapitre;
+    if (chapitre != null) {
+      Journal.actuel.info(
+        CategorieJournal.interface,
+        'Lecteur fermé : chapitre n°${chapitre.id} du titre n°$idTitre'
+        '${_nombrePages > 0 ? ', page ${_pageCourante + 1}/$_nombrePages' : ''}',
+      );
+    }
     unawaited(_abonnement.cancel());
     final protege = _idProtege;
     if (protege != null) {

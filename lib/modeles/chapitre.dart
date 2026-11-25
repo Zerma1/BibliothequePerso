@@ -3,6 +3,41 @@ library;
 
 import 'outils_modeles.dart';
 
+/// Façon dont l'application a connu un chapitre (colonne
+/// `chapitres.origine`, migration 13).
+///
+/// Stockée en base sous `Enum.name` (`'site'`, `'web'`) : ne jamais renommer
+/// une valeur sans migration (la contrainte CHECK de la colonne la vérifie).
+enum OrigineChapitre {
+  /// Chapitre lu par l'adaptateur du site (actualisation) : cas normal.
+  site,
+
+  /// Chapitre enregistré depuis le navigateur intégré, pendant que le client
+  /// le lisait sur le site (utile pour un site en « lien seul », que
+  /// l'application ne sait pas lire). Une actualisation depuis le site ne le
+  /// supprime ni ne le modifie jamais.
+  web,
+}
+
+/// Forme normalisée d'une adresse de chapitre, pour comparer deux adresses :
+/// espaces autour retirés, fragment (`#…`) retiré, `/` finaux retirés.
+///
+/// `https://site.example/ch/12/#page-3` et `https://site.example/ch/12`
+/// donnent la même valeur. La casse et le reste de l'adresse sont gardés
+/// tels quels (un chemin peut être sensible à la casse). Même règle que la
+/// comparaison SQL de `DepotChapitres.chargerChapitreParUrl`.
+String normaliserUrlChapitre(String url) {
+  var resultat = url.trim();
+  final diese = resultat.indexOf('#');
+  if (diese >= 0) {
+    resultat = resultat.substring(0, diese);
+  }
+  while (resultat.endsWith('/')) {
+    resultat = resultat.substring(0, resultat.length - 1);
+  }
+  return resultat;
+}
+
 /// Un chapitre d'un titre.
 class Chapitre {
   /// Crée un chapitre. [id] vaut `null` tant qu'il n'est pas enregistré.
@@ -19,6 +54,10 @@ class Chapitre {
     this.dateDetection,
     this.nomArchive,
     this.dateSuppressionPrevue,
+    this.estGarde = false,
+    this.urlExterne,
+    this.idSource,
+    this.origine = OrigineChapitre.site,
   });
 
   static const String _entite = 'Chapitre';
@@ -72,6 +111,46 @@ class Chapitre {
   /// automatiquement, ou `null` si aucune suppression n'est prévue.
   final DateTime? dateSuppressionPrevue;
 
+  /// `true` si le client a choisi « Garder » ce chapitre téléchargé : les
+  /// règles de conservation ne le suppriment jamais automatiquement.
+  ///
+  /// Remis à `false` quand l'archive est supprimée (un chapitre retéléchargé
+  /// suit de nouveau les règles).
+  final bool estGarde;
+
+  /// Lien vers le site de l'éditeur quand le chapitre n'est pas hébergé par
+  /// le site source (ex. MangaDex renvoie vers le site officiel), ou `null`
+  /// pour un chapitre hébergé (cas normal).
+  ///
+  /// Un chapitre externe se lit sur ce site (« Lire sur `site` ») et n'est
+  /// jamais téléchargeable.
+  final String? urlExterne;
+
+  /// Identifiant de la source (site) d'où vient ce chapitre (étape 8 : un
+  /// titre peut être suivi sur plusieurs sites).
+  ///
+  /// `null` signifie « site principal du titre » : c'est le cas d'un
+  /// chapitre pas encore enregistré, ou d'une ligne lue sans cette colonne.
+  /// À l'insertion, `DepotChapitres` remplace `null` par la source
+  /// principale du titre ; une ligne lue en base porte donc toujours sa
+  /// source réelle.
+  final int? idSource;
+
+  /// Façon dont le chapitre a été connu : lu sur le site par l'application
+  /// ([OrigineChapitre.site], par défaut) ou enregistré depuis le navigateur
+  /// intégré ([OrigineChapitre.web]).
+  final OrigineChapitre origine;
+
+  /// `true` si le chapitre a été enregistré depuis le navigateur intégré.
+  bool get estWeb => origine == OrigineChapitre.web;
+
+  /// `true` si le chapitre est hébergé sur un site externe ([urlExterne]
+  /// non vide) : il n'a ni pages à lire dans l'application ni archive.
+  bool get estExterne {
+    final url = urlExterne;
+    return url != null && url.trim().isNotEmpty;
+  }
+
   /// Convertit le chapitre en ligne SQLite (colonnes en `snake_case`).
   Map<String, Object?> versMap() {
     return <String, Object?>{
@@ -87,6 +166,10 @@ class Chapitre {
       'date_detection': dateVersMillisecondes(dateDetection),
       'nom_archive': nomArchive,
       'date_suppression_prevue': dateVersMillisecondes(dateSuppressionPrevue),
+      'est_garde': booleenVersEntier(estGarde),
+      'url_externe': urlExterne,
+      'id_source': idSource,
+      'origine': origine.name,
     };
   }
 
@@ -110,6 +193,23 @@ class Chapitre {
         'date_suppression_prevue',
         _entite,
       ),
+      // Colonne absente (ligne construite à la main ou requête partielle) :
+      // non gardé, comme la valeur par défaut de la migration 5.
+      estGarde: map.containsKey('est_garde')
+          ? map.lireBooleen('est_garde', _entite)
+          : false,
+      // Colonne absente (requête partielle) : chapitre hébergé, comme les
+      // lignes antérieures à la migration 6.
+      urlExterne: map.lireTexteOptionnel('url_externe', _entite),
+      // Colonne absente (requête partielle, base avant la migration 7) :
+      // site principal du titre.
+      idSource: map.lireEntierOptionnel('id_source', _entite),
+      // Colonne absente ou NULL (requête partielle, base avant la
+      // migration 13) : chapitre lu sur le site, comme la valeur par défaut
+      // de la migration 13.
+      origine: map['origine'] == null
+          ? OrigineChapitre.site
+          : map.lireEnum('origine', _entite, OrigineChapitre.values),
     );
   }
 
@@ -119,11 +219,14 @@ class Chapitre {
   /// méthode (un argument `null` signifie « inchangé »), sauf :
   /// - [nomArchive] : `effacerNomArchive: true` le remet à `null` ;
   /// - [dateSuppressionPrevue] : `effacerDateSuppressionPrevue: true` le
-  ///   remet à `null` (suppression annulée).
+  ///   remet à `null` (suppression annulée) ;
+  /// - [urlExterne] : `effacerUrlExterne: true` le remet à `null` (chapitre
+  ///   de nouveau hébergé par le site source).
   ///
   /// Un indicateur `effacer…` l'emporte sur la valeur donnée pour le même
   /// champ. En base, l'effacement se fait par `DepotChapitres`
-  /// (`enregistrerArchive(id, null)`, `planifierSuppression(id, null)`).
+  /// (`enregistrerArchive(id, null)`, `planifierSuppression(id, null)`,
+  /// `enregistrerChapitres` pour le lien externe).
   Chapitre copierAvec({
     int? id,
     int? idTitre,
@@ -137,8 +240,13 @@ class Chapitre {
     DateTime? dateDetection,
     String? nomArchive,
     DateTime? dateSuppressionPrevue,
+    bool? estGarde,
+    String? urlExterne,
+    int? idSource,
+    OrigineChapitre? origine,
     bool effacerNomArchive = false,
     bool effacerDateSuppressionPrevue = false,
+    bool effacerUrlExterne = false,
   }) {
     return Chapitre(
       id: id ?? this.id,
@@ -155,6 +263,10 @@ class Chapitre {
       dateSuppressionPrevue: effacerDateSuppressionPrevue
           ? null
           : dateSuppressionPrevue ?? this.dateSuppressionPrevue,
+      estGarde: estGarde ?? this.estGarde,
+      urlExterne: effacerUrlExterne ? null : urlExterne ?? this.urlExterne,
+      idSource: idSource ?? this.idSource,
+      origine: origine ?? this.origine,
     );
   }
 
@@ -173,7 +285,11 @@ class Chapitre {
             other.estTelecharge == estTelecharge &&
             other.dateDetection == dateDetection &&
             other.nomArchive == nomArchive &&
-            other.dateSuppressionPrevue == dateSuppressionPrevue;
+            other.dateSuppressionPrevue == dateSuppressionPrevue &&
+            other.estGarde == estGarde &&
+            other.urlExterne == urlExterne &&
+            other.idSource == idSource &&
+            other.origine == origine;
   }
 
   @override
@@ -190,11 +306,17 @@ class Chapitre {
     dateDetection,
     nomArchive,
     dateSuppressionPrevue,
+    estGarde,
+    urlExterne,
+    idSource,
+    origine,
   );
 
   @override
   String toString() =>
-      'Chapitre(id: $id, idTitre: $idTitre, numero: $numero, nom: $nom, '
+      'Chapitre(id: $id, idTitre: $idTitre, idSource: $idSource, '
+      'numero: $numero, nom: $nom, '
       'langue: $langue, estLu: $estLu, estTelecharge: $estTelecharge, '
-      'nomArchive: $nomArchive)';
+      'nomArchive: $nomArchive, estGarde: $estGarde, '
+      'urlExterne: $urlExterne, origine: ${origine.name})';
 }

@@ -11,7 +11,9 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart'
     show databaseFactoryFfi, sqfliteFfiInit;
 
 import '../modeles/constantes.dart';
+import '../modeles/erreur_base_de_donnees.dart';
 import 'migrations.dart';
+import 'reparation_schema.dart';
 
 /// Vrai une fois [initialiserFabriqueBaseDeDonnees] exécutée.
 bool _fabriqueInitialisee = false;
@@ -52,12 +54,21 @@ void initialiserFabriqueBaseDeDonnees() {
 ///   (documentation sqflite, « Isolates and hot restart »). `null` garde la
 ///   valeur par défaut de sqflite.
 ///
+/// - [versionDemandee] : version du schéma voulue, [versionSchema] par
+///   défaut. Réservé aux tests (simuler une version plus ancienne de
+///   l'application).
+///
+/// Lève [ErreurBaseDeDonnees] si la base vient d'une version plus récente
+/// de l'application (schéma plus haut que la version demandée) ; la base
+/// n'est alors pas modifiée.
+///
 /// Avec le chemin par défaut, `WidgetsFlutterBinding.ensureInitialized()` doit
 /// avoir été appelé (exigence de `path_provider`).
 Future<Database> ouvrirBaseDeDonnees({
   String? chemin,
   DatabaseFactory? fabrique,
   bool? annulerTransactionOuverte,
+  int? versionDemandee,
 }) async {
   if (fabrique == null) {
     initialiserFabriqueBaseDeDonnees();
@@ -69,20 +80,42 @@ Future<Database> ouvrirBaseDeDonnees({
   return fabriqueUtilisee.openDatabase(
     cheminUtilise,
     options: OpenDatabaseOptions(
-      version: versionSchema,
+      version: versionDemandee ?? versionSchema,
       // Les clés étrangères sont désactivées par défaut dans SQLite et ce
       // réglage n'est pas mémorisé dans le fichier : il faut le refaire à
       // chaque ouverture, avant toute migration (sinon pas de CASCADE).
       onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
-      onCreate: (db, version) => appliquerMigrations(db, 0, version),
-      onUpgrade: (db, ancienne, nouvelle) =>
-          appliquerMigrations(db, ancienne, nouvelle),
+      // user_version 0 : base neuve, ou base dont la version a été perdue
+      // (tables déjà présentes) ; la réparation distingue les deux cas.
+      onCreate: (db, version) => migrerAvecReparation(db, 0, version),
+      onUpgrade: migrerAvecReparation,
+      // Sans onDowngrade, sqflite écrirait quand même la version plus basse
+      // dans user_version : une version plus récente rejouerait ensuite des
+      // migrations déjà faites (incident 0.2.4, « table titres_sources
+      // already exists »). L'erreur annule la transaction d'ouverture : la
+      // base et sa version restent intactes.
+      onDowngrade: (db, ancienne, nouvelle) =>
+          throw ErreurBaseDeDonnees(messageBasePlusRecente(ancienne)),
       // Une base en mémoire ne doit pas être partagée entre deux ouvertures
       // (chaque test repart d'une base vide).
       singleInstance: !estEnMemoire,
       rollbackActiveTransactionOnOpen: annulerTransactionOuverte,
     ),
   );
+}
+
+/// Répare si besoin la version enregistrée ([reparerVersionSchema]) puis
+/// applique les migrations de la version réelle à [nouvelle].
+///
+/// Utilisée par `onCreate` ([ancienne] = 0) et `onUpgrade`, dans la
+/// transaction d'ouverture.
+Future<void> migrerAvecReparation(
+  DatabaseExecutor executeur,
+  int ancienne,
+  int nouvelle,
+) async {
+  final depart = await reparerVersionSchema(executeur, ancienne, nouvelle);
+  await appliquerMigrations(executeur, depart, nouvelle);
 }
 
 /// Chemin par défaut du fichier SQLite.

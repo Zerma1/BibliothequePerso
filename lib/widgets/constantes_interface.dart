@@ -4,10 +4,12 @@ library;
 
 /// Numéro de version affiché (« À propos », sous la navigation).
 ///
-/// Doit être identique à la version de `pubspec.yaml` sans le numéro de
-/// build (`X.Y.Z` de `version: X.Y.Z+N`) : un test le vérifie. Recopié ici
-/// car lire la version à l'exécution demanderait un paquet supplémentaire.
-const String versionApplication = '0.1.0';
+/// Suit la version de `pubspec.yaml` sans le numéro de build (`X.Y.Z` de
+/// `version: X.Y.Z+N`). Elle peut la précéder entre deux publications :
+/// `pubspec.yaml` n'est mis à jour qu'à la publication (tâche T7). Un test
+/// vérifie qu'elle est égale ou supérieure. Recopiée ici car lire la version
+/// à l'exécution demanderait un paquet supplémentaire.
+const String versionApplication = '0.2.5';
 
 // ---------------------------------------------------------------- Chapitres
 
@@ -111,5 +113,25 @@ const double tailleIconeEtat = 64;
 /// Nombre maximal de lignes du nom sur une carte de titre.
 const int lignesMaxNomCarte = 2;
 
-/// Nombre de caractères d'un code de langue ISO 639-1.
-const int longueurCodeLangue = 2;
+/// Largeur maximale d'une miniature dans le choix de la couverture : la
+/// grille compte autant de colonnes que la largeur du dialogue le permet.
+const double largeurMaxMiniatureCouverture = 120;
+
+/// Largeur de la petite couverture d'une ligne de l'onglet Mises à jour
+/// (vignette de liste, pas la mise en page principale) : assez grande pour
+/// reconnaître le titre, assez petite pour garder la ligne compacte.
+const double largeurCouvertureLigne = 48;
+
+/// Part de la largeur de l'écran occupée au plus par le contenu d'un
+/// dialogue de largeur fixe (choix de la couverture) : laisse les marges
+/// Material visibles sur téléphone.
+const double fractionLargeurDialogue = 0.8;
+
+/// Part de la hauteur de l'écran occupée au plus par le texte d'un bandeau
+/// global (dossier des chapitres inaccessible, redémarrage) : au-delà, le
+/// texte défile, et l'onglet garde la place de s'afficher sur un téléphone.
+const double fractionHauteurMaxBandeau = 0.15;
+
+/// Part de la hauteur de l'écran occupée au plus par le panneau des
+/// catégories (feuille du bas sur téléphone).
+const double fractionHauteurPanneau = 0.85;

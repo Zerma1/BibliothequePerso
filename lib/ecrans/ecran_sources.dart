@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../etat/etat_sources.dart';
 import '../modeles/source.dart';
 import '../widgets/constantes_interface.dart';
+import '../widgets/dialogue_site.dart';
 import '../widgets/messages.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
@@ -71,25 +72,43 @@ class EcranSources extends StatelessWidget {
         ),
       );
     }
+    // Une ligne d'aide avant la liste : toucher un site le modifie (X5),
+    // ce qui ne se devine pas sur une simple liste.
     return ListView.separated(
       padding: const EdgeInsets.only(bottom: margeBasBoutonFlottant),
-      itemCount: etat.sources.length,
-      separatorBuilder: (_, _) => const Divider(height: 1),
-      itemBuilder: (context, index) =>
-          _TuileSource(source: etat.sources[index]),
+      itemCount: etat.sources.length + 1,
+      separatorBuilder: (_, index) =>
+          index == 0 ? const SizedBox.shrink() : const Divider(height: 1),
+      itemBuilder: (context, index) => index == 0
+          ? Padding(
+              padding: const EdgeInsets.fromLTRB(
+                espacementMoyen,
+                espacementPetit,
+                espacementMoyen,
+                espacementPetit,
+              ),
+              child: Text(
+                Textes.aideModifierSource,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            )
+          : _TuileSource(etat: etat, source: etat.sources[index - 1]),
     );
   }
 }
 
-/// Ligne d'un site : nom, adresse, type et langue.
+/// Ligne d'un site : nom, adresse, type et langue. Un appui ouvre la
+/// modification (nom, type, langues, suppression).
 class _TuileSource extends StatelessWidget {
-  const _TuileSource({required this.source});
+  const _TuileSource({required this.etat, required this.source});
 
+  final EtatSources etat;
   final Source source;
 
   @override
   Widget build(BuildContext context) {
     return ListTile(
+      onTap: () => modifierSiteAvecDialogue(context, etat, source),
       leading: Icon(
         source.typeSource == TypeSource.mangaDex
             ? Icons.auto_stories_outlined

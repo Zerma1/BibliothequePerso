@@ -2,6 +2,7 @@
 import 'package:bibliotheque_perso/ecrans/ecran_lecteur.dart';
 import 'package:bibliotheque_perso/ecrans/ecran_titre.dart';
 import 'package:bibliotheque_perso/etat/etat_titre.dart';
+import 'package:bibliotheque_perso/etat/outils_chapitres.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/telechargement.dart';
@@ -93,8 +94,13 @@ void main() {
     expect(find.text('Gore'), findsOneWidget);
     expect(find.text(Textes.creditMangaDex), findsOneWidget);
     expect(find.text(Textes.ouvrirSurLeSite), findsOneWidget);
-    // La couverture est demandée avec le Referer du site du titre.
-    expect(service.referersDemandes, contains('https://mangadex.org'));
+    // La couverture est demandée au service pour ce titre (appareil
+    // d'abord, puis site avec son Referer).
+    expect(service.couverturesChargees, contains(1));
+    // Fiche : la pleine taille est demandée après la vignette.
+    await tester.pump();
+    expect(service.couverturesOriginalesChargees, contains(1));
+    expect(find.text(Textes.changerCouverture), findsOneWidget);
 
     // Titres alternatifs repliés par défaut.
     expect(find.text(Textes.titresAlternatifs(2)), findsOneWidget);
@@ -420,6 +426,57 @@ void main() {
       await tester.tap(find.widgetWithText(FilterChip, 'À lire plus tard'));
       await tester.pump();
       expect(telechargement.reglesAppliquees, <int>[1, 1]);
+    });
+
+    testWidgets('R4 : un chapitre externe propose seulement « Lire sur » et '
+        '« Marquer lu »', (tester) async {
+      preparer();
+      service.chapitresParTitre[1]!.add(
+        const Chapitre(
+          id: 3,
+          idTitre: 1,
+          urlChapitre: 'https://mangadex.org/chapter/3',
+          nom: 'Chez l\'éditeur',
+          numero: 3,
+          langue: 'en',
+          urlExterne: 'https://mangaplus.shueisha.co.jp/viewer/1000486',
+        ),
+      );
+      await afficherAvecTelechargements(tester);
+
+      // Mention sous le nom et icône « lien externe » dans la colonne.
+      expect(find.text(Textes.publieSur('MANGA Plus')), findsOneWidget);
+      expect(
+        find.byTooltip(Textes.infoBulleHorsLigne(EtatHorsLigne.externe)),
+        findsOneWidget,
+      );
+      // La légende explique l'icône.
+      expect(
+        find.text(Textes.libelleStatutHorsLigne(StatutHorsLigne.externe)),
+        findsWidgets,
+      );
+
+      await tester.tap(find.textContaining("Chez l'éditeur"));
+      await tester.pumpAndSettle();
+
+      expect(find.text(Textes.lireSur('MANGA Plus')), findsOneWidget);
+      expect(find.text(Textes.telecharger), findsNothing);
+      expect(find.text(Textes.ouvrirSurLeSite), findsNWidgets(1));
+      expect(find.byType(EcranLecteur), findsNothing);
+
+      // « Marquer lu » fonctionne comme pour les autres chapitres.
+      await tester.tap(
+        find.descendant(
+          of: find.byType(BottomSheet),
+          matching: find.text(Textes.marquerLu),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        service.chapitresParTitre[1]!.firstWhere((c) => c.id == 3).estLu,
+        isTrue,
+      );
+      expect(telechargement.file, isEmpty);
     });
 
     testWidgets('un même numéro en deux langues tient sur une ligne', (

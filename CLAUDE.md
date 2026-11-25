@@ -24,7 +24,7 @@ limité à son scope :
 
 | Agent | Scope en écriture |
 |-------|-------------------|
-| `integrateur-plateformes` | `pubspec.yaml`, `analysis_options.yaml`, `lib/main.dart`, `android/`, `windows/`, `linux/`, `assets/` |
+| `integrateur-plateformes` | `pubspec.yaml`, `analysis_options.yaml`, `lib/main.dart`, `android/`, `windows/`, `linux/`, `assets/`, `.github/` (compilation automatique) |
 | `developpeur-donnees` | `lib/modeles/`, `lib/donnees/` (+ tests) |
 | `developpeur-sources` | `lib/sources/` (+ tests, HTML enregistrés) |
 | `developpeur-services` | `lib/services/` (+ tests) |
@@ -53,8 +53,13 @@ limité à son scope :
 
 ## Branches et versions (détail : PLAYBOOK.md section 12)
 
-- **On code uniquement sur `dev`**, et on y teste en local. `main` sert seulement à publier
-  les versions validées par le client. Ne jamais commiter sur `main`.
+- **On code uniquement sur `dev`**, et on y teste en local. `test` reçoit les versions de
+  test (`X.Y.Z-test`) à essayer par le client ; `main` sert seulement à publier les versions
+  validées par le client. Ne jamais commiter sur `test` ni sur `main` : procédure dans
+  `docs/DEPLOIEMENT.md`.
+- Versions de test : **`X.Y.Z-test`** sur `test` (Z+1 à chaque itération de corrections),
+  toujours accompagnées de `testUtilisateur/plan_de_tests_vX.Y.Z-test.md` ; le client est
+  prévenu quand une version de test est prête.
 - Versions au format `X.Y.Z` : X = rupture, Y = nouvelle fonctionnalité, Z = correction.
   Dans `pubspec.yaml` : `version: X.Y.Z+N`. Étiquette `vX.Y.Z` sur `main` à chaque version.
 
@@ -66,10 +71,13 @@ limité à son scope :
 - Commandes : `flutter pub get`, `flutter analyze`, `flutter test`, `flutter run -d windows`,
   `flutter build windows`, `flutter build apk --release`.
 
-## État actuel (2026-11-15)
+## État actuel (2026-11-17)
 
-Étapes 0 à 4 faites, étape 5 en cours (services de téléchargement faits ; interface en cours). Feuille de route étendue (étapes 6 à 9) après les retours du client
-du 2026-11-15. Dépôt Git avec les branches `main` et `dev`.
+- `main` : version **0.1.0** (validée par le client).
+- `test` : **0.2.4-test** (Windows seulement : 0.2.2 + journal + navigateur intégré +
+  téléchargements simultanés), en attente des retours du client. Prochaine : 0.2.5-test.
+- Plateformes : Windows d'abord ; Android puis Linux seulement après validation.
+- Suivi des tâches dans `docs/TACHES_EN_COURS.md`.
 
 ## Pièges connus
 
@@ -90,6 +98,17 @@ cause et solution). Toute erreur inattendue ou récurrente est confiée à `anal
   échappement dans un fichier, utiliser `\x..` et vérifier les octets (voir E7).
 - Le C++ Windows est compilé avec `/utf-8` (`windows/CMakeLists.txt`) : ne pas retirer
   cette option, sinon les accents des textes natifs sont abîmés.
-- Le cache pub réel est `C:\Users\bapti\AppData\Local\Pub\Cache` (et non `D:\dev\pub-cache`
-  comme l'indique le README). Le projet étant sur D:, le cache Kotlin incrémental plante entre
-  les deux disques : d'où `kotlin.incremental=false` dans `android/gradle.properties`.
+- Toute requête vers un serveur MangaDex (`mangadex.org`, `*.mangadex.org`,
+  `*.mangadex.network`) envoie le User-Agent de l'application : avec un User-Agent de
+  navigateur, MangaDex renvoie une page anti-robot HTML (code 200) au lieu de l'image (E10).
+  Un essai réel d'image vérifie le type des octets, pas seulement leur présence.
+- `dart format` seulement sur les fichiers qu'on a modifiés, jamais sur un dossier entier
+  (sinon des fichiers d'autres agents sont reformatés : E12).
+- Le cache pub utilisé est `D:\dev\pub-cache` (vérifié dans `.dart_tool/package_config.json`
+  le 2026-11-19). Le cache Kotlin incrémental plantait entre deux disques : d'où
+  `kotlin.incremental=false` dans `android/gradle.properties` (à garder).
+- `flutter build windows` exige `nuget.exe` dans le PATH depuis le navigateur intégré
+  (installé par winget : `C:\Users\bapti\AppData\Local\Microsoft\WinGet\Links`).
+- Navigateur intégré (`flutter_inappwebview`, bêta épinglée) : jamais de vue web sous Linux
+  (paquet local vide `paquets/flutter_inappwebview_linux_vide` via `dependency_overrides`) ;
+  tester `Platform.isAndroid || Platform.isWindows` avant de créer `InAppWebView`.

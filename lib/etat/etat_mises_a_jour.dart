@@ -11,6 +11,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../modeles/journal.dart';
 import '../services/planification_mises_a_jour.dart';
 import '../services/service_mises_a_jour.dart';
 import '../services/service_parametres.dart';
@@ -214,7 +215,12 @@ class EtatMisesAJour extends EtatNotifiant {
       try {
         await rappel(await _chargerPlanification());
       } catch (exception, pile) {
-        debugPrint('Replanification impossible : $exception\n$pile');
+        Journal.actuel.erreur(
+          CategorieJournal.misesAJour,
+          'Replanification impossible',
+          erreur: exception,
+          pile: pile,
+        );
       }
     }
   }
@@ -236,21 +242,29 @@ class EtatMisesAJour extends EtatNotifiant {
   /// rattrape une échéance passée pendant la veille.
   Future<void> _programmer() async {
     final numero = ++_numeroProgrammation;
-    PlanificationMisesAJour planification;
+    final instant = _maintenant();
+    DateTime prochaine;
     try {
-      planification = await _chargerPlanification();
+      // Échéance la plus proche, vérification complète ou surveillance des
+      // titres « En attente » (toutes les N heures pleines, étape 6) : le
+      // service choisit ensuite laquelle est due.
+      prochaine = await _service.chargerProchaineEcheance(instant);
     } catch (exception, pile) {
       // Réglage illisible : on garde la valeur par défaut plutôt que de ne
       // plus jamais vérifier.
-      debugPrint('Planification illisible : $exception\n$pile');
-      planification = PlanificationMisesAJour(
-        PlanificationMisesAJour.parDefautParJour,
+      Journal.actuel.avertissement(
+        CategorieJournal.misesAJour,
+        'Planification illisible : valeur par défaut utilisée',
+        erreur: exception,
+        pile: pile,
       );
+      prochaine = PlanificationMisesAJour(
+        PlanificationMisesAJour.parDefautParJour,
+      ).prochaineEcheance(instant);
     }
     if (estLibere || numero != _numeroProgrammation) return;
     _minuterie?.cancel();
     final maintenant = _maintenant();
-    final prochaine = planification.prochaineEcheance(maintenant);
     _prochaineEcheance = prochaine;
     _minuterie = Timer(prochaine.difference(maintenant), () {
       _minuterie = null;
@@ -305,16 +319,20 @@ class EtatMisesAJour extends EtatNotifiant {
       erreur = DescriptionErreur.depuis(exception, pile);
     }
     final telechargement = _serviceTelechargement;
-    if (telechargement != null &&
-        rapport != null &&
-        rapport.nombreNouveauxChapitres > 0) {
+    if (telechargement != null && rapport != null) {
       try {
-        // Les nouveaux chapitres des favoris et suivis entrent dans la file
-        // (le traitement part en arrière-plan, sans être attendu ici).
+        // Après chaque vérification, même sans nouveau chapitre (demande du
+        // client, 2026-11-17) : les chapitres voulus par les règles entrent
+        // dans la file, et ceux en échec sont retentés (un site qui bloquait
+        // peut de nouveau répondre). Le traitement part en arrière-plan,
+        // sans être attendu ici, et respecte toujours les limites réglées.
         await telechargement.appliquerReglesATous();
       } catch (exception, pile) {
-        debugPrint(
-          'Règles non appliquées après mise à jour : $exception\n$pile',
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Règles non appliquées après mise à jour',
+          erreur: exception,
+          pile: pile,
         );
       }
     }
@@ -331,7 +349,11 @@ class EtatMisesAJour extends EtatNotifiant {
     }
     if (rapport != null) {
       _dernierRapport = rapport;
-      _dateDerniereVerification = rapport.fin;
+      // La surveillance horaire des titres « En attente » ne vérifie qu'une
+      // partie des titres : elle ne compte pas comme « dernière recherche ».
+      if (!rapport.estEnAttenteSeulement) {
+        _dateDerniereVerification = rapport.fin;
+      }
     }
     _erreur = erreur;
     notifier();

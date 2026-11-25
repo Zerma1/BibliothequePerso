@@ -285,7 +285,10 @@ void main() {
     final heure = DateTime.utc(2026, 11, 15, 1);
     final parametres = FauxServiceParametres();
     final planificationsRecues = <int>[];
-    service.echeancePassee = false;
+    service
+      ..echeancePassee = false
+      // Le service calcule la prochaine échéance à partir des réglages.
+      ..parametres = parametres;
     final etat = EtatMisesAJour(
       service,
       planifier: true,
@@ -339,7 +342,7 @@ void main() {
   );
 
   test(
-    'après des nouveautés, les règles de téléchargement sont appliquées',
+    'après chaque vérification, les règles de téléchargement sont appliquées',
     () async {
       service.resultats = <ResultatVerificationTitre>[
         ResultatVerificationTitre(
@@ -358,10 +361,11 @@ void main() {
       await etat.verifierMaintenant();
       expect(telechargement.nombreAppelsReglesATous, 1);
 
-      // Sans nouveauté : pas de nouvelles règles.
+      // Sans nouveauté aussi (demande du client) : les règles sont
+      // réappliquées, pour retenter les chapitres en échec.
       service.resultats = <ResultatVerificationTitre>[];
       await etat.verifierMaintenant();
-      expect(telechargement.nombreAppelsReglesATous, 1);
+      expect(telechargement.nombreAppelsReglesATous, 2);
     },
   );
 }

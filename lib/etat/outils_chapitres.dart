@@ -44,6 +44,22 @@ class GroupeChapitres {
   /// Version à ouvrir dans le lecteur : une version téléchargée si possible,
   /// sinon la version retenue.
   Chapitre get versionALire => versionTelechargee ?? retenu;
+
+  /// `true` si toutes les versions sont hébergées sur un site externe :
+  /// ce numéro ne se lit pas dans l'application (PLAYBOOK.md section 10).
+  bool get estExterne => versions.every((chapitre) => chapitre.estExterne);
+
+  /// Version que le lecteur peut ouvrir : une version téléchargée, sinon la
+  /// retenue si elle est hébergée par le site source, sinon une autre
+  /// version hébergée ; `null` si toutes sont externes.
+  Chapitre? get versionLisible {
+    final telechargee = versionTelechargee;
+    if (telechargee != null && !telechargee.estExterne) return telechargee;
+    for (final chapitre in versions) {
+      if (!chapitre.estExterne) return chapitre;
+    }
+    return null;
+  }
 }
 
 /// Regroupe [chapitres] par numéro, du plus petit au plus grand.
@@ -51,11 +67,22 @@ class GroupeChapitres {
 /// La version retenue est choisie par `PolitiqueTelechargement` (même règle
 /// que les téléchargements automatiques) ; les autres versions suivent, la
 /// plus récemment enregistrée d'abord.
+///
+/// Étape 8 (plusieurs sites) : [idSourcePrincipale] (site principal du
+/// titre) et [idsSourcesLiees] (sites encore liés) sont ceux que le service
+/// de téléchargement passe à la politique, pour que la version mise en avant
+/// soit bien celle qu'il télécharge.
 List<GroupeChapitres> regrouperParNumero(
   List<Chapitre> chapitres,
-  List<String> langues,
-) {
-  final politique = PolitiqueTelechargement(languesPreferees: langues);
+  List<String> langues, {
+  int? idSourcePrincipale,
+  Set<int>? idsSourcesLiees,
+}) {
+  final politique = PolitiqueTelechargement(
+    languesPreferees: langues,
+    idSourcePrincipale: idSourcePrincipale,
+    idsSourcesLiees: idsSourcesLiees,
+  );
   return <GroupeChapitres>[
     for (final version in politique.choisirVersions(chapitres))
       GroupeChapitres(
@@ -85,6 +112,10 @@ enum StatutHorsLigne {
 
   /// Seulement listé : rien sur l'appareil.
   nonTelecharge,
+
+  /// Hébergé sur un site externe (site de l'éditeur) : jamais téléchargé,
+  /// il se lit sur ce site.
+  externe,
 }
 
 /// État hors-ligne d'un chapitre et progression éventuelle.
@@ -102,6 +133,9 @@ class EtatHorsLigne {
   static const EtatHorsLigne nonTelecharge = EtatHorsLigne(
     StatutHorsLigne.nonTelecharge,
   );
+
+  /// Chapitre hébergé sur un site externe.
+  static const EtatHorsLigne externe = EtatHorsLigne(StatutHorsLigne.externe);
 
   /// Statut affiché.
   final StatutHorsLigne statut;
@@ -141,6 +175,9 @@ class EtatHorsLigne {
     Telechargement? telechargement, {
     bool estDoublon = false,
   }) {
+    // Un chapitre externe n'a ni archive ni file : il passe avant tout le
+    // reste pour que l'interface ne propose jamais de le télécharger.
+    if (chapitre.estExterne) return externe;
     if (chapitre.estTelecharge) {
       return EtatHorsLigne(
         StatutHorsLigne.telecharge,

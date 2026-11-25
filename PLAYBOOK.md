@@ -259,9 +259,10 @@ gérer un cas particulier.**
 ### Règles réseau (obligatoires)
 - Toutes les requêtes passent par **`ClientHttpPoli`**, la seule classe autorisée à appeler
   `package:http`. Elle s'occupe de :
-  - l'en-tête `User-Agent` d'un navigateur courant par défaut ; **sauf si le site exige un
-    User-Agent honnête** (cas de l'API MangaDex, qui interdit d'usurper un navigateur) : on
-    envoie alors `BibliothequePerso/<version> (usage personnel)` ;
+  - l'en-tête `User-Agent` **honnête** de l'application pour tous les sites :
+    `BibliothequePerso/<version> (usage personnel)` (exigé par MangaDex ; se faire passer
+    pour un navigateur sans en être un déclenche les protections anti-robot, cf. retours du
+    client sur la 0.1.0-test.4) ;
   - l'en-tête `Referer` pour les images, que beaucoup de sites exigent ;
   - un délai minimal de **1 seconde entre deux requêtes vers un même domaine** ;
   - un délai d'expiration de 20 secondes et 2 nouvelles tentatives au maximum.
@@ -309,7 +310,12 @@ Chaque adaptateur est testé avec des **pages HTML enregistrées** dans
 - `flutter analyze` doit renvoyer **0 erreur et 0 avertissement** avant toute livraison.
 - Toute classe publique a un commentaire de documentation `///`. Tout bloc non évident a un
   commentaire `//` qui explique **pourquoi**, pas seulement **quoi**.
-- Pas de `print` : on utilise `debugPrint` ou le journal applicatif `Journal`.
+- Pas de `print` ni de `debugPrint` : on utilise le journal applicatif `Journal.actuel`
+  (`lib/modeles/journal.dart`, demande du client du 2026-11-18). Il écrit dans
+  `<dossier de l'application>/journaux/journal-AAAA-MM-JJ.log` (14 jours gardés, jamais sur le
+  NAS), une ligne par requête réseau et par événement métier, avec une catégorie. Jamais de
+  corps de réponse ni de donnée sensible (`masquerDonneesSensibles`). Le client joint ce fichier
+  à ses retours de test (Paramètres → Journal → Exporter).
 - Pas de `dynamic` implicite. On utilise `as` avec vérification sur les données venant du HTML
   ou de SQLite.
 - Pas de valeur magique : les constantes partagées vont dans `lib/modeles/constantes.dart` ;
@@ -323,6 +329,14 @@ Chaque adaptateur est testé avec des **pages HTML enregistrées** dans
 L'application est destinée à un **usage personnel**. Elle respecte la charge des sites grâce aux
 délais de `ClientHttpPoli` et ne contourne aucune protection d'accès (connexion, paywall, DRM).
 
+
+**Sites à contenu protégé (décision du 2026-11-16)** : certains éditeurs chiffrent volontairement
+les pages de leurs chapitres (par exemple **MANGA Plus** de Shueisha). L'application ne lit ni
+ne télécharge jamais ces pages : elle **liste** les chapitres (via un site qui les référence,
+comme MangaDex, ou plus tard via la source elle-même si une liste publique existe), les
+compte dans les mises à jour, permet de les marquer lus, et propose un bouton « Lire sur
+<site> » qui ouvre la page officielle dans le navigateur ou l'application de l'éditeur. Aucun
+agent ne doit écrire de déchiffrement d'images.
 ---
 
 ## 11. Feuille de route
@@ -361,10 +375,13 @@ Demandées par le client le 2026-11-15. Le code actuel ne doit pas les fermer :
 | Branche | Rôle |
 |---------|------|
 | `dev` | **Tout le développement se fait ici.** On y code, on y teste en local (`flutter analyze`, `flutter test`, lancement de l'application). |
+| `test` | **Versions de test** à essayer par le client avant publication (`X.Y.Z-test.N`). On n'y code jamais : `dev` y est avancé quand il a passé les vérifications. |
 | `main` | **Réservée au déploiement des versions.** On n'y code jamais directement. |
 
 - Aucun agent ne commite sur `main`.
-- Une version passe de `dev` à `main` seulement quand le client l'a validée et que
+- Chemin d'une version : `dev` → `test` → `main` (procédure détaillée dans
+  `docs/DEPLOIEMENT.md`).
+- Une version passe de `test` à `main` seulement quand le client l'a validée et que
   `flutter analyze` et `flutter test` ne signalent aucun problème.
 - La fusion vers `main` est suivie d'une étiquette Git `vX.Y.Z` (exemple : `v1.4.2`).
 

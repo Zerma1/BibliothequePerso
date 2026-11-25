@@ -1,7 +1,10 @@
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/sources/fabrique_sources.dart';
+import 'package:bibliotheque_perso/sources/source_generique.dart';
+import 'package:bibliotheque_perso/sources/source_madara.dart';
 import 'package:bibliotheque_perso/sources/source_mangadex.dart';
+import 'package:bibliotheque_perso/sources/source_mangathemesia.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
@@ -101,24 +104,82 @@ void main() {
     expect((adaptateur as SourceMangaDex).languesChapitres, isEmpty);
   });
 
-  test('les types sans adaptateur (étape 6) lèvent une ErreurSource', () {
-    for (final type in <TypeSource>[
-      TypeSource.madara,
-      TypeSource.mangaThemesia,
-      TypeSource.generique,
-    ]) {
-      expect(
-        () => fabrique.creer(
-          Source(nom: 'Site', urlBase: 'https://exemple.org', typeSource: type),
+  test('Madara et MangaThemesia ont leur adaptateur', () {
+    expect(
+      fabrique.creer(
+        const Source(
+          nom: 'Site',
+          urlBase: 'https://exemple.org',
+          typeSource: TypeSource.madara,
         ),
-        throwsA(
-          isA<ErreurSource>().having(
-            (e) => e.url,
-            'url',
-            'https://exemple.org',
-          ),
+      ),
+      isA<SourceMadara>(),
+    );
+    expect(
+      fabrique.creer(
+        const Source(
+          nom: 'Site',
+          urlBase: 'https://exemple.org',
+          typeSource: TypeSource.mangaThemesia,
         ),
-      );
-    }
+      ),
+      isA<SourceMangaThemesia>(),
+    );
+  });
+
+  test('le type générique donne un SourceGenerique (réglages lus)', () {
+    final sansReglage = fabrique.creer(
+      const Source(
+        nom: 'Ruri',
+        urlBase: 'https://ruri-dragon.online',
+        typeSource: TypeSource.generique,
+      ),
+    );
+    expect(sansReglage, isA<SourceGenerique>());
+    expect((sansReglage as SourceGenerique).configuration.estVide, isTrue);
+    final avecReglage = fabrique.creer(
+      const Source(
+        nom: 'Site',
+        urlBase: 'https://exemple.org',
+        typeSource: TypeSource.generique,
+        configurationSelecteurs: '{"selecteurTitre": "h2.nom"}',
+      ),
+    ) as SourceGenerique;
+    expect(avecReglage.configuration.selecteurTitre, 'h2.nom');
+    expect(avecReglage.urlBase, 'https://exemple.org');
+  });
+
+  test('réglages génériques illisibles : ErreurSource typée', () {
+    expect(
+      () => fabrique.creer(
+        const Source(
+          nom: 'Site',
+          urlBase: 'https://exemple.org',
+          typeSource: TypeSource.generique,
+          configurationSelecteurs: '{pas du json',
+        ),
+      ),
+      throwsA(
+        isA<ErreurSource>()
+            .having((e) => e.url, 'url', 'https://exemple.org')
+            // Le type est gardé pour le rapport d'erreur exportable.
+            .having((e) => e.typeDetecte, 'typeDetecte', TypeSource.generique),
+      ),
+    );
+  });
+
+  test('niveaux de contenu de la recherche transmis à SourceMangaDex', () {
+    const source = Source(
+      nom: 'MangaDex',
+      urlBase: 'https://mangadex.org',
+      typeSource: TypeSource.mangaDex,
+    );
+    final sansFiltre = fabrique.creer(source) as SourceMangaDex;
+    expect(sansFiltre.niveauxContenuRecherche, isNull);
+    final filtre = fabrique.creer(
+      source,
+      niveauxContenuRecherche: <String>['safe', 'erotica'],
+    ) as SourceMangaDex;
+    expect(filtre.niveauxContenuRecherche, <String>['safe', 'erotica']);
   });
 }

@@ -29,23 +29,23 @@ void main() {
   }
 
   group('En-têtes', () {
-    test(
-      'envoie le User-Agent navigateur par défaut et le Referer demandé',
-      () async {
-        final client = clientAvecReponses(<http.Response>[
-          http.Response('ok', 200),
-        ]);
-        await client.recupererOctets(
-          Uri.parse('https://exemple.org/image.jpg'),
-          referer: 'https://exemple.org/chapitre-1',
-        );
-        expect(requetes.single.headers['user-agent'], userAgentNavigateur);
-        expect(
-          requetes.single.headers['referer'],
-          'https://exemple.org/chapitre-1',
-        );
-      },
-    );
+    test("envoie le User-Agent honnête de l'application par défaut et le "
+        'Referer demandé', () async {
+      final client = clientAvecReponses(<http.Response>[
+        http.Response('ok', 200),
+      ]);
+      await client.recupererOctets(
+        Uri.parse('https://exemple.org/image.jpg'),
+        referer: 'https://exemple.org/chapitre-1',
+      );
+      expect(requetes.single.headers['user-agent'], userAgentApplication);
+      expect(client.userAgentParDefaut, userAgentApplication);
+      expect(requetes.single.headers['user-agent'], isNot(contains('Mozilla')));
+      expect(
+        requetes.single.headers['referer'],
+        'https://exemple.org/chapitre-1',
+      );
+    });
 
     test(
       'le User-Agent peut être remplacé et le Referer est absent par défaut',
@@ -55,9 +55,9 @@ void main() {
         ]);
         await client.recupererTexte(
           Uri.parse('https://exemple.org/'),
-          userAgent: userAgentApplication,
+          userAgent: 'AutreClient/1.0',
         );
-        expect(requetes.single.headers['user-agent'], userAgentApplication);
+        expect(requetes.single.headers['user-agent'], 'AutreClient/1.0');
         expect(requetes.single.headers.containsKey('referer'), isFalse);
       },
     );
@@ -525,6 +525,291 @@ void main() {
         throwsA(isA<ErreurSource>()),
       );
       expect(requetes, hasLength(3));
+    });
+
+    group('exigerImage (E10)', () {
+      // Début d'un vrai JPEG (marqueurs SOI + APP0 « JFIF »).
+      const debutJpeg = <int>[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46];
+
+      test('page anti-robot HTML reçue après redirection : ErreurSource '
+          'sans nouvelle tentative', () async {
+        // `package:http` (IOClient) suit la redirection 302 vers
+        // /edge/challenge et rend la page finale en 200 ; MockClient ne suit
+        // pas les redirections : on simule donc directement cette réponse
+        // finale, telle qu'observée le 2026-11-16 (text/html, <!doctype html>).
+        final client = clientAvecReponses(<http.Response>[
+          http.Response(
+            '<!doctype html><html><head><title>Challenge</title></head>'
+            '<body>Vérification</body></html>',
+            200,
+            headers: <String, String>{
+              'Content-Type': 'text/html; charset=utf-8',
+            },
+          ),
+          http.Response.bytes(
+            debutJpeg,
+            200,
+            headers: <String, String>{'content-type': 'image/jpeg'},
+          ),
+        ]);
+        const url = 'https://uploads.mangadex.org/covers/id/fichier.jpg';
+        await expectLater(
+          client.recupererOctets(Uri.parse(url), exigerImage: true),
+          throwsA(
+            isA<ErreurSource>()
+                .having((e) => e.url, 'url', url)
+                .having((e) => e.message, 'message', contains('text/html'))
+                .having((e) => e.codeStatut, 'code', 200)
+                .having((e) => e.octetsRecus, 'octets', greaterThan(0))
+                .having(
+                  (e) => e.extraitReponse,
+                  'extrait',
+                  contains('<!doctype html>'),
+                ),
+          ),
+        );
+        expect(requetes, hasLength(1));
+      });
+
+      test('JPEG : octets renvoyés', () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response.bytes(
+            debutJpeg,
+            200,
+            headers: <String, String>{'Content-Type': 'Image/JPEG'},
+          ),
+        ]);
+        final octets = await client.recupererOctets(
+          Uri.parse('https://uploads.mangadex.org/covers/id/fichier.jpg'),
+          exigerImage: true,
+        );
+        expect(octets, debutJpeg);
+      });
+
+      test('Content-Type absent et contenu texte : ErreurSource', () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response.bytes(utf8.encode('Fichier introuvable'), 200),
+        ]);
+        await expectLater(
+          client.recupererOctetsAvecDetails(
+            Uri.parse('https://exemple.org/i.jpg'),
+            exigerImage: true,
+          ),
+          throwsA(
+            isA<ErreurSource>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('absent'),
+                contains('contenu : texte'),
+                contains('Fichier introuvable'),
+              ),
+            ),
+          ),
+        );
+      });
+
+      test(
+        'WEBP servi sans Content-Type (Ruri Dragon ch. 47) : accepté',
+        () async {
+          // En-tête d'un vrai WEBP sans perte : « RIFF », taille, « WEBPVP8L ».
+          final webp = <int>[
+            ...ascii.encode('RIFF'),
+            0x24,
+            0x10,
+            0x00,
+            0x00,
+            ...ascii.encode('WEBPVP8L'),
+            0x18,
+            0x10,
+            0x00,
+            0x00,
+            0x2F,
+            0xFF,
+            0xC3,
+            0x8B,
+          ];
+          final client = clientAvecReponses(<http.Response>[
+            http.Response.bytes(webp, 200),
+          ]);
+          final reponse = await client.recupererOctetsAvecDetails(
+            Uri.parse('https://exemple.org/ch-47/01.jpg'),
+            exigerImage: true,
+          );
+          expect(reponse.octets, webp);
+        },
+      );
+
+      test('Content-Type générique ou faux : les octets décident', () async {
+        const png = <int>[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0];
+        final client = clientAvecReponses(<http.Response>[
+          http.Response.bytes(
+            png,
+            200,
+            headers: <String, String>{
+              'content-type': 'application/octet-stream',
+            },
+          ),
+          http.Response.bytes(
+            debutJpeg,
+            200,
+            headers: <String, String>{'content-type': 'text/html'},
+          ),
+        ]);
+        expect(
+          await client.recupererOctets(
+            Uri.parse('https://exemple.org/a.png'),
+            exigerImage: true,
+          ),
+          png,
+        );
+        expect(
+          await client.recupererOctets(
+            Uri.parse('https://exemple.org/b.jpg'),
+            exigerImage: true,
+          ),
+          debutJpeg,
+        );
+      });
+
+      test('page HTML annoncée image/jpeg : refusée (E10)', () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response(
+            '  <!DOCTYPE html><html><body>Accès refusé</body></html>',
+            200,
+            headers: <String, String>{'content-type': 'image/jpeg'},
+          ),
+        ]);
+        await expectLater(
+          client.recupererOctets(
+            Uri.parse('https://exemple.org/i.jpg'),
+            exigerImage: true,
+          ),
+          throwsA(
+            isA<ErreurSource>().having(
+              (e) => e.message,
+              'message',
+              allOf(contains('image/jpeg'), contains('page HTML')),
+            ),
+          ),
+        );
+      });
+
+      test('format sans signature connue annoncé image/* : accepté', () async {
+        final svg = utf8.encode('<svg xmlns="http://www.w3.org/2000/svg"/>');
+        final client = clientAvecReponses(<http.Response>[
+          http.Response.bytes(
+            svg,
+            200,
+            headers: <String, String>{'content-type': 'image/svg+xml'},
+          ),
+        ]);
+        expect(
+          await client.recupererOctets(
+            Uri.parse('https://exemple.org/i.svg'),
+            exigerImage: true,
+          ),
+          svg,
+        );
+      });
+
+      test('corps vide annoncé image/jpeg : refusé', () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response.bytes(
+            <int>[],
+            200,
+            headers: <String, String>{'content-type': 'image/jpeg'},
+          ),
+        ]);
+        await expectLater(
+          client.recupererOctets(
+            Uri.parse('https://exemple.org/vide.jpg'),
+            exigerImage: true,
+          ),
+          throwsA(isA<ErreurSource>()),
+        );
+      });
+
+      test('binaire non reconnu : message sans aucun octet binaire', () async {
+        final binaire = <int>[
+          for (var i = 0; i < 300; i++) (i * 37 + 11) % 256,
+        ];
+        final client = clientAvecReponses(<http.Response>[
+          http.Response.bytes(binaire, 200),
+        ]);
+        await expectLater(
+          client.recupererOctets(
+            Uri.parse('https://exemple.org/i.bin'),
+            exigerImage: true,
+          ),
+          throwsA(
+            isA<ErreurSource>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  "Réponse qui n'est pas une image (Content-Type : absent ; "
+                      'contenu : données binaires non reconnues)',
+                )
+                .having((e) => e.extraitReponse, 'extrait', isNull)
+                .having((e) => e.octetsRecus, 'octets', 300),
+          ),
+        );
+      });
+
+      test('extrait du message limité à 80 caractères imprimables', () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response.bytes(
+            utf8.encode('Erreur\u0007 ${'x' * 200}'),
+            200,
+            headers: <String, String>{'content-type': 'text/plain'},
+          ),
+        ]);
+        await expectLater(
+          client.recupererOctets(
+            Uri.parse('https://exemple.org/i.jpg'),
+            exigerImage: true,
+          ),
+          throwsA(
+            isA<ErreurSource>().having(
+              (e) {
+                final extrait = e.message.split(') : ').last;
+                return extrait.length <= 81 &&
+                    extrait.runes.every((c) => c >= 0x20 && c != 0x7F);
+              },
+              'extrait court et imprimable',
+              isTrue,
+            ),
+          ),
+        );
+      });
+
+      test('sans exigerImage : comportement inchangé (HTML accepté)', () async {
+        final client = clientAvecReponses(<http.Response>[
+          http.Response(
+            '<!doctype html>',
+            200,
+            headers: <String, String>{'content-type': 'text/html'},
+          ),
+        ]);
+        final octets = await client.recupererOctets(
+          Uri.parse('https://exemple.org/i.jpg'),
+        );
+        expect(utf8.decode(octets), '<!doctype html>');
+      });
+    });
+
+    test('erreur HTTP au corps binaire : message sans octet binaire', () async {
+      final client = clientAvecReponses(<http.Response>[
+        http.Response.bytes(<int>[0, 1, 2, 0xFF, 0xFE, 0x80], 404),
+      ]);
+      await expectLater(
+        client.recupererOctets(Uri.parse('https://exemple.org/i.png')),
+        throwsA(
+          isA<ErreurSource>()
+              .having((e) => e.message, 'message', 'Réponse HTTP 404')
+              .having((e) => e.extraitReponse, 'extrait', isNull),
+        ),
+      );
     });
 
     test('une erreur réseau donne 0 octet reçu', () async {

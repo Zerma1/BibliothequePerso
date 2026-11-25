@@ -5,10 +5,13 @@ library;
 import 'package:html/dom.dart' show Element;
 import 'package:html/parser.dart' show parse;
 
+import '../modeles/journal.dart';
 import '../modeles/source.dart';
 import 'client_http_poli.dart';
 import 'erreur_source.dart';
 import 'source_mangadex.dart';
+import 'source_scan_manga.dart';
+import 'source_webtoons.dart';
 
 /// Détermine le [TypeSource] d'un site : d'abord par le domaine, puis en
 /// analysant le HTML de la page d'accueil.
@@ -40,9 +43,21 @@ class DetecteurTypeSite {
   ///
   /// `mangadex.org` (et `www.mangadex.org`) → [TypeSource.mangaDex] : le HTML
   /// de MangaDex est construit en JavaScript, l'analyser n'apprendrait rien.
+  ///
+  /// `scan-manga.com` (et `www.scan-manga.com`) → [TypeSource.scanManga] :
+  /// adaptateur dédié, aucune requête vers la page d'accueil.
+  ///
+  /// `webtoons.com` (`www.` ou `m.`) → [TypeSource.webtoons] : adaptateur
+  /// dédié, aucune requête.
   static TypeSource? verifierDomaine(Uri uri) {
     if (SourceMangaDex.estHoteMangaDex(uri.host)) {
       return TypeSource.mangaDex;
+    }
+    if (SourceScanManga.estHoteScanManga(uri.host)) {
+      return TypeSource.scanManga;
+    }
+    if (SourceWebtoons.estHoteWebtoons(uri.host)) {
+      return TypeSource.webtoons;
     }
     return null;
   }
@@ -56,10 +71,20 @@ class DetecteurTypeSite {
     final uri = validerUrl(url);
     final parDomaine = verifierDomaine(uri);
     if (parDomaine != null) {
+      Journal.actuel.info(
+        CategorieJournal.sources,
+        'Type détecté pour ${uri.host} : ${parDomaine.name} (domaine connu)',
+      );
       return parDomaine;
     }
     final html = await _client.recupererTexte(uri);
-    return detecterDepuisHtml(html);
+    final type = detecterDepuisHtml(html);
+    Journal.actuel.info(
+      CategorieJournal.sources,
+      'Type détecté pour ${uri.host} : ${type.name} (page analysée'
+      '${type == TypeSource.generique ? ', aucun thème reconnu' : ''})',
+    );
+    return type;
   }
 
   /// Détecte le type à partir du [html] de la page d'accueil (sans réseau).

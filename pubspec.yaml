@@ -5,7 +5,7 @@ publish_to: 'none'
 
 # Format X.Y.Z+N (voir PLAYBOOK.md section 12) : N est le numéro de build, qui doit
 # augmenter à chaque version publiée sur Android (versionCode).
-version: 0.1.0+1
+version: 0.2.5+10
 
 environment:
   sdk: ^3.14.0
@@ -37,6 +37,22 @@ dependencies:
   workmanager: ^0.10.10
   # Ouverture d'un site dans le navigateur.
   url_launcher: ^6.3.3
+  # Navigateur intégré (lecture web) : Android (WebView) et Windows (WebView2).
+  # Version bêta : la 6.1.5 (dernière stable) ne compile pas avec AGP 9
+  # (getDefaultProguardFile('proguard-android.txt') refusé). Version exacte, sans ^.
+  # Windows : la compilation exige nuget.exe dans le PATH (dépendances WebView2).
+  # Linux : la bêta ajoute flutter_inappwebview_linux (WPE WebKit requis pour compiler),
+  # remplacé par un paquet vide (dependency_overrides ci-dessous) ; le code n'y crée
+  # jamais de vue web et garde url_launcher.
+  flutter_inappwebview: 6.2.0-beta.3
+
+# Pas de navigateur intégré sous Linux (choix du client) : la partie Linux de
+# flutter_inappwebview exigerait WPE WebKit à la compilation et sur le poste. Ce paquet
+# local du même nom n'est pas un plugin : rien n'est compilé ni enregistré pour Linux.
+# Détails : paquets/flutter_inappwebview_linux_vide/pubspec.yaml.
+dependency_overrides:
+  flutter_inappwebview_linux:
+    path: paquets/flutter_inappwebview_linux_vide
 
 dev_dependencies:
   flutter_test:

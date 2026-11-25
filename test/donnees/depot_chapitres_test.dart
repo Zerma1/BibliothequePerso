@@ -171,9 +171,9 @@ void main() {
 
   test("enregistrerArchive : chemin et est_telecharge cohérents", () async {
     await depot.enregistrerChapitres(<Chapitre>[chapitre(1), chapitre(2)]);
-    final ids = (await depot.chargerChapitres(
-      idTitre,
-    )).map((c) => c.id!).toList();
+    final ids = (await depot.chargerChapitres(idTitre))
+        .map((c) => c.id!)
+        .toList();
 
     expect(
       await depot.enregistrerArchive(ids[0], 'manga/Titre/ch1.en.zip'),
@@ -199,9 +199,9 @@ void main() {
     "enregistrerArchive : un chemin repris retire l'ancien propriétaire",
     () async {
       await depot.enregistrerChapitres(<Chapitre>[chapitre(1), chapitre(2)]);
-      final ids = (await depot.chargerChapitres(
-        idTitre,
-      )).map((c) => c.id!).toList();
+      final ids = (await depot.chargerChapitres(idTitre))
+          .map((c) => c.id!)
+          .toList();
       const nom = 'manga/Titre/ch1.en.zip';
       await depot.enregistrerArchive(ids[0], nom);
       await depot.planifierSuppression(ids[0], DateTime.utc(2027));
@@ -243,9 +243,9 @@ void main() {
       chapitre(2),
       chapitre(3),
     ]);
-    final ids = (await depot.chargerChapitres(
-      idTitre,
-    )).map((c) => c.id!).toList();
+    final ids = (await depot.chargerChapitres(idTitre))
+        .map((c) => c.id!)
+        .toList();
     final maintenant = DateTime.utc(2026, 11, 15, 12);
     expect(await depot.chargerSuppressionsEchues(maintenant), isEmpty);
 
@@ -268,9 +268,9 @@ void main() {
 
     expect(await depot.planifierSuppression(ids[0], null), isTrue);
     expect(
-      (await depot.chargerSuppressionsEchues(
-        maintenant,
-      )).map((c) => c.id).toList(),
+      (await depot.chargerSuppressionsEchues(maintenant))
+          .map((c) => c.id)
+          .toList(),
       <int?>[ids[1]],
     );
     expect(await depot.planifierSuppression(9999, maintenant), isFalse);

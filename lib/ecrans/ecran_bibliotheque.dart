@@ -6,14 +6,18 @@ import 'package:provider/provider.dart';
 
 import '../etat/etat_bibliotheque.dart';
 import '../etat/etat_mises_a_jour.dart';
+import '../modeles/liste_lecture.dart';
 import '../modeles/titre.dart';
+import '../widgets/bouton_recherche_mises_a_jour.dart';
 import '../widgets/carte_titre.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/dialogue_ajout_titre.dart';
+import '../widgets/dialogues_listes.dart';
 import '../widgets/messages.dart';
-import '../widgets/pastille_categorie.dart';
+import '../widgets/panneau_filtres.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
+import 'ecran_gestion_listes.dart';
 import 'ecran_titre.dart';
 
 /// Grille des couvertures de la bibliothèque, avec recherche et filtres par
@@ -83,10 +87,11 @@ class _EtatEcranBibliotheque extends State<EcranBibliotheque> {
   }
 
   Future<void> _ajouterTitre() async {
-    final message = await afficherDialogueAjoutTitre(context);
-    if (message != null && mounted) {
-      afficherMessage(context, message);
-    }
+    final issue = await afficherDialogueAjoutTitre(context);
+    if (issue == null || !mounted) return;
+    afficherMessage(context, issue.message);
+    final idTitre = issue.idTitreAOuvrir;
+    if (idTitre != null) await _ouvrirFiche(idTitre);
   }
 
   Future<void> _ouvrirTitre(Titre titre) async {
@@ -94,6 +99,10 @@ class _EtatEcranBibliotheque extends State<EcranBibliotheque> {
     if (idTitre == null) {
       return;
     }
+    await _ouvrirFiche(idTitre);
+  }
+
+  Future<void> _ouvrirFiche(int idTitre) async {
     final etat = context.read<EtatBibliotheque>();
     await EcranTitre.ouvrir(context, idTitre);
     // Au retour, les compteurs de non-lus et les listes ont pu changer.
@@ -107,7 +116,7 @@ class _EtatEcranBibliotheque extends State<EcranBibliotheque> {
       appBar: AppBar(
         title: const Text(Textes.ongletBibliotheque),
         actions: <Widget>[
-          const _BoutonMisesAJour(),
+          const BoutonRechercheMisesAJour(),
           IconButton(
             tooltip: Textes.actualiser,
             icon: const Icon(Icons.refresh),
@@ -182,14 +191,11 @@ class _EtatEcranBibliotheque extends State<EcranBibliotheque> {
           icone: Icons.search_off,
         );
       }
-      return VueVide(
+      // Pas de second bouton « Ajouter un titre » au centre : le bouton
+      // flottant, toujours au même endroit, suffit (retour du client).
+      return const VueVide(
         message: Textes.bibliothequeVide,
         icone: Icons.collections_bookmark_outlined,
-        action: FilledButton.icon(
-          onPressed: _ajouterTitre,
-          icon: const Icon(Icons.add),
-          label: const Text(Textes.boutonAjouterTitre),
-        ),
       );
     }
     return RefreshIndicator(
@@ -216,7 +222,6 @@ class _EtatEcranBibliotheque extends State<EcranBibliotheque> {
           return CarteTitre(
             key: ValueKey<int?>(titre.id),
             titre: titre,
-            referer: etat.refererPour(titre),
             surAppui: () => _ouvrirTitre(titre),
           );
         },
@@ -225,39 +230,10 @@ class _EtatEcranBibliotheque extends State<EcranBibliotheque> {
   }
 }
 
-/// Bouton de la barre d'app qui lance la recherche des nouveaux chapitres.
-///
-/// Widget séparé : seul lui se reconstruit quand la vérification commence ou
-/// finit, pas toute la grille.
-class _BoutonMisesAJour extends StatelessWidget {
-  const _BoutonMisesAJour();
-
-  @override
-  Widget build(BuildContext context) {
-    final etat = context.watch<EtatMisesAJour>();
-    if (etat.estEnCours) {
-      // L'indicateur prend la taille d'une icône de la barre d'app : le
-      // titre et les autres boutons ne bougent pas pendant la vérification.
-      return IconButton(
-        tooltip: Textes.rechercheNouveauxChapitresEnCours,
-        onPressed: null,
-        icon: SizedBox.square(
-          dimension: IconTheme.of(context).size,
-          child: const CircularProgressIndicator(
-            strokeWidth: epaisseurIndicateurBouton,
-          ),
-        ),
-      );
-    }
-    return IconButton(
-      tooltip: Textes.rechercherNouveauxChapitres,
-      icon: const Icon(Icons.update),
-      onPressed: etat.verifierMaintenant,
-    );
-  }
-}
-
-/// Puces de filtre par liste et par catégorie.
+/// Filtres de la bibliothèque : une ligne de puces pour les listes (peu
+/// nombreuses), puis la ligne des catégories, réduite à « Toutes les
+/// catégories » et un entonnoir (retour du client : la rangée de toutes les
+/// catégories débordait), suivie du filtre de niveau de contenu.
 class _BarreFiltres extends StatelessWidget {
   const _BarreFiltres({required this.etat});
 
@@ -265,9 +241,11 @@ class _BarreFiltres extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Défilement horizontal : le nombre de listes et surtout de catégories
-    // (une dizaine par titre MangaDex) dépasse vite la largeur d'un
-    // téléphone ; une ligne qui défile garde la grille visible.
+    final nombreFiltres = etat.nombreFiltresCategories;
+    final couleurs = Theme.of(context).colorScheme;
+    // Défilement horizontal pour les listes : sur téléphone, les puces
+    // dépassent vite la largeur ; une ligne qui défile garde la grille
+    // visible.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -279,33 +257,143 @@ class _BarreFiltres extends StatelessWidget {
               onSelected: (_) => etat.choisirListe(null),
             ),
             for (final liste in etat.listes)
+              etat.estListeAutomatique(liste)
+                  // La liste automatique s'explique d'elle-même au survol
+                  // ou à l'appui long (info-bulle) : elle n'a pas de menu,
+                  // dont l'appui long entrerait en conflit avec l'info-bulle.
+                  ? FilterChip(
+                      label: Text(liste.nom),
+                      tooltip: Textes.listeAutomatique,
+                      avatar: const Icon(Icons.hourglass_empty),
+                      selected: etat.idListeChoisie == liste.id,
+                      onSelected: (choisie) =>
+                          etat.choisirListe(choisie ? liste.id : null),
+                    )
+                  // Appui long (téléphone) ou clic droit (ordinateur) :
+                  // menu de la liste (renommer, supprimer, gérer).
+                  : GestureDetector(
+                      onLongPressStart: (details) => _afficherMenuListe(
+                        context,
+                        etat,
+                        liste,
+                        details.globalPosition,
+                      ),
+                      onSecondaryTapUp: (details) => _afficherMenuListe(
+                        context,
+                        etat,
+                        liste,
+                        details.globalPosition,
+                      ),
+                      child: FilterChip(
+                        label: Text(liste.nom),
+                        selected: etat.idListeChoisie == liste.id,
+                        onSelected: (choisie) =>
+                            etat.choisirListe(choisie ? liste.id : null),
+                      ),
+                    ),
+            // Création et gestion au bout de la ligne des listes : le
+            // client les trouve là où il voit ses listes.
+            IconButton(
+              tooltip: Textes.nouvelleListe,
+              icon: const Icon(Icons.add),
+              onPressed: () => creerListeAvecDialogue(context, etat),
+            ),
+            IconButton(
+              tooltip: Textes.gererListes,
+              icon: const Icon(Icons.edit_note),
+              onPressed: () => EcranGestionListes.ouvrir(context),
+            ),
+          ],
+        ),
+        _LignePuces(
+          puces: <Widget>[
+            FilterChip(
+              label: const Text(Textes.toutesLesCategories),
+              selected: nombreFiltres == 0,
+              onSelected: (_) => etat.effacerFiltreCategories(),
+            ),
+            // Entonnoir : ouvre la fenêtre de toutes les catégories ; le
+            // badge rappelle combien sont incluses ou exclues.
+            IconButton(
+              tooltip: nombreFiltres == 0
+                  ? Textes.filtrerParCategories
+                  : Textes.filtreCategoriesActif(nombreFiltres),
+              isSelected: nombreFiltres > 0,
+              icon: const Icon(Icons.filter_alt_outlined),
+              selectedIcon: Badge.count(
+                count: nombreFiltres,
+                child: Icon(Icons.filter_alt, color: couleurs.primary),
+              ),
+              onPressed: () => afficherPanneauCategories(context),
+            ),
+            if (etat.gereNiveauxContenu)
               FilterChip(
-                label: Text(liste.nom),
-                selected: etat.idListeChoisie == liste.id,
-                onSelected: (choisie) =>
-                    etat.choisirListe(choisie ? liste.id : null),
+                avatar: const Icon(Icons.shield_outlined),
+                label: const Text(Textes.boutonContenu),
+                // Mis en avant seulement s'il diffère du réglage par
+                // défaut : le client voit qu'un filtre inhabituel est actif.
+                selected: !etat.estNiveauxParDefaut,
+                showCheckmark: false,
+                onSelected: (_) => afficherPanneauNiveaux(context),
               ),
           ],
         ),
-        if (etat.categories.isNotEmpty)
-          _LignePuces(
-            puces: <Widget>[
-              FilterChip(
-                label: const Text(Textes.toutesLesCategories),
-                selected: etat.idCategorieChoisie == null,
-                onSelected: (_) => etat.choisirCategorie(null),
-              ),
-              for (final categorie in etat.categories)
-                PastilleCategorie(
-                  nom: categorie.nom,
-                  estChoisie: etat.idCategorieChoisie == categorie.id,
-                  surSelection: (choisie) =>
-                      etat.choisirCategorie(choisie ? categorie.id : null),
-                ),
-            ],
-          ),
       ],
     );
+  }
+}
+
+/// Actions du menu d'une puce de liste.
+enum _ActionPuceListe { renommer, supprimer, gerer }
+
+/// Menu d'une liste, ouvert à [position] (appui long ou clic droit sur sa
+/// puce). Pour une liste système, « Renommer » et « Supprimer » sont grisés
+/// et une ligne explique pourquoi.
+Future<void> _afficherMenuListe(
+  BuildContext context,
+  EtatBibliotheque etat,
+  ListeLecture liste,
+  Offset position,
+) async {
+  final modifiable = etat.estListeModifiable(liste);
+  final cadre = Overlay.of(context).context.findRenderObject()! as RenderBox;
+  final action = await showMenu<_ActionPuceListe>(
+    context: context,
+    position: RelativeRect.fromRect(
+      position & Size.zero,
+      Offset.zero & cadre.size,
+    ),
+    items: <PopupMenuEntry<_ActionPuceListe>>[
+      PopupMenuItem<_ActionPuceListe>(
+        value: _ActionPuceListe.renommer,
+        enabled: modifiable,
+        child: const Text(Textes.renommerListe),
+      ),
+      PopupMenuItem<_ActionPuceListe>(
+        value: _ActionPuceListe.supprimer,
+        enabled: modifiable,
+        child: const Text(Textes.supprimerListe),
+      ),
+      if (!modifiable)
+        const PopupMenuItem<_ActionPuceListe>(
+          enabled: false,
+          child: Text(Textes.listeSysteme),
+        ),
+      const PopupMenuDivider(),
+      const PopupMenuItem<_ActionPuceListe>(
+        value: _ActionPuceListe.gerer,
+        child: Text(Textes.gererListes),
+      ),
+    ],
+  );
+  if (action == null || !context.mounted) return;
+  switch (action) {
+    case _ActionPuceListe.renommer:
+      await renommerListeAvecDialogue(context, etat, liste);
+    case _ActionPuceListe.supprimer:
+      await supprimerListeAvecConfirmation(context, etat, liste);
+    case _ActionPuceListe.gerer:
+      await EcranGestionListes.ouvrir(context);
   }
 }
 
