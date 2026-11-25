@@ -1,4 +1,4 @@
-# Plan de tests — version 0.2.6-test (Windows)
+# Plan de tests — version 0.3.0-test (Windows)
 
 Contient la 0.2.5-test (réparation de la base) : si ce n'est pas fait, commencez par son plan
 (`plan_de_tests_v0.2.5-test.md`), puis celui de la 0.2.4-test (navigateur intégré) avec cette
@@ -8,16 +8,16 @@ Avant de commencer : copiez le dossier `%APPDATA%\io.github.zerma1\bibliotheque_
 (sauvegarde). Fermez l'application si elle est ouverte.
 
 Notez **OK**, **KO** (avec ce qui s'est passé) ou **non testé**. Joignez le journal exporté
-(Paramètres → Journal) dans `testUtilisateur/retour/v0.2.6-test/`.
+(Paramètres → Journal) dans `testUtilisateur/retour/v0.3.0-test/`.
 
 ## I. Installateur
 
 | # | Test | Attendu | Résultat |
 |---|------|---------|----------|
-| I1 | Lancer `bibliotheque_perso-0.2.6-test-installation.exe` | Assistant en français, icône du nouveau logo | |
+| I1 | Lancer `bibliotheque_perso-0.3.0-test-installation.exe` | Assistant en français, icône du nouveau logo | |
 | I2 | Page « Dossier d'installation » | Proposé : `…\AppData\Local\Programs\Bibliotheque perso`, modifiable | |
 | I3 | Page « Dossier de votre bibliothèque » | Proposé : `Documents\bibliotheque_perso`, modifiable (NAS possible) ; un dossier placé dans le dossier d'installation est refusé | |
-| I4 | Terminer, lancer depuis le menu Démarrer | L'application s'ouvre, « v0.2.6 », icône du logo dans la barre des tâches | |
+| I4 | Terminer, lancer depuis le menu Démarrer | L'application s'ouvre, « v0.3.0 », icône du logo dans la barre des tâches | |
 | I5 | Si vous avez choisi en I3 un autre dossier que `Documents\bibliotheque_perso` alors que vos chapitres y sont déjà | Bandeau : « Déplacer mes chapitres » / « Ignorer » | |
 | I6 | « Déplacer mes chapitres » (ou « Ignorer », au choix) | Déplacement avec progression puis « Redémarrez » (ou le bandeau disparaît) | |
 | I7 | Relancer l'installateur (mise à jour) | La page du dossier de bibliothèque n'apparaît pas ; message « bibliothèque non touchée » | |

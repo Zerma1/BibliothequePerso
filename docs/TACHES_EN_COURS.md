@@ -209,5 +209,5 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
 - [ ] D3. Téléchargements : bouton « Supprimer tous les chapitres à supprimer » (suppressions prévues).
 - [ ] D4. Fermer la fenêtre = réduire dans la zone de notification (icône masquée), surveillance et téléchargements continuent ; menu de l'icône (ouvrir, quitter).
 - [ ] D5. Démarrage avec Windows : Off / Pleine fenêtre / Icône masquée (réglage).
-- Version : on reste en 0.2.z (0.2.6-test, 0.2.7-test…) tant que la 0.2 n'est pas validée sur main ; la suite après publication = 0.3.0.
+- Version : la 0.2.5 est sur main (2026-11-25) ; la version en cours devient la 0.3.0-test.
 - **À la reprise, en premier** : publier la version en cours (0.2.6-test, déjà prête sur dev) avant tout nouveau travail (note du client du 2026-11-25 : « publie la version avant le logo »).

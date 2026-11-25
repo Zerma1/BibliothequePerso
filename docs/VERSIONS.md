@@ -6,7 +6,9 @@
 > restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
 > chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
 
-## 0.2.6-test — version de test, Windows (2026-11-25)
+## 0.3.0-test — version de test, Windows (2026-11-25)
+
+La 0.2.5 est publiée sur `main` (validée par le client) : les nouveautés repartent en 0.3.
 
 Contient la 0.2.5-test, plus :
 - **Installateur** (`…-installation.exe`) : choix du dossier d'installation et du dossier de
