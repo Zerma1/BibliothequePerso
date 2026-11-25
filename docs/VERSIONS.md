@@ -6,6 +6,15 @@
 > restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
 > chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
 
+## 0.3.1-test — version de test, Windows (2026-11-25)
+
+Contient la 0.3.0-test, plus :
+- **Fermer la fenêtre la réduit dans les icônes masquées** (près de l'horloge) : surveillance et téléchargements continuent. Menu de l'icône : Ouvrir, Rechercher les nouveaux chapitres, Quitter. Une seule instance à la fois.
+- **Démarrer avec Windows** (Paramètres → Démarrage) : Off / Pleine fenêtre / Icône masquée.
+- **Téléchargements** : bouton « Supprimer tous les chapitres à supprimer ».
+- **Désinstallation** : propose de supprimer aussi les chapitres téléchargés (Oui par défaut ; vos autres fichiers et la base sont gardés) ; arrête l'application même cachée ; retire le démarrage avec Windows.
+- Corrigé : la compilation automatique sur GitHub échouait à cause d'un test réservé en fait à Windows.
+
 ## 0.3.0-test — version de test, Windows (2026-11-25)
 
 La 0.2.5 est publiée sur `main` (validée par le client) : les nouveautés repartent en 0.3.

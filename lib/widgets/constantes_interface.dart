@@ -9,7 +9,7 @@ library;
 /// `pubspec.yaml` n'est mis à jour qu'à la publication (tâche T7). Un test
 /// vérifie qu'elle est égale ou supérieure. Recopiée ici car lire la version
 /// à l'exécution demanderait un paquet supplémentaire.
-const String versionApplication = '0.3.0';
+const String versionApplication = '0.3.1';
 
 // ---------------------------------------------------------------- Chapitres
 
