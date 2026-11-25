@@ -74,8 +74,9 @@ limité à son scope :
 ## État actuel (2026-11-17)
 
 - `main` : version **0.1.0** (validée par le client).
-- `test` : **0.2.3-test** (0.2.2-test + journal de l'application), en attente des retours du
-  client sur la 0.2.2-test et la 0.2.3-test (testés ensemble). Prochaine : 0.2.4-test.
+- `test` : **0.2.4-test** (Windows seulement : 0.2.2 + journal + navigateur intégré +
+  téléchargements simultanés), en attente des retours du client. Prochaine : 0.2.5-test.
+- Plateformes : Windows d'abord ; Android puis Linux seulement après validation.
 - Suivi des tâches dans `docs/TACHES_EN_COURS.md`.
 
 ## Pièges connus

@@ -12,6 +12,8 @@ import 'dart:io' show File, Platform;
 import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:flutter/services.dart'
+    show MethodCall, MethodChannel, MissingPluginException;
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as chemins;
 import 'package:provider/provider.dart';
@@ -624,6 +626,31 @@ AppLifecycleListener? _ecouteCycleDeVie;
 /// fenêtre (Windows, Linux) : au-delà, l'application se ferme quand même.
 const Duration delaiMaxVidageJournalFermeture = Duration(seconds: 2);
 
+/// Canal de la fenêtre Windows (`windows/runner/flutter_window.cpp`).
+///
+/// Sous Windows, le moteur Flutter ne transmet la demande de fermeture
+/// (`System.requestAppExit`) que si la fenêtre est la dernière fenêtre de
+/// premier niveau du processus ; les fenêtres cachées du navigateur intégré
+/// (flutter_inappwebview_windows) l'en empêchent. Le programme natif pose donc
+/// lui-même la question à Dart par ce canal, à chaque WM_CLOSE.
+const MethodChannel canalFenetre = MethodChannel('bibliotheque_perso/fenetre');
+
+/// Méthode du [canalFenetre] appelée à la fermeture de la fenêtre.
+const String methodeDemanderFermeture = 'demanderFermeture';
+
+/// Répond à une demande du [canalFenetre].
+///
+/// [methodeDemanderFermeture] passe par `handleRequestAppExit`, comme une
+/// demande venue du moteur : tous les `AppLifecycleListener.onExitRequested`
+/// sont appelés. Renvoie `'exit'` ou `'cancel'` (nom de [AppExitResponse]).
+Future<Object?> traiterAppelFenetre(MethodCall appel) async {
+  if (appel.method == methodeDemanderFermeture) {
+    final reponse = await WidgetsBinding.instance.handleRequestAppExit();
+    return reponse.name;
+  }
+  throw MissingPluginException('Méthode inconnue : ${appel.method}');
+}
+
 /// Installe le journal de fichier de l'application, les captures d'erreurs
 /// non interceptées et le vidage du journal à la mise en pause.
 ///
@@ -695,6 +722,7 @@ Future<void> _installerJournalApplication() async {
     // Fermeture de la fenêtre (Windows, Linux) : `onDetach` n'y est pas
     // garanti ; on attend l'écriture du journal (au plus
     // [delaiMaxVidageJournalFermeture]) avant d'accepter la fermeture.
+    // Sous Windows, la demande arrive par [canalFenetre].
     // Sans effet sur Android, qui ne fait pas de demande de fermeture.
     onExitRequested: () async {
       Journal.actuel.info(CategorieJournal.demarrage, 'Fermeture demandée');
@@ -706,6 +734,9 @@ Future<void> _installerJournalApplication() async {
       return AppExitResponse.exit;
     },
   );
+  if (Platform.isWindows) {
+    canalFenetre.setMethodCallHandler(traiterAppelFenetre);
+  }
 }
 
 /// Ouvre la base et affiche l'application, ou un écran d'erreur lisible si

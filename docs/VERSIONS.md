@@ -6,6 +6,18 @@
 > restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
 > chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
 
+## 0.2.5-test — correctif urgent, Windows (2026-11-25)
+
+- **Corrigé : l'application ne s'ouvrait plus** (« table titres_sources already exists »). La
+  base avait été ouverte par une ancienne version (0.1.0), qui l'avait marquée comme ancienne
+  sans rien supprimer. Au démarrage, l'application lit maintenant la structure réelle de la base,
+  se recale dessus et ne recrée que ce qui manque ; vos données sont gardées.
+- Une version plus ancienne de l'application refuse désormais d'ouvrir une base plus récente
+  (message clair) au lieu de la marquer comme ancienne. Ne relancez plus la 0.1.0 ni les
+  anciennes versions de test.
+- Corrigé : la fermeture de la fenêtre est bien notée dans le journal (« Fermeture demandée »)
+  et les dernières lignes sont enregistrées.
+
 ## 0.2.4-test — version de test, Windows seulement (2026-11-19)
 
 Contient tout ce qu'apportent les 0.2.2-test et 0.2.3-test, plus :

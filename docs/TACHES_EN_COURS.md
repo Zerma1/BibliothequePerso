@@ -198,3 +198,5 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
 - [ ] N6. Téléchargements simultanés : 1 à 32, jauge dans Paramètres (politesse 1 s par domaine inchangée)
 
 **Décision du client (2026-11-19)** : Windows seul jusqu'à validation, puis Android, puis Linux. Les versions de test ne livrent plus que le .zip Windows.
+- [x] N1–N6 faits (0.2.4-test)
+- [x] Fermeture Windows journalisée (fenêtre cachée de WebView2 : canal bibliotheque_perso/fenetre) → dans la 0.2.5-test
