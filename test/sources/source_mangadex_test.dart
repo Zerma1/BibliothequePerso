@@ -26,6 +26,7 @@ import 'dart:convert';
 
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/constantes.dart';
+import 'package:bibliotheque_perso/modeles/journal.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/modeles/titre.dart';
 import 'package:bibliotheque_perso/modeles/titre_alternatif.dart';
@@ -34,7 +35,6 @@ import 'package:bibliotheque_perso/sources/couverture_site.dart';
 import 'package:bibliotheque_perso/sources/erreur_source.dart';
 import 'package:bibliotheque_perso/sources/source_mangadex.dart';
 import 'package:bibliotheque_perso/sources/source_site.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
@@ -935,17 +935,20 @@ void main() {
     });
 
     group('externalUrl invalide : flux conservé, lien MangaDex', () {
-      late List<String?> journal;
-      late DebugPrintCallback debugPrintOriginal;
+      late JournalMemoire memoire;
+      // Seules les lignes sur `externalUrl` comptent ici : l'adaptateur
+      // journalise aussi ses opérations (fiche lue, chapitres…).
+      List<String> journal() => memoire.entrees
+          .map((entree) => entree.message)
+          .where((message) => message.contains('externalUrl'))
+          .toList();
 
       setUp(() {
-        journal = <String?>[];
-        debugPrintOriginal = debugPrint;
-        debugPrint = (String? message, {int? wrapWidth}) =>
-            journal.add(message);
+        memoire = JournalMemoire();
+        Journal.actuel = memoire;
       });
 
-      tearDown(() => debugPrint = debugPrintOriginal);
+      tearDown(() => Journal.actuel = const JournalSilencieux());
 
       /// Entrée réelle VIZ du flux de Ruri Dragon, `externalUrl` remplacé.
       Map<String, Object?> entreeAvecUrl(Object? externalUrl) {
@@ -990,10 +993,10 @@ void main() {
             'https://mangadex.org/chapter/$idVizEn',
           );
           // Journalisé avec l'identifiant, jamais avec la valeur reçue.
-          expect(journal, hasLength(1));
-          expect(journal.single, contains(idVizEn));
-          expect(journal.single, isNot(contains('secret')));
-          expect(journal.single, isNot(contains('javascript')));
+          expect(journal(), hasLength(1));
+          expect(journal().single, contains(idVizEn));
+          expect(journal().single, isNot(contains('secret')));
+          expect(journal().single, isNot(contains('javascript')));
         });
       }
 
@@ -1065,7 +1068,7 @@ void main() {
           // pages = 0 et pas d'externalUrl : illisible, retiré du flux.
           expect(chapitres, isEmpty, reason: '$valeur');
         }
-        expect(journal, isEmpty);
+        expect(journal(), isEmpty);
       });
     });
 
