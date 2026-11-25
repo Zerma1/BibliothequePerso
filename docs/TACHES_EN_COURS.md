@@ -211,3 +211,4 @@ et WEBTOON sont déjà dans la test.4 ; seul le générique manque).
 - [x] D5. Démarrage avec Windows : Off / Pleine fenêtre / Icône masquée (réglage).
 - Version : la 0.2.5 est sur main (2026-11-25) ; la version en cours devient la 0.3.0-test.
 - **À la reprise, en premier** : publier la version en cours (0.2.6-test, déjà prête sur dev) avant tout nouveau travail (note du client du 2026-11-25 : « publie la version avant le logo »).
+- D2 (sécurité, note du client « notes perso ») : connexion au NAS — pas de SSH ouvert ; défense en profondeur (authentification forte, chiffrement TLS, accès réseau local/VPN seulement, moindre privilège, journalisation, mises à jour) à inclure dans le document de conception.
