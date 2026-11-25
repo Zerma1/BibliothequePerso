@@ -13,14 +13,28 @@
 ;   cette page est sautée et installation.json n'est pas modifié ; le dossier de
 ;   la bibliothèque se change dans l'application (Paramètres > Dossier des
 ;   chapitres).
-; - La désinstallation ne retire que les fichiers du programme : jamais la base
-;   (%APPDATA%) ni les chapitres téléchargés.
+; - Désinstallation (décision du client, 2026-11-25) : la base (%APPDATA%) est
+;   toujours conservée. Les chapitres téléchargés sont supprimés si le client
+;   répond Oui (réponse par défaut ; en silencieux : supprimés sauf
+;   /GARDERCHAPITRES). Seul le contenu propre à l'application est supprimé dans
+;   le dossier de installation.json : les sous-dossiers des types de titres
+;   (TypeTitre de lib/modeles/titre.dart) et le fichier repère
+;   .bibliotheque_perso (lib/donnees/constantes_donnees.dart), puis le dossier
+;   s'il est vide. Journaux, rapports et exports de ce dossier sont gardés,
+;   sauf confirmation (Non par défaut, jamais en silencieux).
+;   LIMITE : un dossier des chapitres changé dans l'application (réglage en
+;   base) n'est pas connu de l'installateur : ces chapitres ne sont pas
+;   supprimés.
 ;
 ; Paramètres de la ligne de commande (en plus de ceux d'Inno Setup) :
 ;   /BIBLIOTHEQUE="D:\Mes chapitres"   dossier de la bibliothèque (installation
 ;                                      silencieuse ou valeur proposée) ;
 ;                                      ignoré lors d'une mise à jour.
+;   /GARDERCHAPITRES                   désinstallation : garde les chapitres
+;                                      téléchargés (pas de question).
 ; Mise à jour silencieuse avec l'application ouverte : ajouter /CLOSEAPPLICATIONS.
+; Essais seulement : /DIdApplication="{{…}" donne un autre AppId, pour ne pas
+; toucher à l'installation réelle du client.
 
 #ifndef Version
   #error Version absente : lancer outils\construire_installateur.ps1, ou ISCC /DVersion=X.Y.Z
@@ -32,13 +46,17 @@
   #define DossierRelease "..\build\windows\x64\runner\Release"
 #endif
 
+#ifndef IdApplication
+  #define IdApplication "{{827D980C-013C-4734-94F1-BB09CBAA7712}"
+#endif
+
 #define NomApplication "Bibliothèque perso"
 #define NomExecutable "bibliotheque_perso.exe"
 
 [Setup]
 ; Identifiant fixe : il permet de reconnaître une installation précédente
 ; (mise à jour par-dessus, même dossier) ; ne jamais le changer.
-AppId={{827D980C-013C-4734-94F1-BB09CBAA7712}
+AppId={#IdApplication}
 AppName={#NomApplication}
 AppVersion={#Version}
 AppVerName={#NomApplication} {#Version}
@@ -74,9 +92,10 @@ SolidCompression=yes
 Name: "french"; MessagesFile: "compiler:Languages\French.isl"
 
 [Messages]
-; La désinstallation conserve toujours les données du client.
-ConfirmUninstall=Voulez-vous désinstaller %1 ?%n%nVos données sont conservées : la base (titres, sources, réglages) et le dossier de votre bibliothèque (chapitres téléchargés) ne sont jamais supprimés. Seuls les fichiers du programme sont retirés.
-UninstalledAll=%1 a été désinstallé.%n%nVotre base et vos chapitres téléchargés ont été conservés : une nouvelle installation les retrouvera.
+; La désinstallation conserve toujours la base ; les chapitres téléchargés font
+; l'objet d'une question (section [Code], CurUninstallStepChanged).
+ConfirmUninstall=Voulez-vous désinstaller %1 ?%n%nVotre base (titres, sources, listes, réglages) est conservée. Une question vous permettra ensuite de supprimer aussi vos chapitres téléchargés, ou de les garder.
+UninstalledAll=%1 a été désinstallé.%n%nVotre base (titres, sources, listes, réglages) a été conservée : une nouvelle installation la retrouvera.
 
 [Tasks]
 Name: "bureau"; Description: "Créer un raccourci sur le Bureau"; GroupDescription: "Raccourcis :"; Flags: unchecked
@@ -93,7 +112,8 @@ Filename: "{app}\{#NomExecutable}"; Description: "Lancer {#NomApplication}"; Fla
 
 [UninstallDelete]
 ; Écrit par l'installateur (section [Code]) : à retirer avec le programme.
-; Rien d'autre : ni la base, ni les chapitres, ni les journaux.
+; Jamais la base. Les chapitres téléchargés sont traités dans la section [Code]
+; (CurUninstallStepChanged), selon la réponse du client.
 Type: files; Name: "{app}\installation.json"
 
 [Code]
@@ -109,6 +129,11 @@ var
   PageConservation: TOutputMsgWizardPage;
   // Figé dans PrepareToInstall (avant la copie des fichiers).
   MiseAJourEnCours: Boolean;
+  // Désinstallation : décidés à l'étape usUninstall (installation.json encore
+  // présent), appliqués à l'étape usPostUninstall.
+  DossierChapitresDesinstallation: String;
+  SupprimerChapitres: Boolean;
+  SupprimerDonneesApplication: Boolean;
 
 // Échappe une chaîne pour l'écrire entre guillemets dans du JSON.
 function EchapperJson(const Texte: String): String;
@@ -271,10 +296,14 @@ begin
       'ouvrez l''application, Paramètres > Dossier des chapitres.' + #13#10#13#10 +
       'L''installateur ferme l''application si elle est ouverte.'
   else
-    Result := 'La désinstallation de {#NomApplication} ne supprime jamais vos données :' + #13#10#13#10 +
-      '  - la base (titres, sources, listes, réglages) ;' + #13#10 +
-      '  - le dossier de votre bibliothèque (chapitres téléchargés).' + #13#10#13#10 +
-      'Seuls les fichiers du programme sont retirés. Pour mettre à jour, il suffit ' +
+    Result := 'La désinstallation de {#NomApplication} conserve toujours la base ' +
+      '(titres, sources, listes, réglages).' + #13#10#13#10 +
+      'Elle vous demande si vos chapitres téléchargés doivent être supprimés ' +
+      '(Oui par défaut). Dans le dossier de la bibliothèque, seuls les dossiers ' +
+      'des chapitres de l''application sont alors supprimés ; vos autres ' +
+      'fichiers sont gardés. Les chapitres déplacés ailleurs depuis ' +
+      'l''application ne sont pas supprimés.' + #13#10#13#10 +
+      'Pour mettre à jour, il suffit ' +
       'de relancer un installateur plus récent : il remplace seulement les ' +
       'fichiers du programme, sans toucher à votre bibliothèque ni à ses ' +
       'réglages, et ferme l''application si elle est ouverte.';
@@ -299,7 +328,7 @@ begin
   // Texte définitif choisi à l'affichage (CurPageChanged) : le dossier
   // d'installation, donc le type d'installation, peut encore changer.
   PageConservation := CreateOutputMsgPage(PageBibliotheque.ID,
-    'Vos données sont conservées',
+    'Vos données',
     'Désinstallation et mises à jour',
     TexteConservation(False));
 end;
@@ -392,4 +421,206 @@ begin
   if Dossier <> '' then
     SetPreviousData(PreviousDataKey, ClePreviousData,
       RemoveBackslashUnlessRoot(Dossier));
+end;
+
+// ---------------------------------------------------------------------------
+// Désinstallation : suppression des chapitres téléchargés.
+// ---------------------------------------------------------------------------
+
+// Sous-dossiers propres à l'application dans le dossier des chapitres : un
+// par valeur de TypeTitre (lib/modeles/titre.dart, `type.name`). À tenir à
+// jour si un type est ajouté.
+procedure RemplirDossiersChapitres(var Noms: TArrayOfString);
+begin
+  SetArrayLength(Noms, 6);
+  Noms[0] := 'manga';
+  Noms[1] := 'manhwa';
+  Noms[2] := 'manhua';
+  Noms[3] := 'roman';
+  Noms[4] := 'livre';
+  Noms[5] := 'autre';
+end;
+
+// Données de l'application qui peuvent se trouver dans le même dossier quand
+// c'est le dossier par défaut (Documents\bibliotheque_perso) : journaux
+// (lib/donnees/journal_fichier.dart), rapports et exports
+// (lib/services/constantes_services.dart). Gardées par défaut.
+procedure RemplirDossiersDonneesApplication(var Noms: TArrayOfString);
+begin
+  SetArrayLength(Noms, 3);
+  Noms[0] := 'journaux';
+  Noms[1] := 'rapports';
+  Noms[2] := 'exports';
+end;
+
+// Fichier repère du dossier des chapitres (nomFichierMarqueurRacine,
+// lib/donnees/constantes_donnees.dart).
+function NomFichierRepere: String;
+begin
+  Result := '.bibliotheque_perso';
+end;
+
+// Vrai si /Nom figure sur la ligne de commande (sans tenir compte de la casse).
+function ParametrePresent(const Nom: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/' + Nom) = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+// Dossier des chapitres choisi à l'installation : installation.json, sinon la
+// valeur mémorisée par Inno Setup dans la clé de désinstallation.
+function DossierChapitresInstalle: String;
+var
+  Valeur: String;
+begin
+  Result := Trim(LireDossierInstallationJson(
+    ExpandConstant('{app}\' + NomFichierInstallation)));
+  if (Result = '') and RegQueryStringValue(HKCU,
+    'Software\Microsoft\Windows\CurrentVersion\Uninstall\' +
+    ExpandConstant('{#IdApplication}') + '_is1',
+    'Inno Setup CodeFile: ' + ClePreviousData, Valeur) then
+    Result := Trim(Valeur);
+  if Result <> '' then
+    Result := RemoveBackslashUnlessRoot(Result);
+end;
+
+// Liste, séparée par des virgules, des noms de Noms présents dans Dossier.
+function SousDossiersPresents(const Dossier: String; const Noms: TArrayOfString): String;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to GetArrayLength(Noms) - 1 do
+    if DirExists(AddBackslash(Dossier) + Noms[I]) then
+    begin
+      if Result <> '' then
+        Result := Result + ', ';
+      Result := Result + Noms[I];
+    end;
+end;
+
+// Étape usUninstall : lit le dossier et pose les questions (pas en silencieux).
+procedure DeciderSuppressionChapitres;
+var
+  Dossier, Chapitres, Donnees: String;
+  Noms: TArrayOfString;
+begin
+  SupprimerChapitres := False;
+  SupprimerDonneesApplication := False;
+  Dossier := DossierChapitresInstalle;
+  DossierChapitresDesinstallation := Dossier;
+  if ParametrePresent('GARDERCHAPITRES') then
+  begin
+    Log('Désinstallation : /GARDERCHAPITRES, chapitres gardés.');
+    Exit;
+  end;
+  // Même contrôle qu'à l'installation : chemin complet seulement.
+  if (Dossier = '') or (VerifierDossierBibliotheque(Dossier,
+    ExpandConstant('{app}')) <> '') then
+  begin
+    Log('Désinstallation : dossier des chapitres inconnu ou refusé (' +
+      Dossier + '), rien à supprimer.');
+    Exit;
+  end;
+  if not DirExists(Dossier) then
+  begin
+    Log('Désinstallation : dossier des chapitres absent ou injoignable (' +
+      Dossier + '), rien à supprimer.');
+    Exit;
+  end;
+  RemplirDossiersChapitres(Noms);
+  Chapitres := SousDossiersPresents(Dossier, Noms);
+  if (Chapitres = '') and not FileExists(AddBackslash(Dossier) + NomFichierRepere) then
+  begin
+    Log('Désinstallation : aucun chapitre dans ' + Dossier + '.');
+    Exit;
+  end;
+  RemplirDossiersDonneesApplication(Noms);
+  Donnees := SousDossiersPresents(Dossier, Noms);
+
+  if UninstallSilent then
+  begin
+    // Silencieux : chapitres supprimés, journaux, rapports et exports gardés.
+    SupprimerChapitres := True;
+    Exit;
+  end;
+
+  SupprimerChapitres := MsgBox(
+    'Supprimer aussi vos chapitres téléchargés (dossier ' + Dossier + ') ?' + #13#10#13#10 +
+    'Oui : seuls les dossiers des chapitres de l''application (manga, manhwa, ' +
+    'manhua, roman, livre, autre) et le fichier repère ' + NomFichierRepere +
+    ' sont supprimés, puis le dossier s''il est vide. Vos autres fichiers de ce ' +
+    'dossier sont gardés.' + #13#10 +
+    'Non : vos chapitres sont gardés ; une nouvelle installation les retrouvera.' + #13#10#13#10 +
+    'Les chapitres déplacés ailleurs depuis l''application (Paramètres > ' +
+    'Dossier des chapitres) ne sont pas supprimés. Votre base (titres, ' +
+    'sources, listes, réglages) est toujours conservée.',
+    mbConfirmation, MB_YESNO) = IDYES;
+
+  if SupprimerChapitres and (Donnees <> '') then
+    SupprimerDonneesApplication := MsgBox(
+      'Ce dossier contient aussi des données de l''application : ' + Donnees +
+      ' (journaux, rapports d''erreur, exports de la bibliothèque).' + #13#10#13#10 +
+      'Les supprimer aussi ?' + #13#10#13#10 +
+      'Non (par défaut) : ils sont gardés.',
+      mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
+end;
+
+// Supprime Dossier\Nom (dossier) pour chaque nom présent ; journalise.
+procedure SupprimerSousDossiers(const Dossier: String; const Noms: TArrayOfString);
+var
+  I: Integer;
+  Chemin: String;
+begin
+  for I := 0 to GetArrayLength(Noms) - 1 do
+  begin
+    Chemin := AddBackslash(Dossier) + Noms[I];
+    if DirExists(Chemin) then
+    begin
+      if DelTree(Chemin, True, True, True) then
+        Log('Désinstallation : supprimé ' + Chemin)
+      else
+        Log('Désinstallation : suppression incomplète de ' + Chemin);
+    end;
+  end;
+end;
+
+// Étape usPostUninstall : applique la décision.
+procedure AppliquerSuppressionChapitres;
+var
+  Dossier: String;
+  Noms: TArrayOfString;
+begin
+  Dossier := DossierChapitresDesinstallation;
+  if not SupprimerChapitres or (Dossier = '') then
+    Exit;
+  RemplirDossiersChapitres(Noms);
+  SupprimerSousDossiers(Dossier, Noms);
+  if SupprimerDonneesApplication then
+  begin
+    RemplirDossiersDonneesApplication(Noms);
+    SupprimerSousDossiers(Dossier, Noms);
+  end;
+  if FileExists(AddBackslash(Dossier) + NomFichierRepere) then
+    DeleteFile(AddBackslash(Dossier) + NomFichierRepere);
+  // RemoveDir échoue sans rien supprimer si le dossier n'est pas vide.
+  if RemoveDir(Dossier) then
+    Log('Désinstallation : dossier vide supprimé ' + Dossier)
+  else
+    Log('Désinstallation : dossier gardé (non vide) ' + Dossier);
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    DeciderSuppressionChapitres
+  else if CurUninstallStep = usPostUninstall then
+    AppliquerSuppressionChapitres;
 end;
