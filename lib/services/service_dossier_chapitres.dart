@@ -59,6 +59,178 @@ class ServiceDossierChapitres {
     );
   }
 
+  /// Clé (table `parametres`) : dossier de la bibliothèque choisi dans
+  /// l'installateur Windows et déjà appliqué par
+  /// [appliquerDossierInstallation].
+  // Repère séparé du réglage : si le client revient ensuite au dossier par
+  // défaut (réglage effacé), le même `installation.json` ne doit pas
+  // rechoisir le dossier de l'installateur au démarrage suivant.
+  static const String cleDossierInstallationApplique =
+      'installation.dossier_applique';
+
+  /// Clé (table `parametres`) : dossier choisi dans l'installateur Windows
+  /// qui n'a **pas** été appliqué automatiquement, parce que des chapitres
+  /// étaient déjà téléchargés dans le dossier actuel. L'interface le propose
+  /// au client ([DossierInstallationEnAttente]).
+  static const String cleDossierInstallationEnAttente =
+      'installation.dossier_en_attente';
+
+  /// Applique au premier démarrage le dossier de la bibliothèque choisi dans
+  /// l'installateur Windows ([chemin], lu dans `installation.json`, `null`
+  /// s'il est absent ou invalide). À appeler **avant** [creerStockage].
+  ///
+  /// Le dossier n'est enregistré dans [ServiceParametres.cleDossierChapitres]
+  /// que si : aucun dossier n'est déjà réglé, [chemin] diffère du dossier
+  /// par défaut (sans tenir compte de la casse ni du séparateur final), il
+  /// n'a pas déjà été appliqué ou refusé ([cleDossierInstallationApplique]),
+  /// **aucun chapitre n'est marqué téléchargé** ([depotChapitres]) et
+  /// `StockageTelechargements.validerDossier` l'accepte. Le repère est alors
+  /// posé avec le réglage.
+  ///
+  /// Chapitres déjà téléchargés (ou [depotChapitres] absent, ce qui empêche
+  /// de le vérifier) : rien n'est réglé, le chemin est seulement mémorisé
+  /// dans [cleDossierInstallationEnAttente] pour que l'interface propose au
+  /// client de déplacer ses chapitres
+  /// ([DossierInstallationEnAttente.chargerDossierInstallationEnAttente]).
+  ///
+  /// Dossier refusé (NAS éteint, accès refusé…) : rien n'est enregistré, pas
+  /// même le repère, pour réessayer au prochain démarrage ; l'application
+  /// démarre sur le dossier par défaut. Ne lève jamais (un avertissement est
+  /// écrit dans le journal).
+  ///
+  /// [cheminDossierParDefaut] : remplacé dans les tests
+  /// (`cheminParDefautDossierTelechargements` sinon).
+  static Future<void> appliquerDossierInstallation(
+    DepotParametres depot,
+    String? chemin, {
+    DepotChapitres? depotChapitres,
+    Future<String> Function()? cheminDossierParDefaut,
+  }) async {
+    final demande = chemin?.trim() ?? '';
+    if (demande.isEmpty) return;
+    try {
+      final regle = await depot.chargerTexte(
+        ServiceParametres.cleDossierChapitres,
+      );
+      // Un dossier déjà réglé (par le client ou une installation
+      // précédente) l'emporte toujours sur l'installateur. Une proposition
+      // restée en attente n'a alors plus de sens.
+      if ((regle?.trim() ?? '').isNotEmpty) {
+        await _effacerEnAttente(depot);
+        return;
+      }
+      final parDefaut =
+          await (cheminDossierParDefaut ??
+              cheminParDefautDossierTelechargements)();
+      if (_memeCheminInstallation(demande, parDefaut)) return;
+      final applique = await depot.chargerTexte(cleDossierInstallationApplique);
+      if (applique != null && _memeCheminInstallation(demande, applique)) {
+        return;
+      }
+      // Basculer sur un dossier vide alors que des chapitres sont déjà
+      // téléchargés dans le dossier actuel les ferait tous passer pour
+      // perdus (remis à « non téléchargé », archives orphelines, chapitres
+      // enregistrés depuis le navigateur perdus) : la décision revient au
+      // client, qui pourra déplacer ses chapitres. Sans dépôt pour le
+      // vérifier, on reste prudent.
+      // LIMITE : charge la liste des chapitres téléchargés (aucun dépôt ne
+      // les compte) ; ne se produit qu'au démarrage, tant que le dossier de
+      // l'installateur n'a été ni appliqué ni refusé.
+      final aDesChapitres =
+          depotChapitres == null ||
+          (await depotChapitres.chargerChapitresTelecharges()).isNotEmpty;
+      if (aDesChapitres) {
+        await depot.enregistrerTexte(
+          cleDossierInstallationEnAttente,
+          chemins.normalize(demande),
+        );
+        Journal.actuel.info(
+          CategorieJournal.stockage,
+          "Dossier choisi à l'installation « $demande » non appliqué : des "
+          'chapitres sont déjà téléchargés, le client choisira',
+        );
+        return;
+      }
+      final String valide;
+      try {
+        valide = await StockageTelechargements.validerDossier(demande);
+      } on ErreurStockage catch (erreur) {
+        // Repère volontairement non posé : le NAS était peut-être éteint,
+        // on réessaiera au prochain démarrage.
+        Journal.actuel.avertissement(
+          CategorieJournal.stockage,
+          "Dossier choisi à l'installation « $demande » refusé : dossier par "
+          'défaut gardé, nouvel essai au prochain démarrage',
+          erreur: erreur,
+        );
+        return;
+      }
+      // LIMITE : réglage et repère sont deux écritures séparées. Si la
+      // seconde échoue, le réglage suffit à ne plus rien appliquer aux
+      // démarrages suivants (dossier déjà réglé) ; seul le retour au
+      // dossier par défaut le réappliquerait une fois.
+      await depot.enregistrerTexte(
+        ServiceParametres.cleDossierChapitres,
+        valide,
+      );
+      await depot.enregistrerTexte(cleDossierInstallationApplique, valide);
+      // Proposition d'un démarrage précédent devenue inutile (les chapitres
+      // téléchargés ont été supprimés depuis).
+      await _effacerEnAttente(depot);
+      Journal.actuel.info(
+        CategorieJournal.stockage,
+        "Dossier des chapitres choisi à l'installation appliqué : $valide",
+      );
+    } catch (erreur) {
+      // Base illisible ou autre imprévu : on démarre sur le réglage actuel
+      // plutôt que d'empêcher le démarrage.
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        "Dossier choisi à l'installation non appliqué",
+        erreur: erreur,
+      );
+    }
+  }
+
+  /// Efface la proposition en attente, si elle existe (lecture d'abord pour
+  /// ne rien écrire au démarrage dans le cas courant).
+  static Future<void> _effacerEnAttente(DepotParametres depot) async {
+    if (await depot.chargerTexte(cleDossierInstallationEnAttente) != null) {
+      await depot.supprimer(cleDossierInstallationEnAttente);
+    }
+  }
+
+  /// Clôt la proposition du dossier de l'installateur : repère posé avec son
+  /// chemin (plus jamais reproposé ni appliqué), puis proposition effacée.
+  /// Sans effet s'il n'y a rien en attente.
+  // Repère d'abord : si l'effacement échoue ensuite, le repère suffit à ne
+  // plus rien proposer (voir `chargerDossierInstallationEnAttente`).
+  static Future<void> _clorePropositionInstallation(
+    DepotParametres depot,
+  ) async {
+    final enAttente = await depot.chargerTexte(cleDossierInstallationEnAttente);
+    if (enAttente == null) return;
+    await depot.enregistrerTexte(cleDossierInstallationApplique, enAttente);
+    await depot.supprimer(cleDossierInstallationEnAttente);
+  }
+
+  /// Comparaison des chemins de l'installateur : normalisés, sans séparateur
+  /// final et sans tenir compte de la casse (chemins Windows).
+  static bool _memeCheminInstallation(String a, String b) {
+    String propre(String chemin) {
+      var texte = chemins.normalize(chemin.trim()).toLowerCase();
+      while (texte.length > 1 &&
+          (texte.endsWith('/') || texte.endsWith(r'\')) &&
+          !texte.endsWith(r':\') &&
+          !texte.endsWith(':/')) {
+        texte = texte.substring(0, texte.length - 1);
+      }
+      return texte;
+    }
+
+    return propre(a) == propre(b);
+  }
+
   /// Prévient l'interface à chaque changement (accès au dossier, pause,
   /// file) : même flux que `ServiceTelechargement.changements`.
   Stream<void> get changements => _service.changements;
@@ -365,6 +537,19 @@ class ServiceDossierChapitres {
       service._dossierChange = true;
       service._archivesDeplacees = deplacerArchives;
       reussi = true;
+      // Dossier de l'installateur en attente : le client a maintenant choisi
+      // (en l'acceptant, ou en préférant un autre dossier), on ne le lui
+      // repropose plus. Le changement est déjà fait : un échec ici est
+      // seulement noté (au pire, la proposition reviendra une fois).
+      try {
+        await _clorePropositionInstallation(_depot);
+      } catch (erreur) {
+        Journal.actuel.avertissement(
+          CategorieJournal.stockage,
+          "Proposition du dossier de l'installateur non close",
+          erreur: erreur,
+        );
+      }
       return ResultatChangementDossier(
         dossierChoisi: versDefaut ? null : valide,
         cheminDossier: valide,
@@ -506,5 +691,55 @@ extension AvertissementDossierChapitres on ServiceDossierChapitres {
     // copiées y sont, elles serviront au prochain démarrage.
     if (ServiceDossierChapitres._memeChemin(inacheve, cible)) return null;
     return ServiceDossierChapitres._avertissementAbandon(inacheve);
+  }
+}
+
+/// Dossier choisi dans l'installateur Windows mais non appliqué au
+/// démarrage, parce que des chapitres étaient déjà téléchargés
+/// ([ServiceDossierChapitres.appliquerDossierInstallation]).
+///
+/// L'interface le propose au client : s'il accepte, elle appelle
+/// [ServiceDossierChapitres.changerDossierChapitres] avec ce chemin (et
+/// `deplacerArchives: true`), qui clôt la proposition à la réussite ; s'il
+/// refuse, [ignorerDossierInstallationEnAttente].
+///
+/// Extension (comme [AvertissementDossierChapitres]) pour que les faux
+/// services des tests de l'interface (`implements ServiceDossierChapitres`)
+/// restent valables. LIMITE : elle lit la base par le dépôt privé du vrai
+/// service ; appelée sur un faux service, elle lève `NoSuchMethodError`
+/// (les tests de l'interface utilisent alors un vrai service sur une base
+/// en mémoire).
+extension DossierInstallationEnAttente on ServiceDossierChapitres {
+  /// Chemin du dossier de l'installateur à proposer au client, ou `null`
+  /// s'il n'y a rien à proposer (déjà appliqué, refusé ou choisi). Peut
+  /// lever l'erreur de lecture de la base.
+  Future<String?> chargerDossierInstallationEnAttente() async {
+    final texte = await _depot.chargerTexte(
+      ServiceDossierChapitres.cleDossierInstallationEnAttente,
+    );
+    final propre = texte?.trim() ?? '';
+    if (propre.isEmpty) return null;
+    // Repère déjà posé pour ce chemin (effacement interrompu) : la
+    // proposition a déjà reçu sa réponse.
+    final applique = await _depot.chargerTexte(
+      ServiceDossierChapitres.cleDossierInstallationApplique,
+    );
+    if (applique != null &&
+        ServiceDossierChapitres._memeCheminInstallation(propre, applique)) {
+      return null;
+    }
+    return propre;
+  }
+
+  /// Le client refuse le dossier de l'installateur : il garde son dossier
+  /// actuel et ce dossier ne lui sera plus proposé (ni appliqué aux
+  /// démarrages suivants). Sans effet s'il n'y a rien en attente. Peut
+  /// lever l'erreur d'écriture de la base.
+  Future<void> ignorerDossierInstallationEnAttente() async {
+    await ServiceDossierChapitres._clorePropositionInstallation(_depot);
+    Journal.actuel.info(
+      CategorieJournal.stockage,
+      "Dossier choisi à l'installation refusé par le client",
+    );
   }
 }

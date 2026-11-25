@@ -6,6 +6,23 @@
 > restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
 > chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
 
+## 0.3.0-test — version de test, Windows (2026-11-25)
+
+La 0.2.5 est publiée sur `main` (validée par le client) : les nouveautés repartent en 0.3.
+
+Contient la 0.2.5-test, plus :
+- **Installateur** (`…-installation.exe`) : choix du dossier d'installation et du dossier de
+  la bibliothèque (chapitres ; NAS possible). À la mise à jour, rien n'est redemandé et la
+  bibliothèque n'est pas touchée. La désinstallation ne supprime jamais la base ni les chapitres.
+  Si des chapitres existent déjà ailleurs, un bandeau propose « Déplacer mes chapitres » ou
+  « Ignorer » au lieu de changer de dossier tout seul.
+- **Nouveau logo** (application et installateur).
+- **Apparence** : thème Système / Clair / Sombre (Paramètres → Apparence), appliqué dès le
+  lancement.
+- **Jauges** pour tous les réglages chiffrés (crans + boutons − / +).
+- **Durée de conservation avant suppression** réglable de 1 h à 30 jours (24 h par défaut) ;
+  comptes à rebours en jours au-delà de 48 h.
+
 ## 0.2.5-test — correctif urgent, Windows (2026-11-25)
 
 - **Corrigé : l'application ne s'ouvrait plus** (« table titres_sources already exists »). La

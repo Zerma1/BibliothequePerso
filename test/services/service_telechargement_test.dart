@@ -953,6 +953,26 @@ void main() {
       },
     );
 
+    test(
+      "suit la durée réglée par le client, sans changer une date déjà posée",
+      () async {
+        await parametres.enregistrerDelaiSuppression(const Duration(days: 3));
+        final id = await preparerChapitre5HorsRegles();
+        final premiere = (await depotChapitres.chargerChapitre(id))!
+            .dateSuppressionPrevue!;
+        final attendu = DateTime.now().toUtc().add(const Duration(days: 3));
+        expect(premiere.difference(attendu).inMinutes.abs(), lessThan(2));
+
+        // Un nouveau réglage ne touche pas les suppressions déjà prévues.
+        await parametres.enregistrerDelaiSuppression(const Duration(hours: 1));
+        await service.appliquerRegles(titre.id!);
+        expect(
+          (await depotChapitres.chargerChapitre(id))!.dateSuppressionPrevue,
+          premiere,
+        );
+      },
+    );
+
     test('« Garder » annule la suppression, même après l\'échéance', () async {
       final id = await preparerChapitre5HorsRegles();
       await service.annulerSuppression(id);

@@ -761,12 +761,15 @@ class ServiceTelechargement {
   /// La protection est en mémoire, donc propre à cet isolat : la tâche de
   /// fond Android (autre isolat) ne la voit pas. Pour qu'elle n'efface pas
   /// le chapitre ouvert, une suppression déjà prévue est aussi repoussée en
-  /// base à maintenant + [delaiSuppressionDifferee] (en arrière-plan, sans
-  /// bloquer l'ouverture du lecteur).
+  /// base à maintenant + [delaiProtectionLecture] (24 h, en arrière-plan,
+  /// sans bloquer l'ouverture du lecteur). Ce délai ne suit pas le réglage
+  /// de conservation : voir [delaiProtectionLecture].
   ///
   /// LIMITE : une lecture qui dure plus de 24 h sans rouvrir le chapitre
   /// reste exposée côté tâche de fond ; et une date posée par les règles
-  /// **après** l'ouverture vaut déjà maintenant + 24 h.
+  /// **après** l'ouverture vaut maintenant + la durée de conservation réglée
+  /// (au moins 1 h) : avec un réglage court, la tâche de fond Android peut
+  /// effacer un chapitre ouvert dont la lecture dure plus longtemps.
   void protegerChapitre(int idChapitre) {
     _chapitresProteges.update(
       idChapitre,
@@ -786,7 +789,7 @@ class ServiceTelechargement {
       // suppression jamais créée pour un chapitre qui n'en avait pas.
       if (await _depotChapitres.repousserSuppressionPrevue(
         idChapitre,
-        _maintenant().add(delaiSuppressionDifferee),
+        _maintenant().add(delaiProtectionLecture),
       )) {
         _signaler();
       }
@@ -911,8 +914,9 @@ class ServiceTelechargement {
   /// annulées).
   ///
   /// Les archives qui ne sont plus voulues ne sont pas effacées tout de
-  /// suite : leur suppression est prévue dans 24 heures
-  /// ([delaiSuppressionDifferee], `Chapitre.dateSuppressionPrevue`), et
+  /// suite : leur suppression est prévue après la durée de conservation
+  /// réglée par le client (`ServiceParametres.chargerDelaiSuppression`, 24 h
+  /// par défaut ; `Chapitre.dateSuppressionPrevue`), et
   /// annulée si le chapitre redevient voulu entre-temps. Les suppressions
   /// échues (de tous les titres) sont faites à la fin.
   Future<PlanTelechargement> appliquerRegles(int idTitre) async {
@@ -1067,16 +1071,23 @@ class ServiceTelechargement {
     // redeviennent. Une date déjà posée n'est pas repoussée : sinon chaque
     // application des règles relancerait le compte à rebours affiché.
     final aSupprimer = plan.idsASupprimer.toSet();
-    final echeance = _maintenant().add(delaiSuppressionDifferee);
+    // Durée réglée par le client (Paramètres), lue seulement si une nouvelle
+    // suppression est à prévoir : la plupart des applications des règles
+    // n'en prévoient aucune, inutile de relire le réglage pour chaque titre.
+    // Les suppressions déjà prévues gardent leur date (voir plus haut).
+    DateTime? echeance;
     for (final chapitre in chapitres) {
       final id = chapitre.id;
       if (id == null || !chapitre.estTelecharge) continue;
       // Choix « Garder » du client (`est_garde`) : jamais supprimé par les
       // règles. Un téléchargement manuel hors des règles (autre langue,
       // chapitre ancien) n'est pas exempté : le compte à rebours affiché
-      // laisse 24 h au client pour le garder.
+      // laisse au client le temps de le garder.
       final voulu = !aSupprimer.contains(id) || chapitre.estGarde;
       if (!voulu && chapitre.dateSuppressionPrevue == null) {
+        echeance ??= _maintenant().add(
+          await _serviceParametres.chargerDelaiSuppression(),
+        );
         await _depotChapitres.planifierSuppression(id, echeance);
         suppressionsPrevues++;
       } else if (voulu && chapitre.dateSuppressionPrevue != null) {
@@ -1159,7 +1170,7 @@ class ServiceTelechargement {
       if (id == null || estProtege(id)) continue;
       try {
         // Les règles sont recalculées juste avant d'effacer : depuis la pose
-        // de la date (jusqu'à 24 h plus tôt), le client a pu changer ses
+        // de la date (jusqu'à 30 jours plus tôt), le client a pu changer ses
         // réglages ou ses langues, revenir en arrière dans sa lecture, ou
         // retirer le titre de Favoris et Suivis (règle : alors rien n'est
         // supprimé). Sans ce contrôle, la tâche de fond effacerait une
@@ -1237,7 +1248,8 @@ class ServiceTelechargement {
 
   /// Retire le choix « Garder » d'un chapitre ([annulerSuppression]) puis
   /// applique les règles de son titre : s'il n'est plus voulu, sa
-  /// suppression est de nouveau prévue dans 24 heures.
+  /// suppression est de nouveau prévue, après la durée de conservation
+  /// réglée (24 h par défaut).
   Future<void> retirerGarde(int idChapitre) async {
     await _depotChapitres.marquerGarde(idChapitre, estGarde: false);
     final idTitre = (await _depotChapitres.chargerChapitre(idChapitre))

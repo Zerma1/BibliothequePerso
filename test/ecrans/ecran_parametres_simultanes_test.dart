@@ -54,21 +54,43 @@ void main() {
     await tester.pump();
     await deplierParametres(tester);
 
-    expect(find.text(Textes.telechargementsSimultanes(5)), findsOneWidget);
+    const cle = 'jauge.simultanes';
+    final jaugeEntiere = find.byKey(const ValueKey<String>(cle));
+    expect(
+      find.descendant(
+        of: jaugeEntiere,
+        matching: find.text(Textes.libelleTelechargementsSimultanes),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: jaugeEntiere, matching: find.text('5')),
+      findsOneWidget,
+    );
     expect(
       find.text(Textes.explicationTelechargementsSimultanes),
       findsOneWidget,
     );
-    final jauge = tester.widget<Slider>(find.byType(Slider));
-    expect(jauge.min, 1);
-    expect(jauge.max, 32);
+    // Un cran par valeur, de 1 à 32 : 31 intervalles.
+    final jauge = tester.widget<Slider>(curseurJauge(cle));
+    expect(jauge.divisions, 31);
 
     // Glissement jusqu'au bout droit de la jauge.
-    await tester.drag(find.byType(Slider), const Offset(1000, 0));
+    await tester.ensureVisible(curseurJauge(cle));
+    await tester.pumpAndSettle();
+    await tester.drag(curseurJauge(cle), const Offset(1000, 0));
     await tester.pumpAndSettle();
 
     expect(parametres.telechargementsSimultanes, 32);
-    expect(find.text(Textes.telechargementsSimultanes(32)), findsOneWidget);
+    expect(
+      find.descendant(of: jaugeEntiere, matching: find.text('32')),
+      findsOneWidget,
+    );
     expect(telechargement.nombreLancementsTraitement, 1);
+
+    // « − » : une valeur de moins, enregistrée aussitôt.
+    await tester.tap(boutonJauge(cle, plus: false));
+    await tester.pumpAndSettle();
+    expect(parametres.telechargementsSimultanes, 31);
   });
 }

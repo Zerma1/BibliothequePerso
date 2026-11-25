@@ -1086,6 +1086,246 @@ void main() {
     });
   });
 
+  group("dossier choisi dans l'installateur Windows", () {
+    Future<void> appliquer(String? chemin) =>
+        ServiceDossierChapitres.appliquerDossierInstallation(
+          depotParametres,
+          chemin,
+          depotChapitres: depotChapitres,
+          cheminDossierParDefaut: () async => dossierParDefaut,
+        );
+
+    Future<String?> enAttente() => depotParametres.chargerTexte(
+      ServiceDossierChapitres.cleDossierInstallationEnAttente,
+    );
+
+    /// Un chapitre téléchargé dans le dossier par défaut, comme chez un
+    /// client qui utilisait déjà l'application avant l'installateur.
+    Future<String> telechargerDansDefaut() async => ecrireArchive(
+      StockageTelechargements(dossierParDefaut),
+      await chapitre(1),
+    );
+
+    Future<String?> reglage() =>
+        depotParametres.chargerTexte(ServiceParametres.cleDossierChapitres);
+
+    Future<String?> repere() => depotParametres.chargerTexte(
+      ServiceDossierChapitres.cleDossierInstallationApplique,
+    );
+
+    test("un dossier valide est enregistré avec son repère et sert au "
+        "démarrage", () async {
+      final nas = p.join(temporaire.path, 'bibliotheque');
+
+      await appliquer(nas);
+
+      expect(await reglage(), p.normalize(nas));
+      expect(await repere(), p.normalize(nas));
+      final stockage = await ServiceDossierChapitres.creerStockage(
+        depotParametres,
+      );
+      expect(stockage.estPersonnalise, isTrue);
+      expect(stockage.dossierRacine, p.normalize(nas));
+    });
+
+    test('sans fichier installation.json (chemin null ou vide), rien '
+        "n'est enregistré", () async {
+      await appliquer(null);
+      await appliquer('   ');
+
+      expect(await reglage(), isNull);
+      expect(await repere(), isNull);
+    });
+
+    test('un dossier déjà réglé par le client est gardé', () async {
+      final choisi = await preparerNas('choisi');
+      await depotParametres.enregistrerTexte(
+        ServiceParametres.cleDossierChapitres,
+        choisi,
+      );
+
+      await appliquer(p.join(temporaire.path, 'bibliotheque'));
+
+      expect(await reglage(), choisi);
+      expect(await repere(), isNull);
+    });
+
+    test('le dossier par défaut (autre casse, séparateur final) ne devient '
+        'pas un dossier personnalisé', () async {
+      await appliquer('${dossierParDefaut.toUpperCase()}${p.separator}');
+
+      expect(await reglage(), isNull);
+      expect(await repere(), isNull);
+    });
+
+    test('après un retour au dossier par défaut, le dossier de '
+        "l'installateur n'est pas réappliqué au démarrage suivant", () async {
+      final nas = p.join(temporaire.path, 'bibliotheque');
+      await appliquer(nas);
+      // « Revenir au dossier par défaut » efface le réglage.
+      await depotParametres.supprimer(ServiceParametres.cleDossierChapitres);
+
+      await appliquer('$nas${p.separator}');
+
+      expect(await reglage(), isNull);
+      expect(await repere(), p.normalize(nas));
+    });
+
+    test('un dossier refusé (NAS éteint) ne laisse rien, pas même le '
+        'repère, et est réessayé au démarrage suivant', () async {
+      final nas = p.join(temporaire.path, 'nas');
+      // Un fichier à la place du dossier : la validation le refuse.
+      await File(nas).writeAsString('pas un dossier');
+
+      await appliquer(nas);
+      expect(await reglage(), isNull);
+      expect(await repere(), isNull);
+
+      await File(nas).delete();
+      await appliquer(nas);
+      expect(await reglage(), p.normalize(nas));
+      expect(await repere(), p.normalize(nas));
+    });
+
+    test('aucun chapitre téléchargé : le dossier est appliqué et rien ne '
+        'reste en attente', () async {
+      final nas = p.join(temporaire.path, 'bibliotheque');
+
+      await appliquer(nas);
+
+      expect(await reglage(), p.normalize(nas));
+      expect(await enAttente(), isNull);
+    });
+
+    test('des chapitres déjà téléchargés : rien n\'est appliqué, le dossier '
+        'est mis en attente pour le proposer au client', () async {
+      final nomArchive = await telechargerDansDefaut();
+      final nas = p.join(temporaire.path, 'bibliotheque');
+
+      await appliquer(nas);
+
+      expect(await reglage(), isNull);
+      expect(await repere(), isNull);
+      expect(await enAttente(), p.normalize(nas));
+      // Le démarrage reste sur le dossier par défaut (aucun réglage) : le
+      // chapitre est toujours téléchargé et son archive lisible.
+      final service = creerService(StockageTelechargements(dossierParDefaut));
+      expect(await service.reparerArchivesManquantes(), 0);
+      expect((await chapitre(1)).estTelecharge, isTrue);
+      expect(
+        await File(cheminArchive(dossierParDefaut, nomArchive)).exists(),
+        isTrue,
+      );
+      final dossiers = creerDossiers(service);
+      expect(
+        await dossiers.chargerDossierInstallationEnAttente(),
+        p.normalize(nas),
+      );
+
+      // Démarrage suivant sans réponse du client : toujours en attente.
+      await appliquer(nas);
+      expect(await reglage(), isNull);
+      expect(await enAttente(), p.normalize(nas));
+    });
+
+    test('sans dépôt des chapitres pour vérifier, le dossier est mis en '
+        'attente par prudence', () async {
+      final nas = p.join(temporaire.path, 'bibliotheque');
+
+      await ServiceDossierChapitres.appliquerDossierInstallation(
+        depotParametres,
+        nas,
+        cheminDossierParDefaut: () async => dossierParDefaut,
+      );
+
+      expect(await reglage(), isNull);
+      expect(await enAttente(), p.normalize(nas));
+    });
+
+    test('le client refuse : la proposition est effacée et le dossier '
+        'n\'est plus jamais appliqué ni proposé', () async {
+      await telechargerDansDefaut();
+      final nas = p.join(temporaire.path, 'bibliotheque');
+      await appliquer(nas);
+      final dossiers = creerDossiers(
+        creerService(StockageTelechargements(dossierParDefaut)),
+      );
+
+      await dossiers.ignorerDossierInstallationEnAttente();
+
+      expect(await dossiers.chargerDossierInstallationEnAttente(), isNull);
+      expect(await enAttente(), isNull);
+      expect(await repere(), p.normalize(nas));
+      // Même si les chapitres sont supprimés ensuite, le dossier refusé
+      // n'est pas appliqué au démarrage suivant.
+      await depotChapitres.marquerTelecharge(
+        (await chapitre(1)).id!,
+        estTelecharge: false,
+      );
+      await appliquer(nas);
+      expect(await reglage(), isNull);
+      expect(await enAttente(), isNull);
+    });
+
+    test('le client accepte : les chapitres sont déplacés, le dossier est '
+        'réglé et la proposition est close', () async {
+      final nomArchive = await telechargerDansDefaut();
+      final nas = p.join(temporaire.path, 'bibliotheque');
+      await appliquer(nas);
+      final dossiers = creerDossiers(
+        creerService(StockageTelechargements(dossierParDefaut)),
+      );
+      final propose = await dossiers.chargerDossierInstallationEnAttente();
+
+      final resultat = await dossiers.changerDossierChapitres(
+        propose,
+        deplacerArchives: true,
+      );
+
+      expect(resultat.archivesDeplacees, isTrue);
+      expect(await reglage(), p.normalize(nas));
+      expect(await repere(), p.normalize(nas));
+      expect(await enAttente(), isNull);
+      expect(await dossiers.chargerDossierInstallationEnAttente(), isNull);
+      expect(await File(cheminArchive(nas, nomArchive)).exists(), isTrue);
+      // Prochain démarrage : le dossier réglé l'emporte, rien n'est reproposé.
+      await appliquer(nas);
+      expect(await reglage(), p.normalize(nas));
+      expect(await enAttente(), isNull);
+    });
+
+    test('un changement de dossier qui échoue garde la proposition en '
+        'attente', () async {
+      await telechargerDansDefaut();
+      final nas = p.join(temporaire.path, 'bibliotheque');
+      await appliquer(nas);
+      final dossiers = creerDossiers(
+        creerService(StockageTelechargements(dossierParDefaut)),
+      );
+
+      await expectLater(
+        dossiers.changerDossierChapitres(p.join('relatif', 'dossier')),
+        throwsA(isA<ErreurService>()),
+      );
+
+      expect(
+        await dossiers.chargerDossierInstallationEnAttente(),
+        p.normalize(nas),
+      );
+    });
+
+    test('une base illisible ne fait pas échouer le démarrage', () async {
+      await expectLater(
+        ServiceDossierChapitres.appliquerDossierInstallation(
+          _DepotParametresEnPanne(),
+          p.join(temporaire.path, 'bibliotheque'),
+          cheminDossierParDefaut: () async => dossierParDefaut,
+        ),
+        completes,
+      );
+    });
+  });
+
   group('messages pour l\'interface', () {
     test('un dossier accessible n\'affiche aucun bandeau', () {
       const acces = AccesDossierChapitres.accessible(
@@ -1132,6 +1372,14 @@ void main() {
       expect(avec.message, contains('3 fichier(s)'));
     });
   });
+}
+
+/// Dépôt des paramètres dont toute lecture échoue (base illisible).
+class _DepotParametresEnPanne implements DepotParametres {
+  // Toute méthode (chargerTexte, enregistrerTexte…) renvoie une erreur.
+  @override
+  Object? noSuchMethod(Invocation invocation) =>
+      Future<String?>.error(StateError('base illisible'));
 }
 
 /// Partage réseau instable : chaque archive est vue absente au premier

@@ -11,6 +11,18 @@ import 'planification_mises_a_jour.dart';
 import 'politique_telechargement.dart';
 import 'verrou_telechargement.dart';
 
+/// Thème de l'interface choisi par le client (Paramètres).
+enum ModeTheme {
+  /// Suit le thème clair ou sombre du système (par défaut).
+  systeme,
+
+  /// Toujours clair.
+  clair,
+
+  /// Toujours sombre.
+  sombre,
+}
+
 /// Lecture et écriture des réglages, avec leurs valeurs par défaut.
 class ServiceParametres {
   /// Crée le service.
@@ -87,11 +99,23 @@ class ServiceParametres {
   /// frappe (1000 au lieu de 10) ne lance des centaines de téléchargements.
   static const int limiteMaximale = 500;
 
+  /// Valeur minimale d'une limite de téléchargement (« favoris : lus
+  /// gardés », « suivis : au départ ») : 0 veut dire aucun chapitre.
+  static const int limiteMinimale = 0;
+
+  /// Valeur minimale de « avant » et « après » des suivis (jauge des
+  /// Paramètres) : voir `minimumSuivisAvantApres`.
+  static const int limiteMinimaleSuivisAvantApres = minimumSuivisAvantApres;
+
   /// Réglages de téléchargement (valeurs par défaut si rien n'est enregistré
   /// ou si une valeur est illisible).
   Future<ReglagesTelechargement> chargerReglagesTelechargement() async {
     const defaut = ReglagesTelechargement();
-    Future<int> lire(String cle, int valeurParDefaut, {int minimum = 0}) async {
+    Future<int> lire(
+      String cle,
+      int valeurParDefaut, {
+      int minimum = limiteMinimale,
+    }) async {
       final valeur = await _depot.chargerEntier(cle);
       if (valeur == null || valeur < minimum || valeur > limiteMaximale) {
         return valeurParDefaut;
@@ -124,9 +148,9 @@ class ServiceParametres {
   Future<void> enregistrerReglagesTelechargement(
     ReglagesTelechargement reglages,
   ) async {
-    int borner(int valeur) => valeur.clamp(0, limiteMaximale);
+    int borner(int valeur) => valeur.clamp(limiteMinimale, limiteMaximale);
     int bornerAvantApres(int valeur) =>
-        valeur.clamp(minimumSuivisAvantApres, limiteMaximale);
+        valeur.clamp(limiteMinimaleSuivisAvantApres, limiteMaximale);
     await _depot.enregistrerEntier(
       cleFavorisLusConserves,
       borner(reglages.favorisLusConserves),
@@ -202,7 +226,8 @@ class ServiceParametres {
   /// N'applique pas les règles : l'appelant lance ensuite
   /// `ServiceTelechargement.appliquerReglesATous` (mise en file de tous les
   /// chapitres à l'activation ; à la désactivation, les archives qui ne sont
-  /// plus voulues passent en suppression différée de 24 h).
+  /// plus voulues passent en suppression différée, après la durée de
+  /// [chargerDelaiSuppression]).
   Future<void> enregistrerArchiveComplete(bool active) async {
     await _depot.enregistrerEntier(cleArchiveComplete, active ? 1 : 0);
     _journaliser('« Archive complète » ${active ? 'activée' : 'désactivée'}');
@@ -262,6 +287,103 @@ class ServiceParametres {
     _journaliser('téléchargement : $borne chapitre(s) en même temps');
   }
 
+  // ------------------------------------------------------------ Thème
+
+  /// Clé : thème de l'interface (nom d'une valeur de [ModeTheme] :
+  /// `systeme`, `clair` ou `sombre`).
+  static const String cleModeTheme = 'interface.theme';
+
+  /// Thème tant que le client n'a rien choisi : celui du système.
+  static const ModeTheme modeThemeParDefaut = ModeTheme.systeme;
+
+  /// Thème choisi par le client ([modeThemeParDefaut] si rien n'est
+  /// enregistré ou si la valeur est inconnue).
+  Future<ModeTheme> chargerModeTheme() async {
+    final texte = (await _depot.chargerTexte(cleModeTheme))?.trim();
+    // Enregistré par son nom plutôt que par son rang : ajouter ou réordonner
+    // une valeur de l'énumération ne change pas le choix déjà fait.
+    for (final mode in ModeTheme.values) {
+      if (mode.name == texte) return mode;
+    }
+    return modeThemeParDefaut;
+  }
+
+  /// Enregistre le thème choisi par le client.
+  Future<void> enregistrerModeTheme(ModeTheme mode) async {
+    await _depot.enregistrerTexte(cleModeTheme, mode.name);
+    _journaliser('thème : ${mode.name}');
+  }
+
+  // ------------------------------------- Durée de conservation avant suppression
+
+  /// Clé : durée (en heures) pendant laquelle une archive sortie des règles
+  /// de conservation reste sur l'appareil (en rouge, avec un compte à
+  /// rebours) avant d'être supprimée.
+  static const String cleHeuresAvantSuppression =
+      'telechargement.suppression_differee.heures';
+
+  /// Durée de conservation tant que le client n'a rien choisi (24 h).
+  static const Duration delaiSuppressionParDefaut = delaiSuppressionDifferee;
+
+  /// Borne basse de la jauge (1 h : pas de suppression immédiate, voir
+  /// `delaiSuppressionDiffereeMinimum`).
+  static const Duration delaiSuppressionMinimum =
+      delaiSuppressionDiffereeMinimum;
+
+  /// Borne haute de la jauge (30 jours).
+  static const Duration delaiSuppressionMaximum =
+      delaiSuppressionDiffereeMaximum;
+
+  /// Crans proposés pour la jauge (1 h, 6 h, 12 h, 24 h, 2 j, 3 j, 7 j,
+  /// 14 j, 30 j), du plus court au plus long.
+  static const List<Duration> delaisSuppressionProposes =
+      delaisSuppressionDiffereeProposes;
+
+  /// Durée de conservation avant suppression choisie par le client
+  /// ([delaiSuppressionParDefaut] si rien n'est enregistré ou si la valeur
+  /// est hors bornes).
+  ///
+  /// Relue à chaque application des règles (pas de cache) : la tâche de fond
+  /// Android voit aussi le choix du client. Seules les **nouvelles**
+  /// suppressions prévues l'utilisent : une suppression déjà prévue garde sa
+  /// date (le compte à rebours affiché ne saute pas, et allonger le délai ne
+  /// sauve pas en silence une archive que le client a déjà vue partir).
+  Future<Duration> chargerDelaiSuppression() async {
+    final heures = await _depot.chargerEntier(cleHeuresAvantSuppression);
+    // Valeur hors bornes (écrite à la main, base abîmée) ignorée plutôt que
+    // ramenée à la borne : 0 deviendrait sinon 1 h, et effacerait des
+    // archives bien plus tôt que le client ne l'a choisi.
+    if (heures == null ||
+        heures < delaiSuppressionMinimum.inHours ||
+        heures > delaiSuppressionMaximum.inHours) {
+      return delaiSuppressionParDefaut;
+    }
+    return Duration(hours: heures);
+  }
+
+  /// Enregistre la durée de conservation avant suppression, arrondie à
+  /// l'heure et ramenée entre [delaiSuppressionMinimum] et
+  /// [delaiSuppressionMaximum].
+  Future<void> enregistrerDelaiSuppression(Duration delai) async {
+    // Stockée en heures : tous les crans proposés en sont des multiples, et
+    // un entier se relit sans ambiguïté de format.
+    final heures = (delai.inMinutes / Duration.minutesPerHour).round().clamp(
+      delaiSuppressionMinimum.inHours,
+      delaiSuppressionMaximum.inHours,
+    );
+    await _depot.enregistrerEntier(cleHeuresAvantSuppression, heures);
+    _journaliser(
+      'suppression différée : ${_texteDuree(Duration(hours: heures))} '
+      'avant suppression',
+    );
+  }
+
+  /// Durée lisible dans le journal : « 6 h » ou « 3 j » (jours entiers).
+  static String _texteDuree(Duration duree) =>
+      duree.inHours % Duration.hoursPerDay == 0 && duree.inDays > 0
+      ? '${duree.inDays} j'
+      : '${duree.inHours} h';
+
   /// Nombre de recherches de mises à jour par jour (2 par défaut : 00:00 et
   /// 12:00 UTC).
   Future<int> chargerVerificationsParJour() async {
@@ -307,8 +429,12 @@ class ServiceParametres {
       PlanificationMisesAJour.maximumParJour,
     );
     final heures = Duration.hoursPerDay ~/ parJour;
-    return heures < 1 ? 1 : heures;
+    return heures < minimumHeuresEnAttente ? minimumHeuresEnAttente : heures;
   }
+
+  /// Borne basse de l'écart des vérifications « En attente » : une heure
+  /// (les vérifications tombent sur les heures pleines).
+  static const int minimumHeuresEnAttente = 1;
 
   /// Écart en heures entre deux vérifications des titres « En attente » (1
   /// par défaut : à chaque heure pleine), ramené entre 1 et l'intervalle
@@ -317,8 +443,8 @@ class ServiceParametres {
   Future<int> chargerHeuresEnAttente() async {
     final maximum = maximumHeuresEnAttente(await chargerVerificationsParJour());
     final valeur = await _depot.chargerEntier(cleHeuresEnAttente);
-    if (valeur == null || valeur < 1) {
-      return heuresEnAttenteParDefaut.clamp(1, maximum);
+    if (valeur == null || valeur < minimumHeuresEnAttente) {
+      return heuresEnAttenteParDefaut.clamp(minimumHeuresEnAttente, maximum);
     }
     return valeur > maximum ? maximum : valeur;
   }
@@ -327,7 +453,7 @@ class ServiceParametres {
   /// l'intervalle normal).
   Future<void> enregistrerHeuresEnAttente(int heures) async {
     final maximum = maximumHeuresEnAttente(await chargerVerificationsParJour());
-    final borne = heures.clamp(1, maximum);
+    final borne = heures.clamp(minimumHeuresEnAttente, maximum);
     await _depot.enregistrerEntier(cleHeuresEnAttente, borne);
     _journaliser('« En attente » : vérification toutes les $borne h');
   }

@@ -128,7 +128,10 @@ class ServiceJournal {
   }
 
   Future<String> _exporter(int jours) async {
-    final nombreJours = jours.clamp(1, joursJournalExportesMaximum);
+    final nombreJours = jours.clamp(
+      joursJournalExportesMinimum,
+      joursJournalExportesMaximum,
+    );
     final maintenant = _horloge().toLocal();
     // Noté avant la copie : la ligne figure ainsi dans le fichier exporté et
     // montre au lecteur quand l'export a été fait.

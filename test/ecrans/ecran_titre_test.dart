@@ -178,7 +178,11 @@ void main() {
       expect(compteARebours, findsOneWidget);
       final couleurs = Theme.of(tester.element(compteARebours)).colorScheme;
       expect(tester.widget<Text>(compteARebours).style?.color, couleurs.error);
-      expect(find.text(Textes.legendeSuppressionPrevue), findsOneWidget);
+      // Durée par défaut du faux service des paramètres.
+      expect(
+        find.text(Textes.legendeSuppressionPrevue(const Duration(hours: 24))),
+        findsOneWidget,
+      );
       expect(
         find.byTooltip(
           'Suppression prévue — appuyer pour supprimer maintenant',

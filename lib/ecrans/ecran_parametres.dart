@@ -1,5 +1,5 @@
-/// Écran Paramètres : règles de téléchargement, sites, journal et « À
-/// propos ».
+/// Écran Paramètres : règles de téléchargement (jauges), sites, apparence,
+/// journal et « À propos ».
 library;
 
 import 'package:material_ui/material_ui.dart';
@@ -10,11 +10,13 @@ import '../etat/etat_export.dart';
 import '../etat/etat_mises_a_jour.dart';
 import '../etat/etat_parametres.dart';
 import '../etat/etat_sources.dart';
+import '../etat/etat_theme.dart';
 import '../modeles/source.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/dialogue_import.dart';
 import '../widgets/dialogue_site.dart';
 import '../widgets/editeur_langues.dart';
+import '../widgets/jauge_reglage.dart';
 import '../widgets/messages.dart';
 import '../widgets/section_categories_regroupees.dart';
 import '../widgets/section_dossier_chapitres.dart';
@@ -24,7 +26,7 @@ import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
 
 /// Réglages de l'application : langues, mises à jour, téléchargements,
-/// sites, sauvegarde et export, puis « À propos ».
+/// sites, sauvegarde et export, apparence, puis « À propos ».
 class EcranParametres extends StatelessWidget {
   /// Crée l'écran.
   const EcranParametres({super.key});
@@ -58,6 +60,9 @@ class EcranParametres extends StatelessWidget {
               // Après les sites : les catégories viennent d'eux.
               SectionCategoriesRegroupees(),
               _SectionExport(),
+              // Réglage rare, en bas avec les sections générales plutôt
+              // qu'entre les réglages de lecture.
+              _SectionApparence(),
               // Juste avant « À propos » : on vient y chercher le journal à
               // joindre à un retour de test, comme la version.
               SectionJournal(),
@@ -235,30 +240,20 @@ class _SectionMisesAJour extends StatelessWidget {
           style: theme.textTheme.bodyMedium,
         ),
         const SizedBox(height: espacementMoyen),
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: Text(
-                Textes.verificationsParJour,
-                style: theme.textTheme.titleSmall,
-              ),
-            ),
-            IconButton(
-              tooltip: Textes.diminuer,
-              icon: const Icon(Icons.remove_circle_outline),
-              onPressed: occupe || nombre <= EtatParametres.minimumParJour
-                  ? null
-                  : () => _modifier(context, etat, nombre - 1),
-            ),
-            Text('$nombre', style: theme.textTheme.titleMedium),
-            IconButton(
-              tooltip: Textes.augmenter,
-              icon: const Icon(Icons.add_circle_outline),
-              onPressed: occupe || nombre >= EtatParametres.maximumParJour
-                  ? null
-                  : () => _modifier(context, etat, nombre + 1),
-            ),
-          ],
+        // Jauge de 1 à 24 : les horaires en dessous suivent le curseur
+        // pendant le glissement ; l'enregistrement se fait au lâcher.
+        JaugeReglage(
+          key: const ValueKey<String>('jauge.recherchesParJour'),
+          libelle: Textes.verificationsParJour,
+          valeur: nombre,
+          crans: cransReguliers(
+            EtatParametres.minimumParJour,
+            EtatParametres.maximumParJour,
+          ),
+          formater: (valeur) => '$valeur',
+          estActive: !occupe,
+          surApercu: etat.previsualiserVerificationsParJour,
+          surChoix: (valeur) => _modifier(context, etat, valeur),
         ),
         Text(
           Textes.horairesVerifications(
@@ -279,49 +274,22 @@ class _SectionMisesAJour extends StatelessWidget {
           ),
         const SizedBox(height: espacementMoyen),
         // Surveillance accrue des titres « En attente » (étape 6) : même
-        // présentation que le nombre de recherches, juste en dessous.
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: Text(
-                Textes.heuresEnAttente,
-                style: theme.textTheme.titleSmall,
-              ),
-            ),
-            IconButton(
-              tooltip: Textes.diminuer,
-              icon: const Icon(Icons.remove_circle_outline),
-              onPressed:
-                  etat.estEnEnregistrementEnAttente || etat.heuresEnAttente <= 1
-                  ? null
-                  : () => _modifierEnAttente(
-                      context,
-                      etat,
-                      etat.heuresEnAttente - 1,
-                    ),
-            ),
-            Text(
-              Textes.valeurHeures(etat.heuresEnAttente),
-              style: theme.textTheme.titleMedium,
-            ),
-            IconButton(
-              tooltip: Textes.augmenter,
-              icon: const Icon(Icons.add_circle_outline),
-              onPressed:
-                  etat.estEnEnregistrementEnAttente ||
-                      etat.heuresEnAttente >= etat.maximumHeuresEnAttente
-                  ? null
-                  : () => _modifierEnAttente(
-                      context,
-                      etat,
-                      etat.heuresEnAttente + 1,
-                    ),
-            ),
-          ],
-        ),
-        Text(
-          Textes.explicationHeuresEnAttente,
-          style: theme.textTheme.bodySmall,
+        // présentation que le nombre de recherches, juste en dessous. Le
+        // maximum suit l'intervalle normal (24 recherches par jour : une
+        // seule valeur, 1 h, et pas de curseur).
+        JaugeReglage(
+          key: const ValueKey<String>('jauge.heuresEnAttente'),
+          libelle: Textes.heuresEnAttente,
+          valeur: etat.heuresEnAttente,
+          crans: cransReguliers(
+            EtatParametres.minimumHeuresEnAttente,
+            etat.maximumHeuresEnAttente,
+          ),
+          formater: Textes.valeurHeures,
+          estActive: !etat.estEnEnregistrementEnAttente,
+          surApercu: etat.previsualiserHeuresEnAttente,
+          surChoix: (valeur) => _modifierEnAttente(context, etat, valeur),
+          explication: Textes.explicationHeuresEnAttente,
         ),
       ],
     );
@@ -350,7 +318,9 @@ class _SectionMisesAJour extends StatelessWidget {
 
 // ------------------------------------------------------------ Téléchargements
 
-/// Les quatre limites des règles de conservation, avec + / −.
+/// « Archive complète », téléchargements simultanés, durée de conservation
+/// avant suppression, puis les quatre limites des règles de conservation
+/// (jauges avec − / +).
 class _SectionTelechargements extends StatelessWidget {
   const _SectionTelechargements();
 
@@ -431,6 +401,23 @@ class _SectionTelechargements extends StatelessWidget {
     if (context.mounted) afficherResultat(context, resultat);
   }
 
+  /// Enregistre la durée de conservation ; le message rappelle la durée
+  /// en toutes lettres (« 2 jours »), plus parlante que la jauge.
+  Future<void> _modifierDelai(
+    BuildContext context,
+    EtatParametres etat,
+    Duration delai,
+  ) async {
+    final resultat = await etat.modifierDelaiSuppression(delai);
+    if (context.mounted) {
+      afficherResultat(
+        context,
+        resultat,
+        succes: Textes.delaiSuppressionEnregistre(resultat.donnee ?? delai),
+      );
+    }
+  }
+
   Widget _contenu(BuildContext context, ThemeData theme, EtatParametres etat) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -448,34 +435,50 @@ class _SectionTelechargements extends StatelessWidget {
               : (active) => _basculerArchive(context, etat, active),
         ),
         const Divider(),
-        // Jauge plutôt que + / − : de 1 à 32, le client choisit d'un geste.
-        // Rien n'est enregistré pendant le glissement, seulement au lâcher.
-        Text(
-          Textes.telechargementsSimultanes(etat.telechargementsSimultanes),
-          style: theme.textTheme.titleSmall,
+        // Jauges enregistrées aussitôt (au lâcher) en haut, puis les limites
+        // en brouillon avec leur bouton « Enregistrer » : les deux modes de
+        // réglage ne se mélangent pas.
+        // De 1 à 32, le client choisit d'un geste.
+        JaugeReglage(
+          key: const ValueKey<String>('jauge.simultanes'),
+          libelle: Textes.libelleTelechargementsSimultanes,
+          valeur: etat.telechargementsSimultanes,
+          crans: cransReguliers(
+            EtatParametres.minimumTelechargementsSimultanes,
+            EtatParametres.maximumTelechargementsSimultanes,
+          ),
+          formater: (valeur) => '$valeur',
+          estActive: !etat.estEnEnregistrementSimultanes,
+          surApercu: etat.previsualiserTelechargementsSimultanes,
+          surChoix: (valeur) => _modifierSimultanes(context, etat, valeur),
+          explication: Textes.explicationTelechargementsSimultanes,
         ),
-        Slider(
-          value: etat.telechargementsSimultanes.toDouble(),
-          min: EtatParametres.minimumTelechargementsSimultanes.toDouble(),
-          max: EtatParametres.maximumTelechargementsSimultanes.toDouble(),
-          divisions:
-              EtatParametres.maximumTelechargementsSimultanes -
-              EtatParametres.minimumTelechargementsSimultanes,
-          label: '${etat.telechargementsSimultanes}',
-          onChanged: etat.estEnEnregistrementSimultanes
-              ? null
-              : (valeur) =>
-                    etat.previsualiserTelechargementsSimultanes(valeur.round()),
-          onChangeEnd: (valeur) =>
-              _modifierSimultanes(context, etat, valeur.round()),
-        ),
-        Text(
-          Textes.explicationTelechargementsSimultanes,
-          style: theme.textTheme.bodySmall,
+        const SizedBox(height: espacementMoyen),
+        // Durée de conservation : crans proposés par le service (1 h à
+        // 30 jours), en heures pour la jauge ; − / + passent d'un cran à
+        // l'autre (une heure de plus sur 30 jours n'aurait pas de sens).
+        JaugeReglage(
+          key: const ValueKey<String>('jauge.delaiSuppression'),
+          libelle: Textes.libelleDelaiSuppression,
+          valeur: etat.delaiSuppression.inHours,
+          crans: <int>[
+            for (final delai in EtatParametres.delaisSuppressionProposes)
+              delai.inHours,
+          ],
+          formater: (heures) => Textes.dureeCourte(Duration(hours: heures)),
+          pasBoutons: null,
+          estActive: !etat.estEnEnregistrementDelai,
+          surApercu: (heures) =>
+              etat.previsualiserDelaiSuppression(Duration(hours: heures)),
+          surChoix: (heures) =>
+              _modifierDelai(context, etat, Duration(hours: heures)),
+          explication: Textes.explicationDelaiSuppression,
         ),
         const Divider(),
+        // Durée enregistrée, pas l'aperçu de la jauge : ce texte décrit ce
+        // que l'application fait réellement.
         Text(
-          Textes.introReglesTelechargement,
+          Textes.introReglesTelechargement(etat.delaiSuppressionEnregistre),
           style: theme.textTheme.bodyMedium,
         ),
         const SizedBox(height: espacementMoyen),
@@ -517,7 +520,9 @@ class _SectionTelechargements extends StatelessWidget {
   }
 }
 
-/// Une limite : libellé, explication avec la valeur, boutons + / −.
+/// Une limite : libellé, valeur, jauge à crans (0 à 500, serrés au début)
+/// avec − / + de 1 en 1, et explication avec la valeur. Tout reste dans le
+/// brouillon jusqu'à « Enregistrer ».
 class _LigneLimite extends StatelessWidget {
   const _LigneLimite({required this.etat, required this.limite});
 
@@ -526,41 +531,22 @@ class _LigneLimite extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final valeur = etat.valeur(limite);
     return Padding(
       padding: const EdgeInsets.only(bottom: espacementMoyen),
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  Textes.libelleLimite(limite),
-                  style: theme.textTheme.titleSmall,
-                ),
-                Text(
-                  Textes.explicationLimite(limite, valeur),
-                  style: theme.textTheme.bodySmall,
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            tooltip: Textes.diminuer,
-            icon: const Icon(Icons.remove_circle_outline),
-            onPressed: valeur <= 0 ? null : () => etat.ajouter(limite, -1),
-          ),
-          Text('$valeur', style: theme.textTheme.titleMedium),
-          IconButton(
-            tooltip: Textes.augmenter,
-            icon: const Icon(Icons.add_circle_outline),
-            onPressed: valeur >= EtatParametres.limiteMaximale
-                ? null
-                : () => etat.ajouter(limite, 1),
-          ),
-        ],
+      child: JaugeReglage(
+        key: ValueKey<String>('jauge.limite.${limite.name}'),
+        libelle: Textes.libelleLimite(limite),
+        valeur: etat.valeur(limite),
+        crans: cransLimite(
+          EtatParametres.minimumLimite(limite),
+          EtatParametres.limiteMaximale,
+        ),
+        formater: (valeur) => '$valeur',
+        // Brouillon : glisser ou lâcher modifie la même valeur, rien n'est
+        // écrit avant « Enregistrer ».
+        surApercu: (valeur) => etat.modifier(limite, valeur),
+        surChoix: (valeur) => etat.modifier(limite, valeur),
+        explication: Textes.explicationLimite(limite, etat.valeur(limite)),
       ),
     );
   }
@@ -756,6 +742,65 @@ class _SectionExport extends StatelessWidget {
               ),
           ],
         ),
+      ],
+    );
+  }
+}
+
+// ------------------------------------------------------------------ Apparence
+
+/// Thème de l'interface : Système, Clair ou Sombre, appliqué aussitôt.
+/// Absente si l'application ne fournit pas d'[EtatTheme] (tests).
+class _SectionApparence extends StatelessWidget {
+  const _SectionApparence();
+
+  Future<void> _choisir(
+    BuildContext context,
+    EtatTheme etat,
+    ModeTheme mode,
+  ) async {
+    final resultat = await etat.modifier(mode);
+    // Seule une erreur est signalée : le changement de thème se voit.
+    if (context.mounted) afficherResultat(context, resultat);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final etat = context.watch<EtatTheme?>();
+    if (etat == null) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    return SectionPliable(
+      identifiant: 'parametres.apparence',
+      titre: Textes.sectionApparence,
+      icone: Icons.palette_outlined,
+      resume: Textes.resumeApparence(etat.mode),
+      enfants: <Widget>[
+        Text(Textes.libelleTheme, style: theme.textTheme.titleSmall),
+        const SizedBox(height: espacementPetit),
+        // Trois boutons côte à côte, sur toute la largeur : ils tiennent sur
+        // un téléphone (libellés courts) et le choix actif se voit d'un coup
+        // d'œil.
+        SegmentedButton<ModeTheme>(
+          segments: <ButtonSegment<ModeTheme>>[
+            for (final mode in ModeTheme.values)
+              ButtonSegment<ModeTheme>(
+                value: mode,
+                label: Text(Textes.nomModeTheme(mode)),
+                icon: Icon(switch (mode) {
+                  ModeTheme.systeme => Icons.brightness_auto_outlined,
+                  ModeTheme.clair => Icons.light_mode_outlined,
+                  ModeTheme.sombre => Icons.dark_mode_outlined,
+                }),
+              ),
+          ],
+          selected: <ModeTheme>{etat.mode},
+          showSelectedIcon: false,
+          onSelectionChanged: etat.estEnEnregistrement
+              ? null
+              : (choix) => _choisir(context, etat, choix.first),
+        ),
+        const SizedBox(height: espacementPetit),
+        Text(Textes.explicationTheme, style: theme.textTheme.bodySmall),
       ],
     );
   }

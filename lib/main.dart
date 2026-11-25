@@ -8,6 +8,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert' show jsonDecode;
 import 'dart:io' show File, Platform;
 import 'dart:ui' show AppExitResponse;
 
@@ -43,6 +44,8 @@ import 'etat/etat_dossier_chapitres.dart';
 import 'etat/etat_couvertures.dart';
 import 'etat/etat_mises_a_jour.dart';
 import 'etat/etat_parametres.dart';
+import 'etat/etat_theme.dart';
+import 'widgets/theme_application.dart';
 import 'etat/etat_parutions.dart';
 import 'etat/etat_rapports_erreur.dart';
 import 'etat/etat_sources.dart';
@@ -88,6 +91,59 @@ Duration frequenceTacheAndroid(PlanificationMisesAJour planification) {
   return intervalle < frequenceMinimaleTacheAndroid
       ? frequenceMinimaleTacheAndroid
       : intervalle;
+}
+
+/// Fichier écrit par l'installateur Windows (`installateur/bibliotheque_perso.iss`)
+/// à côté de l'exécutable : `{"dossierBibliotheque": "<chemin choisi>"}`.
+const String nomFichierInstallation = 'installation.json';
+
+/// Clé du dossier de la bibliothèque (chapitres téléchargés) dans
+/// [nomFichierInstallation].
+const String cleDossierBibliothequeInstallation = 'dossierBibliotheque';
+
+/// Dossier de la bibliothèque choisi dans l'installateur Windows, ou `null`.
+///
+/// Lit [nomFichierInstallation] dans le dossier de l'exécutable
+/// ([cheminExecutable], par défaut `Platform.resolvedExecutable` ; les tests
+/// passent un chemin dans un dossier temporaire). Renvoie `null` si le
+/// fichier est absent (lancement depuis IntelliJ, archive .zip, Android,
+/// Linux), illisible ou sans chemin : l'application garde alors son réglage
+/// ou le dossier par défaut. Ne lève jamais : une erreur de lecture est
+/// seulement journalisée.
+///
+/// Ne valide pas le dossier (NAS éteint, droits) : c'est à l'appelant de le
+/// traiter comme un dossier choisi dans les Paramètres.
+Future<String?> chargerDossierBibliothequeInstallation({
+  String? cheminExecutable,
+}) async {
+  final fichier = File(
+    chemins.join(
+      chemins.dirname(cheminExecutable ?? Platform.resolvedExecutable),
+      nomFichierInstallation,
+    ),
+  );
+  try {
+    if (!await fichier.exists()) return null;
+    var texte = await fichier.readAsString();
+    // Fichier réenregistré à la main avec un éditeur qui ajoute un BOM UTF-8 :
+    // jsonDecode le refuserait.
+    if (texte.isNotEmpty && texte.codeUnitAt(0) == 0xFEFF) {
+      texte = texte.substring(1);
+    }
+    final Object? donnees = jsonDecode(texte);
+    if (donnees is! Map<String, Object?>) return null;
+    final valeur = donnees[cleDossierBibliothequeInstallation];
+    if (valeur is! String) return null;
+    final propre = valeur.trim();
+    return propre.isEmpty ? null : propre;
+  } catch (erreur) {
+    Journal.actuel.avertissement(
+      CategorieJournal.demarrage,
+      'Fichier $nomFichierInstallation illisible : ignoré',
+      erreur: erreur,
+    );
+    return null;
+  }
 }
 
 /// Dépôts, client HTTP et services de l'application, construits sur une même
@@ -338,6 +394,15 @@ Future<ServicesApplication> construireServices({
   try {
     dossierApplication =
         dossierTelechargements ?? await cheminParDefautDossierTelechargements();
+    // Dossier de bibliothèque choisi dans l'installateur Windows : appliqué
+    // une fois, au premier démarrage, s'il n'y a pas déjà de réglage.
+    if (dossierTelechargements == null && Platform.isWindows) {
+      await ServiceDossierChapitres.appliquerDossierInstallation(
+        DepotParametres(base),
+        await chargerDossierBibliothequeInstallation(),
+        depotChapitres: DepotChapitres(base),
+      );
+    }
     // Chapitres : dossier choisi par le client (Paramètres), sinon défaut.
     stockage = dossierTelechargements == null
         ? await ServiceDossierChapitres.creerStockage(DepotParametres(base))
@@ -776,6 +841,9 @@ Future<void> demarrer() async {
             }),
       );
     }
+    // Thème lu avant l'affichage (pas d'éclair du thème du système) ; une
+    // erreur ne bloque jamais le démarrage : thème du système.
+    final modeTheme = await chargerModeThemeInitial(services.serviceParametres);
     application = construireApplication(
       serviceBibliotheque: services.serviceBibliotheque,
       serviceAjoutSite: services.serviceAjoutSite,
@@ -789,6 +857,7 @@ Future<void> demarrer() async {
       serviceDossierChapitres: services.serviceDossierChapitres,
       serviceJournal: services.serviceJournal,
       serviceLectureWeb: services.serviceLectureWeb,
+      modeTheme: modeTheme,
     );
   } catch (erreur, pile) {
     Journal.actuel.erreur(
@@ -807,10 +876,31 @@ Future<void> demarrer() async {
   runApp(application);
 }
 
+/// Thème enregistré par le client, lu avant le premier affichage.
+///
+/// Ne lève jamais : en cas d'erreur (base illisible…), l'erreur est
+/// journalisée et le thème par défaut (système) est renvoyé.
+Future<ModeTheme> chargerModeThemeInitial(
+  ServiceParametres serviceParametres,
+) async {
+  try {
+    return await serviceParametres.chargerModeTheme();
+  } catch (erreur, pile) {
+    Journal.actuel.avertissement(
+      CategorieJournal.parametres,
+      'Thème enregistré illisible au démarrage : thème du système',
+      erreur: erreur,
+      pile: pile,
+    );
+    return ServiceParametres.modeThemeParDefaut;
+  }
+}
+
 /// Application complète branchée sur les services donnés.
 ///
 /// Séparée de [demarrer] pour que les tests puissent fournir de faux
-/// services sans base ni réseau.
+/// services sans base ni réseau. [modeTheme] : thème déjà lu au démarrage
+/// (par défaut, celui du service, puis le choix enregistré une fois lu).
 Widget construireApplication({
   required ServiceBibliotheque serviceBibliotheque,
   required ServiceAjoutSite serviceAjoutSite,
@@ -824,6 +914,7 @@ Widget construireApplication({
   ServiceDossierChapitres? serviceDossierChapitres,
   ServiceJournal? serviceJournal,
   ServiceLectureWeb? serviceLectureWeb,
+  ModeTheme? modeTheme,
 }) {
   // Les états sont fournis au-dessus de MaterialApp : les écrans ouverts par
   // Navigator et les boîtes de dialogue y ont accès.
@@ -895,6 +986,11 @@ Widget construireApplication({
           create: (_) =>
               EtatDossierChapitres(serviceDossierChapitres)..charger(),
         ),
+      // Thème choisi dans Paramètres → Apparence (suivi par la racine).
+      ChangeNotifierProvider<EtatTheme>(
+        create: (_) =>
+            EtatTheme(serviceParametres, modeInitial: modeTheme)..charger(),
+      ),
       ChangeNotifierProvider<EtatParametres>(
         create: (_) => EtatParametres(
           serviceParametres,
@@ -934,19 +1030,12 @@ class BibliothequePersoApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: Textes.titreApplication,
-      // Material 3 avec une palette dérivée d'une seule couleur, pour garder un thème
-      // cohérent en clair comme en sombre sans définir chaque couleur à la main.
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-      ),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.indigo,
-          brightness: Brightness.dark,
-        ),
-      ),
+      // Palette dérivée de l'indigo du logo, en clair comme en sombre.
+      theme: themeClair,
+      darkTheme: themeSombre,
+      // Choix du client (Paramètres → Apparence) ; absent sur l'écran
+      // d'erreur de démarrage : thème du système.
+      themeMode: versThemeMode(context.watch<EtatTheme?>()?.mode),
       home: accueil,
     );
   }

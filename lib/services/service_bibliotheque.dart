@@ -1031,9 +1031,11 @@ class ServiceBibliotheque {
   ///
   /// Les chapitres non lus et non téléchargés de ce site disparaissent ; les
   /// chapitres lus restent (l'état de lecture n'est jamais perdu). Les
-  /// archives déjà téléchargées depuis ce site suivent la règle des 24 h :
-  /// leur suppression est prévue dans [delaiSuppressionDifferee] (sauf
-  /// chapitre gardé par le client), et le client peut les garder entre-temps.
+  /// archives déjà téléchargées depuis ce site suivent la suppression
+  /// différée : leur suppression est prévue après la durée de conservation
+  /// réglée (`ServiceParametres.chargerDelaiSuppression`, 24 h par défaut ;
+  /// sauf chapitre gardé par le client), et le client peut les garder
+  /// entre-temps.
   ///
   /// Lève une [ErreurService] pour le site principal (en choisir d'abord un
   /// autre avec [definirSitePrincipal]) ou un site qui n'est pas lié au
@@ -1342,21 +1344,25 @@ class ServiceBibliotheque {
     return _enregistrerChapitresRecus(titre, idSource, chapitres);
   }
 
-  /// Programme dans [delaiSuppressionDifferee] la suppression des archives
-  /// du site [idSource] du titre (site retiré ou devenu lien seul), sauf
-  /// chapitre gardé par le client, suppression déjà prévue ou « Archive
-  /// complète » activée.
+  /// Programme la suppression des archives du site [idSource] du titre (site
+  /// retiré ou devenu lien seul) après la durée de conservation réglée
+  /// (`ServiceParametres.chargerDelaiSuppression` ; [delaiSuppressionDifferee]
+  /// sans service des paramètres), sauf chapitre gardé par le client,
+  /// suppression déjà prévue ou « Archive complète » activée.
   Future<void> _planifierSuppressionArchivesDuSite(
     int idTitre,
     int idSource,
   ) async {
     // « Archive complète » (X7) : aucune suppression automatique, même pour
     // les archives d'un site retiré ; seul le client les supprime.
-    if (await _serviceParametres?.chargerArchiveComplete() ?? false) return;
+    final parametres = _serviceParametres;
+    if (await parametres?.chargerArchiveComplete() ?? false) return;
     // LIMITE : hors de la transaction du dépôt ; si ces écritures échouent,
     // la prochaine application des règles de téléchargement les programme
     // (les chapitres d'un site retiré ou d'un lien seul y sont à supprimer).
-    final echeance = DateTime.now().toUtc().add(delaiSuppressionDifferee);
+    final delai =
+        await parametres?.chargerDelaiSuppression() ?? delaiSuppressionDifferee;
+    final echeance = DateTime.now().toUtc().add(delai);
     var prevues = 0;
     for (final chapitre in await _depotChapitres.chargerChapitres(
       idTitre,
