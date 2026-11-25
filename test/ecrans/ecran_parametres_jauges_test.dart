@@ -228,6 +228,28 @@ void main() {
       // Cran suivant : 6 h.
       expect(parametres.delaiSuppression, const Duration(hours: 6));
     });
+
+    testWidgets('pendant le glissement, seule la jauge montre l\'aperçu : '
+        'les textes gardent la durée enregistrée', (tester) async {
+      await afficher(tester);
+      const cle = 'jauge.delaiSuppression';
+      final etat = Provider.of<EtatParametres>(
+        tester.element(find.byKey(const ValueKey<String>(cle))),
+        listen: false,
+      );
+
+      etat.previsualiserDelaiSuppression(const Duration(days: 30));
+      await tester.pump();
+
+      expect(etat.delaiSuppression, const Duration(days: 30));
+      expect(etat.delaiSuppressionEnregistre, const Duration(hours: 24));
+      expect(texteDansJauge(cle, '30 jours'), findsOneWidget);
+      expect(
+        find.text(Textes.introReglesTelechargement(const Duration(hours: 24))),
+        findsOneWidget,
+      );
+      expect(parametres.delaiSuppression, const Duration(hours: 24));
+    });
   });
 
   group('Apparence', () {

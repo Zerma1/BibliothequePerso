@@ -260,9 +260,16 @@ class EtatParametres extends EtatNotifiant {
   bool _estEnEnregistrementDelai = false;
 
   /// Durée pendant laquelle une archive sortie des règles reste sur
-  /// l'appareil avant d'être supprimée (valeur affichée). Sert aussi aux
-  /// textes des autres écrans (« supprimé dans … »).
+  /// l'appareil avant d'être supprimée, **telle qu'affichée par la jauge** :
+  /// pendant le glissement, c'est l'aperçu, pas encore enregistré. Pour les
+  /// textes qui décrivent le comportement réel (« supprimé dans … »), lire
+  /// [delaiSuppressionEnregistre].
   Duration get delaiSuppression => _apercuDelaiSuppression ?? _delaiSuppression;
+
+  /// Durée de conservation enregistrée (dernière valeur lue ou enregistrée),
+  /// sans l'aperçu de la jauge : sert aux légendes et explications des
+  /// autres écrans, qui ne doivent pas annoncer une durée non enregistrée.
+  Duration get delaiSuppressionEnregistre => _delaiSuppression;
 
   /// `true` pendant l'enregistrement de la durée de conservation.
   bool get estEnEnregistrementDelai => _estEnEnregistrementDelai;

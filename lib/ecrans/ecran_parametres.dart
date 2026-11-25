@@ -475,8 +475,10 @@ class _SectionTelechargements extends StatelessWidget {
           explication: Textes.explicationDelaiSuppression,
         ),
         const Divider(),
+        // Durée enregistrée, pas l'aperçu de la jauge : ce texte décrit ce
+        // que l'application fait réellement.
         Text(
-          Textes.introReglesTelechargement(etat.delaiSuppression),
+          Textes.introReglesTelechargement(etat.delaiSuppressionEnregistre),
           style: theme.textTheme.bodyMedium,
         ),
         const SizedBox(height: espacementMoyen),

@@ -17,11 +17,15 @@ import 'textes.dart';
 /// réglage), `false` dans un rappel (appui sur un bouton). Sans
 /// [EtatParametres] (tests d'un écran isolé) ou avant la lecture des
 /// réglages, durée par défaut (24 h).
+///
+/// Valeur **enregistrée** : pendant le glissement de la jauge des
+/// Paramètres, les légendes gardent la durée réellement appliquée.
 Duration delaiSuppressionRegle(BuildContext context, {bool ecouter = true}) {
   final etat = ecouter
       ? context.watch<EtatParametres?>()
       : context.read<EtatParametres?>();
-  return etat?.delaiSuppression ?? EtatParametres.delaiSuppressionParDefaut;
+  return etat?.delaiSuppressionEnregistre ??
+      EtatParametres.delaiSuppressionParDefaut;
 }
 
 /// Icône d'un statut hors-ligne.

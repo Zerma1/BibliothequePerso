@@ -2404,6 +2404,31 @@ class FauxServiceDossierChapitres implements ServiceDossierChapitres {
   /// Nombre d'appels à [abandonnerDeplacementInacheve].
   int nombreAbandons = 0;
 
+  /// Dossier de l'installateur en attente (extension
+  /// `DossierInstallationEnAttente` du vrai service, injectée dans l'état
+  /// par [chargerInstallationEnAttente] et [ignorerInstallationEnAttente]).
+  String? dossierInstallationEnAttente;
+
+  /// Erreur levée par [ignorerInstallationEnAttente], si définie.
+  Object? erreurIgnorerInstallation;
+
+  /// Nombre d'appels à [ignorerInstallationEnAttente].
+  int nombreRefusInstallation = 0;
+
+  /// Remplace `chargerDossierInstallationEnAttente` (extension).
+  Future<String?> chargerInstallationEnAttente() async {
+    _lire();
+    return dossierInstallationEnAttente;
+  }
+
+  /// Remplace `ignorerDossierInstallationEnAttente` (extension).
+  Future<void> ignorerInstallationEnAttente() async {
+    nombreRefusInstallation++;
+    final panne = erreurIgnorerInstallation;
+    if (panne != null) throw panne;
+    dossierInstallationEnAttente = null;
+  }
+
   @override
   Future<AccesDossierChapitres> verifierAccesDossier() async {
     nombreVerifications++;
@@ -2497,6 +2522,9 @@ class FauxServiceDossierChapitres implements ServiceDossierChapitres {
     );
     dossierChoisi = demande.isEmpty ? null : cible;
     deplacementInacheve = null;
+    // Comme le vrai service : la réussite clôt la proposition de
+    // l'installateur.
+    dossierInstallationEnAttente = null;
     redemarrageNecessaire = true;
     estFileEnPause = true;
     signaler();
@@ -2601,7 +2629,13 @@ Widget envelopper(
       // service est fourni (comme l'application sans service).
       if (dossierChapitres != null)
         ChangeNotifierProvider<EtatDossierChapitres>(
-          create: (_) => EtatDossierChapitres(dossierChapitres)..charger(),
+          create: (_) => EtatDossierChapitres(
+            dossierChapitres,
+            chargerDossierInstallation:
+                dossierChapitres.chargerInstallationEnAttente,
+            ignorerDossierInstallation:
+                dossierChapitres.ignorerInstallationEnAttente,
+          )..charger(),
         ),
       // Section « Journal » seulement si un faux service est fourni.
       if (journal != null)

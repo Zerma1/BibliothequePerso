@@ -2102,6 +2102,33 @@ abstract final class Textes {
       'Redémarrez l\'application pour utiliser le nouveau dossier des '
       'chapitres.';
 
+  /// Bandeau : dossier choisi dans l'installateur, non appliqué parce que
+  /// des chapitres étaient déjà téléchargés dans [dossierActuel].
+  static String bandeauDossierInstallation(
+    String dossierChoisi,
+    String dossierActuel,
+  ) =>
+      "Vous avez choisi $dossierChoisi à l'installation pour votre "
+      'bibliothèque. Vos chapitres sont encore dans $dossierActuel.';
+
+  /// Bouton du bandeau : déplacer les chapitres vers le dossier choisi à
+  /// l'installation.
+  static const String deplacerMesChapitres = 'Déplacer mes chapitres';
+
+  /// Titre de la confirmation « Ignorer » du dossier de l'installateur.
+  static const String ignorerDossierInstallation =
+      "Ignorer le dossier choisi à l'installation ?";
+
+  /// Texte de la confirmation « Ignorer » du dossier de l'installateur.
+  static String confirmationIgnorerDossierInstallation(String dossierActuel) =>
+      'Vos chapitres restent dans $dossierActuel et ce dossier ne vous sera '
+      'plus proposé. Vous pourrez toujours changer de dossier dans les '
+      'Paramètres.';
+
+  /// Message après « Ignorer » le dossier de l'installateur.
+  static const String dossierInstallationIgnore =
+      'Vos chapitres restent dans le dossier actuel.';
+
   // ------------------------------------------- Listes personnelles (X4)
 
   /// Bouton et titre du dialogue de création d'une liste.

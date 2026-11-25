@@ -208,6 +208,87 @@ void main() {
     });
   });
 
+  group('dossier de l\'installateur en attente', () {
+    late EtatDossierChapitres etatInstallation;
+
+    setUp(() {
+      etatInstallation = EtatDossierChapitres(
+        service,
+        chargerDossierInstallation: service.chargerInstallationEnAttente,
+        ignorerDossierInstallation: service.ignorerInstallationEnAttente,
+      );
+    });
+
+    tearDown(() => etatInstallation.dispose());
+
+    test('charger lit la proposition', () async {
+      service.dossierInstallationEnAttente = r'Z:\Bibliotheque';
+      await etatInstallation.charger();
+
+      expect(etatInstallation.dossierInstallationEnAttente, r'Z:\Bibliotheque');
+    });
+
+    test('ignorer enregistre le refus et retire la proposition', () async {
+      service.dossierInstallationEnAttente = r'Z:\Bibliotheque';
+      await etatInstallation.charger();
+
+      final resultat = await etatInstallation.ignorerDossierInstallation();
+
+      expect(resultat.estReussi, isTrue);
+      expect(service.nombreRefusInstallation, 1);
+      expect(etatInstallation.dossierInstallationEnAttente, isNull);
+      expect(etatInstallation.estEnRefusInstallation, isFalse);
+    });
+
+    test('un refus en échec garde la proposition', () async {
+      service
+        ..dossierInstallationEnAttente = r'Z:\Bibliotheque'
+        ..erreurIgnorerInstallation = const ErreurBaseDeDonnees('verrou');
+      await etatInstallation.charger();
+
+      final resultat = await etatInstallation.ignorerDossierInstallation();
+
+      expect(resultat.estReussi, isFalse);
+      expect(resultat.erreur?.nature, NatureErreur.baseDeDonnees);
+      expect(etatInstallation.dossierInstallationEnAttente, r'Z:\Bibliotheque');
+    });
+
+    test('un changement de dossier réussi clôt la proposition', () async {
+      service.dossierInstallationEnAttente = r'Z:\Bibliotheque';
+      await etatInstallation.charger();
+
+      await etatInstallation.changerDossier(r'Z:\Bibliotheque');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(etatInstallation.dossierInstallationEnAttente, isNull);
+    });
+
+    test('une lecture impossible de la proposition n\'empêche pas le '
+        'chargement', () async {
+      final etatPanne = EtatDossierChapitres(
+        service,
+        chargerDossierInstallation: () async =>
+            throw const ErreurBaseDeDonnees('verrou'),
+      );
+      addTearDown(etatPanne.dispose);
+      await etatPanne.charger();
+
+      expect(etatPanne.estCharge, isTrue);
+      expect(etatPanne.erreur, isNull);
+      expect(etatPanne.dossierInstallationEnAttente, isNull);
+    });
+
+    test('sans fonction injectée, un faux service ne bloque pas le '
+        'chargement', () async {
+      // Extension du vrai service sur un faux : NoSuchMethodError attendue,
+      // notée au journal seulement.
+      await etat.charger();
+
+      expect(etat.estCharge, isTrue);
+      expect(etat.dossierInstallationEnAttente, isNull);
+    });
+  });
+
   test('abandonner le déplacement inachevé l\'oublie', () async {
     service.deplacementInacheve = r'Z:\Mangas';
     await etat.charger();
