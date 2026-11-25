@@ -1,0 +1,321 @@
+﻿; Installateur Windows de « Bibliothèque perso » (Inno Setup 6.7).
+;
+; Construit par outils\construire_installateur.ps1, qui passe la version lue
+; dans pubspec.yaml : ISCC /DVersion=X.Y.Z /DBuild=N bibliotheque_perso.iss
+;
+; - Installation par utilisateur, sans droits administrateur : par défaut dans
+;   %LOCALAPPDATA%\Programs\Bibliotheque perso (dossier modifiable).
+; - Page « Dossier de votre bibliothèque » : dossier des chapitres téléchargés
+;   (local, disque réseau ou NAS), écrit dans {app}\installation.json, que
+;   l'application lit au premier démarrage (lib/main.dart,
+;   chargerDossierBibliothequeInstallation).
+; - La désinstallation ne retire que les fichiers du programme : jamais la base
+;   (%APPDATA%) ni les chapitres téléchargés.
+;
+; Paramètres de la ligne de commande (en plus de ceux d'Inno Setup) :
+;   /BIBLIOTHEQUE="D:\Mes chapitres"   dossier de la bibliothèque (installation
+;                                      silencieuse ou valeur proposée).
+; Mise à jour silencieuse avec l'application ouverte : ajouter /CLOSEAPPLICATIONS.
+
+#ifndef Version
+  #error Version absente : lancer outils\construire_installateur.ps1, ou ISCC /DVersion=X.Y.Z
+#endif
+#ifndef Build
+  #define Build "0"
+#endif
+#ifndef DossierRelease
+  #define DossierRelease "..\build\windows\x64\runner\Release"
+#endif
+
+#define NomApplication "Bibliothèque perso"
+#define NomExecutable "bibliotheque_perso.exe"
+
+[Setup]
+; Identifiant fixe : il permet de reconnaître une installation précédente
+; (mise à jour par-dessus, même dossier) ; ne jamais le changer.
+AppId={{827D980C-013C-4734-94F1-BB09CBAA7712}
+AppName={#NomApplication}
+AppVersion={#Version}
+AppVerName={#NomApplication} {#Version}
+AppPublisher=Bibliothèque perso
+VersionInfoVersion={#Version}.{#Build}
+VersionInfoProductVersion={#Version}
+VersionInfoDescription=Installation de {#NomApplication}
+; Par utilisateur, sans droits administrateur.
+PrivilegesRequired=lowest
+DefaultDirName={localappdata}\Programs\Bibliotheque perso
+; Page de choix du dossier d'installation toujours affichée (même lors d'une
+; mise à jour, où elle propose le dossier précédent).
+DisableDirPage=no
+UsePreviousAppDir=yes
+DisableProgramGroupPage=yes
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+; Mise à jour : ferme l'application si elle utilise les fichiers à remplacer.
+CloseApplications=yes
+CloseApplicationsFilter=*.exe,*.dll
+RestartApplications=no
+SetupIconFile=..\assets\logo\logo.ico
+UninstallDisplayIcon={app}\{#NomExecutable}
+UninstallDisplayName={#NomApplication}
+WizardStyle=modern
+ShowLanguageDialog=no
+OutputDir=..\livraisons\{#Version}
+OutputBaseFilename=bibliotheque_perso-{#Version}-installation
+Compression=lzma2/max
+SolidCompression=yes
+
+[Languages]
+Name: "french"; MessagesFile: "compiler:Languages\French.isl"
+
+[Messages]
+; La désinstallation conserve toujours les données du client.
+ConfirmUninstall=Voulez-vous désinstaller %1 ?%n%nVos données sont conservées : la base (titres, sources, réglages) et le dossier de votre bibliothèque (chapitres téléchargés) ne sont jamais supprimés. Seuls les fichiers du programme sont retirés.
+UninstalledAll=%1 a été désinstallé.%n%nVotre base et vos chapitres téléchargés ont été conservés : une nouvelle installation les retrouvera.
+
+[Tasks]
+Name: "bureau"; Description: "Créer un raccourci sur le Bureau"; GroupDescription: "Raccourcis :"; Flags: unchecked
+
+[Files]
+Source: "{#DossierRelease}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Icons]
+Name: "{autoprograms}\{#NomApplication}"; Filename: "{app}\{#NomExecutable}"; WorkingDir: "{app}"; IconFilename: "{app}\{#NomExecutable}"
+Name: "{autodesktop}\{#NomApplication}"; Filename: "{app}\{#NomExecutable}"; WorkingDir: "{app}"; IconFilename: "{app}\{#NomExecutable}"; Tasks: bureau
+
+[Run]
+Filename: "{app}\{#NomExecutable}"; Description: "Lancer {#NomApplication}"; Flags: nowait postinstall skipifsilent
+
+[UninstallDelete]
+; Écrit par l'installateur (section [Code]) : à retirer avec le programme.
+; Rien d'autre : ni la base, ni les chapitres, ni les journaux.
+Type: files; Name: "{app}\installation.json"
+
+[Code]
+const
+  NomFichierInstallation = 'installation.json';
+  CleDossierBibliotheque = 'dossierBibliotheque';
+  // Mémorisé aussi dans les données d'Inno Setup (registre de l'utilisateur),
+  // au cas où installation.json aurait disparu.
+  ClePreviousData = 'DossierBibliotheque';
+
+var
+  PageBibliotheque: TInputDirWizardPage;
+  PageConservation: TOutputMsgWizardPage;
+
+// Échappe une chaîne pour l'écrire entre guillemets dans du JSON.
+function EchapperJson(const Texte: String): String;
+var
+  I: Integer;
+  C: Char;
+begin
+  Result := '';
+  for I := 1 to Length(Texte) do
+  begin
+    C := Texte[I];
+    if C = '\' then
+      Result := Result + '\\'
+    else if C = '"' then
+      Result := Result + '\"'
+    else if Ord(C) < 32 then
+      Result := Result + '\u' + Format('%.4x', [Ord(C)])
+    else
+      Result := Result + C;
+  end;
+end;
+
+// Lit la valeur de "dossierBibliotheque" dans un installation.json existant
+// (UTF-8, avec ou sans BOM). Renvoie '' si le fichier est absent ou illisible.
+function LireDossierInstallationJson(const Fichier: String): String;
+var
+  Brut: AnsiString;
+  Texte, Cle, Valeur: String;
+  P, I, Code: Integer;
+  C: Char;
+begin
+  Result := '';
+  if not FileExists(Fichier) then
+    Exit;
+  if not LoadStringFromFile(Fichier, Brut) then
+    Exit;
+  Texte := UTF8Decode(Brut);
+  Cle := '"' + CleDossierBibliotheque + '"';
+  P := Pos(Cle, Texte);
+  if P = 0 then
+    Exit;
+  I := P + Length(Cle);
+  while (I <= Length(Texte)) and ((Texte[I] = ' ') or (Texte[I] = #9) or
+    (Texte[I] = #10) or (Texte[I] = #13) or (Texte[I] = ':')) do
+    I := I + 1;
+  if (I > Length(Texte)) or (Texte[I] <> '"') then
+    Exit;
+  I := I + 1;
+  Valeur := '';
+  while I <= Length(Texte) do
+  begin
+    C := Texte[I];
+    if C = '"' then
+    begin
+      Result := Valeur;
+      Exit;
+    end;
+    if C = '\' then
+    begin
+      I := I + 1;
+      if I > Length(Texte) then
+        Exit;
+      C := Texte[I];
+      if (C = '"') or (C = '\') or (C = '/') then
+        Valeur := Valeur + C
+      else if C = 'n' then
+        Valeur := Valeur + #10
+      else if C = 'r' then
+        Valeur := Valeur + #13
+      else if C = 't' then
+        Valeur := Valeur + #9
+      else if C = 'b' then
+        Valeur := Valeur + #8
+      else if C = 'f' then
+        Valeur := Valeur + #12
+      else if C = 'u' then
+      begin
+        if I + 4 > Length(Texte) then
+          Exit;
+        Code := StrToIntDef('$' + Copy(Texte, I + 1, 4), -1);
+        if Code < 0 then
+          Exit;
+        Valeur := Valeur + Chr(Code);
+        I := I + 4;
+      end
+      else
+        Exit;
+    end
+    else
+      Valeur := Valeur + C;
+    I := I + 1;
+  end;
+end;
+
+// Dossier de la bibliothèque proposé : paramètre /BIBLIOTHEQUE=, sinon
+// installation.json de l'installation précédente, sinon valeur mémorisée par
+// Inno Setup, sinon Documents\bibliotheque_perso (dossier par défaut de
+// l'application).
+function DossierBibliothequePropose(const DossierApplication: String): String;
+begin
+  Result := Trim(ExpandConstant('{param:BIBLIOTHEQUE|}'));
+  if Result = '' then
+    Result := Trim(LireDossierInstallationJson(
+      AddBackslash(DossierApplication) + NomFichierInstallation));
+  if Result = '' then
+    Result := Trim(GetPreviousData(ClePreviousData, ''));
+  if Result = '' then
+    Result := ExpandConstant('{userdocs}\bibliotheque_perso');
+end;
+
+// Message d'erreur si le dossier de la bibliothèque est refusé, sinon ''.
+function VerifierDossierBibliotheque(const Dossier, DossierApplication: String): String;
+var
+  Bibliotheque, Application: String;
+begin
+  Result := '';
+  Bibliotheque := Trim(Dossier);
+  if Bibliotheque = '' then
+  begin
+    Result := 'Choisissez le dossier de votre bibliothèque.';
+    Exit;
+  end;
+  // Chemin complet : lecteur (C:\…) ou chemin réseau (\\nas\partage\…).
+  if not (((Length(Bibliotheque) >= 3) and (Bibliotheque[2] = ':') and
+    (Bibliotheque[3] = '\')) or (Copy(Bibliotheque, 1, 2) = '\\')) then
+  begin
+    Result := 'Indiquez un chemin complet (par exemple D:\Bibliothèque ou ' +
+      '\\nas\partage\Bibliothèque).';
+    Exit;
+  end;
+  // Les chapitres ne vont pas dans le dossier du programme : il est remplacé
+  // à chaque mise à jour.
+  Bibliotheque := Lowercase(AddBackslash(Bibliotheque));
+  Application := Lowercase(AddBackslash(Trim(DossierApplication)));
+  if Copy(Bibliotheque, 1, Length(Application)) = Application then
+    Result := 'Le dossier de la bibliothèque ne peut pas se trouver dans le ' +
+      'dossier d''installation du programme. Choisissez un autre dossier.';
+end;
+
+procedure InitializeWizard;
+begin
+  PageBibliotheque := CreateInputDirPage(wpSelectDir,
+    'Dossier de votre bibliothèque',
+    'Où ranger les chapitres téléchargés ?',
+    'Les chapitres téléchargés pour la lecture hors-ligne (et les couvertures) ' +
+    'seront enregistrés dans ce dossier. Il peut se trouver sur un autre disque, ' +
+    'un disque réseau ou un NAS (par exemple \\nas\partage\Bibliothèque).' + #13#10#13#10 +
+    'Vous pourrez le changer plus tard dans les Paramètres de l''application.',
+    False, '');
+  PageBibliotheque.Add('');
+  // Le dossier d'installation proposé est déjà celui de l'installation
+  // précédente (UsePreviousAppDir) : on y relit installation.json.
+  PageBibliotheque.Values[0] := DossierBibliothequePropose(WizardForm.DirEdit.Text);
+
+  PageConservation := CreateOutputMsgPage(PageBibliotheque.ID,
+    'Vos données sont conservées',
+    'Désinstallation et mises à jour',
+    'La désinstallation de {#NomApplication} ne supprime jamais vos données :' + #13#10#13#10 +
+    '  - la base (titres, sources, listes, réglages) ;' + #13#10 +
+    '  - le dossier de votre bibliothèque (chapitres téléchargés).' + #13#10#13#10 +
+    'Seuls les fichiers du programme sont retirés. Pour mettre à jour, il suffit ' +
+    'de relancer un installateur plus récent : il reprend le même dossier ' +
+    'd''installation et le même dossier de bibliothèque, et ferme ' +
+    'l''application si elle est ouverte.');
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Erreur: String;
+begin
+  Result := True;
+  if CurPageID = PageBibliotheque.ID then
+  begin
+    Erreur := VerifierDossierBibliotheque(PageBibliotheque.Values[0], WizardDirValue);
+    if Erreur <> '' then
+    begin
+      // Aussi appelé en mode silencieux : SuppressibleMsgBox ne bloque pas
+      // avec /SUPPRESSMSGBOXES (l'installation s'arrête alors avec une erreur).
+      SuppressibleMsgBox(Erreur, mbError, MB_OK, IDOK);
+      Result := False;
+    end;
+  end;
+end;
+
+// Toujours appelé, y compris en mode silencieux : dernière vérification avant
+// de copier quoi que ce soit (une chaîne non vide annule l'installation).
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := VerifierDossierBibliotheque(PageBibliotheque.Values[0], WizardDirValue);
+end;
+
+// Écrit {app}\installation.json : {"dossierBibliotheque": "<chemin>"}, en
+// UTF-8 sans BOM (lu par jsonDecode côté Dart).
+procedure EcrireInstallationJson;
+var
+  Lignes: TArrayOfString;
+  Dossier: String;
+begin
+  Dossier := RemoveBackslashUnlessRoot(Trim(PageBibliotheque.Values[0]));
+  SetArrayLength(Lignes, 1);
+  Lignes[0] := '{"' + CleDossierBibliotheque + '": "' + EchapperJson(Dossier) + '"}';
+  if not SaveStringsToUTF8FileWithoutBOM(
+    ExpandConstant('{app}\' + NomFichierInstallation), Lignes, False) then
+    Log('Impossible d''écrire ' + NomFichierInstallation);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    EcrireInstallationJson;
+end;
+
+procedure RegisterPreviousData(PreviousDataKey: Integer);
+begin
+  SetPreviousData(PreviousDataKey, ClePreviousData,
+    RemoveBackslashUnlessRoot(Trim(PageBibliotheque.Values[0])));
+end;

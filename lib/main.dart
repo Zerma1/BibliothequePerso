@@ -8,6 +8,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert' show jsonDecode;
 import 'dart:io' show File, Platform;
 import 'dart:ui' show AppExitResponse;
 
@@ -88,6 +89,59 @@ Duration frequenceTacheAndroid(PlanificationMisesAJour planification) {
   return intervalle < frequenceMinimaleTacheAndroid
       ? frequenceMinimaleTacheAndroid
       : intervalle;
+}
+
+/// Fichier écrit par l'installateur Windows (`installateur/bibliotheque_perso.iss`)
+/// à côté de l'exécutable : `{"dossierBibliotheque": "<chemin choisi>"}`.
+const String nomFichierInstallation = 'installation.json';
+
+/// Clé du dossier de la bibliothèque (chapitres téléchargés) dans
+/// [nomFichierInstallation].
+const String cleDossierBibliothequeInstallation = 'dossierBibliotheque';
+
+/// Dossier de la bibliothèque choisi dans l'installateur Windows, ou `null`.
+///
+/// Lit [nomFichierInstallation] dans le dossier de l'exécutable
+/// ([cheminExecutable], par défaut `Platform.resolvedExecutable` ; les tests
+/// passent un chemin dans un dossier temporaire). Renvoie `null` si le
+/// fichier est absent (lancement depuis IntelliJ, archive .zip, Android,
+/// Linux), illisible ou sans chemin : l'application garde alors son réglage
+/// ou le dossier par défaut. Ne lève jamais : une erreur de lecture est
+/// seulement journalisée.
+///
+/// Ne valide pas le dossier (NAS éteint, droits) : c'est à l'appelant de le
+/// traiter comme un dossier choisi dans les Paramètres.
+Future<String?> chargerDossierBibliothequeInstallation({
+  String? cheminExecutable,
+}) async {
+  final fichier = File(
+    chemins.join(
+      chemins.dirname(cheminExecutable ?? Platform.resolvedExecutable),
+      nomFichierInstallation,
+    ),
+  );
+  try {
+    if (!await fichier.exists()) return null;
+    var texte = await fichier.readAsString();
+    // Fichier réenregistré à la main avec un éditeur qui ajoute un BOM UTF-8 :
+    // jsonDecode le refuserait.
+    if (texte.isNotEmpty && texte.codeUnitAt(0) == 0xFEFF) {
+      texte = texte.substring(1);
+    }
+    final donnees = jsonDecode(texte);
+    if (donnees is! Map<String, Object?>) return null;
+    final valeur = donnees[cleDossierBibliothequeInstallation];
+    if (valeur is! String) return null;
+    final propre = valeur.trim();
+    return propre.isEmpty ? null : propre;
+  } catch (erreur) {
+    Journal.actuel.avertissement(
+      CategorieJournal.demarrage,
+      'Fichier $nomFichierInstallation illisible : ignoré',
+      erreur: erreur,
+    );
+    return null;
+  }
 }
 
 /// Dépôts, client HTTP et services de l'application, construits sur une même
