@@ -1678,6 +1678,32 @@ class FauxServiceParametres implements ServiceParametres {
     );
   }
 
+  /// Thème « enregistré ».
+  ModeTheme modeTheme = ServiceParametres.modeThemeParDefaut;
+
+  @override
+  Future<ModeTheme> chargerModeTheme() async => modeTheme;
+
+  @override
+  Future<void> enregistrerModeTheme(ModeTheme mode) async {
+    modeTheme = mode;
+  }
+
+  /// Durée de conservation avant suppression « enregistrée ».
+  Duration delaiSuppression = ServiceParametres.delaiSuppressionParDefaut;
+
+  @override
+  Future<Duration> chargerDelaiSuppression() async => delaiSuppression;
+
+  @override
+  Future<void> enregistrerDelaiSuppression(Duration delai) async {
+    final heures = (delai.inMinutes / Duration.minutesPerHour).round().clamp(
+      ServiceParametres.delaiSuppressionMinimum.inHours,
+      ServiceParametres.delaiSuppressionMaximum.inHours,
+    );
+    delaiSuppression = Duration(hours: heures);
+  }
+
   /// Verrou de la file « enregistré ».
   VerrouTelechargement? verrou;
 
