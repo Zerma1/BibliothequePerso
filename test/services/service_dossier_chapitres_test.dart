@@ -1086,6 +1086,107 @@ void main() {
     });
   });
 
+  group("dossier choisi dans l'installateur Windows", () {
+    Future<void> appliquer(String? chemin) =>
+        ServiceDossierChapitres.appliquerDossierInstallation(
+          depotParametres,
+          chemin,
+          cheminDossierParDefaut: () async => dossierParDefaut,
+        );
+
+    Future<String?> reglage() =>
+        depotParametres.chargerTexte(ServiceParametres.cleDossierChapitres);
+
+    Future<String?> repere() => depotParametres.chargerTexte(
+      ServiceDossierChapitres.cleDossierInstallationApplique,
+    );
+
+    test("un dossier valide est enregistré avec son repère et sert au "
+        "démarrage", () async {
+      final nas = p.join(temporaire.path, 'bibliotheque');
+
+      await appliquer(nas);
+
+      expect(await reglage(), p.normalize(nas));
+      expect(await repere(), p.normalize(nas));
+      final stockage = await ServiceDossierChapitres.creerStockage(
+        depotParametres,
+      );
+      expect(stockage.estPersonnalise, isTrue);
+      expect(stockage.dossierRacine, p.normalize(nas));
+    });
+
+    test('sans fichier installation.json (chemin null ou vide), rien '
+        "n'est enregistré", () async {
+      await appliquer(null);
+      await appliquer('   ');
+
+      expect(await reglage(), isNull);
+      expect(await repere(), isNull);
+    });
+
+    test('un dossier déjà réglé par le client est gardé', () async {
+      final choisi = await preparerNas('choisi');
+      await depotParametres.enregistrerTexte(
+        ServiceParametres.cleDossierChapitres,
+        choisi,
+      );
+
+      await appliquer(p.join(temporaire.path, 'bibliotheque'));
+
+      expect(await reglage(), choisi);
+      expect(await repere(), isNull);
+    });
+
+    test('le dossier par défaut (autre casse, séparateur final) ne devient '
+        'pas un dossier personnalisé', () async {
+      await appliquer('${dossierParDefaut.toUpperCase()}${p.separator}');
+
+      expect(await reglage(), isNull);
+      expect(await repere(), isNull);
+    });
+
+    test('après un retour au dossier par défaut, le dossier de '
+        "l'installateur n'est pas réappliqué au démarrage suivant", () async {
+      final nas = p.join(temporaire.path, 'bibliotheque');
+      await appliquer(nas);
+      // « Revenir au dossier par défaut » efface le réglage.
+      await depotParametres.supprimer(ServiceParametres.cleDossierChapitres);
+
+      await appliquer('$nas${p.separator}');
+
+      expect(await reglage(), isNull);
+      expect(await repere(), p.normalize(nas));
+    });
+
+    test('un dossier refusé (NAS éteint) ne laisse rien, pas même le '
+        'repère, et est réessayé au démarrage suivant', () async {
+      final nas = p.join(temporaire.path, 'nas');
+      // Un fichier à la place du dossier : la validation le refuse.
+      await File(nas).writeAsString('pas un dossier');
+
+      await appliquer(nas);
+      expect(await reglage(), isNull);
+      expect(await repere(), isNull);
+
+      await File(nas).delete();
+      await appliquer(nas);
+      expect(await reglage(), p.normalize(nas));
+      expect(await repere(), p.normalize(nas));
+    });
+
+    test('une base illisible ne fait pas échouer le démarrage', () async {
+      await expectLater(
+        ServiceDossierChapitres.appliquerDossierInstallation(
+          _DepotParametresEnPanne(),
+          p.join(temporaire.path, 'bibliotheque'),
+          cheminDossierParDefaut: () async => dossierParDefaut,
+        ),
+        completes,
+      );
+    });
+  });
+
   group('messages pour l\'interface', () {
     test('un dossier accessible n\'affiche aucun bandeau', () {
       const acces = AccesDossierChapitres.accessible(
@@ -1132,6 +1233,14 @@ void main() {
       expect(avec.message, contains('3 fichier(s)'));
     });
   });
+}
+
+/// Dépôt des paramètres dont toute lecture échoue (base illisible).
+class _DepotParametresEnPanne implements DepotParametres {
+  // Toute méthode (chargerTexte, enregistrerTexte…) renvoie une erreur.
+  @override
+  Object? noSuchMethod(Invocation invocation) =>
+      Future<String?>.error(StateError('base illisible'));
 }
 
 /// Partage réseau instable : chaque archive est vue absente au premier

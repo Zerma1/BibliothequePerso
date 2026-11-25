@@ -392,6 +392,14 @@ Future<ServicesApplication> construireServices({
   try {
     dossierApplication =
         dossierTelechargements ?? await cheminParDefautDossierTelechargements();
+    // Dossier de bibliothèque choisi dans l'installateur Windows : appliqué
+    // une fois, au premier démarrage, s'il n'y a pas déjà de réglage.
+    if (dossierTelechargements == null && Platform.isWindows) {
+      await ServiceDossierChapitres.appliquerDossierInstallation(
+        DepotParametres(base),
+        await chargerDossierBibliothequeInstallation(),
+      );
+    }
     // Chapitres : dossier choisi par le client (Paramètres), sinon défaut.
     stockage = dossierTelechargements == null
         ? await ServiceDossierChapitres.creerStockage(DepotParametres(base))

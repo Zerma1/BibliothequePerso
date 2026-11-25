@@ -59,6 +59,110 @@ class ServiceDossierChapitres {
     );
   }
 
+  /// Clé (table `parametres`) : dossier de la bibliothèque choisi dans
+  /// l'installateur Windows et déjà appliqué par
+  /// [appliquerDossierInstallation].
+  // Repère séparé du réglage : si le client revient ensuite au dossier par
+  // défaut (réglage effacé), le même `installation.json` ne doit pas
+  // rechoisir le dossier de l'installateur au démarrage suivant.
+  static const String cleDossierInstallationApplique =
+      'installation.dossier_applique';
+
+  /// Applique au premier démarrage le dossier de la bibliothèque choisi dans
+  /// l'installateur Windows ([chemin], lu dans `installation.json`, `null`
+  /// s'il est absent ou invalide). À appeler **avant** [creerStockage].
+  ///
+  /// Le dossier n'est enregistré dans [ServiceParametres.cleDossierChapitres]
+  /// que si : aucun dossier n'est déjà réglé, [chemin] diffère du dossier
+  /// par défaut (sans tenir compte de la casse ni du séparateur final), il
+  /// n'a pas déjà été appliqué ([cleDossierInstallationApplique]) et
+  /// `StockageTelechargements.validerDossier` l'accepte. Le repère est alors
+  /// posé avec le réglage.
+  ///
+  /// Dossier refusé (NAS éteint, accès refusé…) : rien n'est enregistré, pas
+  /// même le repère, pour réessayer au prochain démarrage ; l'application
+  /// démarre sur le dossier par défaut. Ne lève jamais (un avertissement est
+  /// écrit dans le journal).
+  ///
+  /// [cheminDossierParDefaut] : remplacé dans les tests
+  /// (`cheminParDefautDossierTelechargements` sinon).
+  static Future<void> appliquerDossierInstallation(
+    DepotParametres depot,
+    String? chemin, {
+    Future<String> Function()? cheminDossierParDefaut,
+  }) async {
+    final demande = chemin?.trim() ?? '';
+    if (demande.isEmpty) return;
+    try {
+      final regle = await depot.chargerTexte(
+        ServiceParametres.cleDossierChapitres,
+      );
+      // Un dossier déjà réglé (par le client ou une installation
+      // précédente) l'emporte toujours sur l'installateur.
+      if ((regle?.trim() ?? '').isNotEmpty) return;
+      final parDefaut =
+          await (cheminDossierParDefaut ??
+              cheminParDefautDossierTelechargements)();
+      if (_memeCheminInstallation(demande, parDefaut)) return;
+      final applique = await depot.chargerTexte(cleDossierInstallationApplique);
+      if (applique != null && _memeCheminInstallation(demande, applique)) {
+        return;
+      }
+      final String valide;
+      try {
+        valide = await StockageTelechargements.validerDossier(demande);
+      } on ErreurStockage catch (erreur) {
+        // Repère volontairement non posé : le NAS était peut-être éteint,
+        // on réessaiera au prochain démarrage.
+        Journal.actuel.avertissement(
+          CategorieJournal.stockage,
+          "Dossier choisi à l'installation « $demande » refusé : dossier par "
+          'défaut gardé, nouvel essai au prochain démarrage',
+          erreur: erreur,
+        );
+        return;
+      }
+      // LIMITE : réglage et repère sont deux écritures séparées. Si la
+      // seconde échoue, le réglage suffit à ne plus rien appliquer aux
+      // démarrages suivants (dossier déjà réglé) ; seul le retour au
+      // dossier par défaut le réappliquerait une fois.
+      await depot.enregistrerTexte(
+        ServiceParametres.cleDossierChapitres,
+        valide,
+      );
+      await depot.enregistrerTexte(cleDossierInstallationApplique, valide);
+      Journal.actuel.info(
+        CategorieJournal.stockage,
+        "Dossier des chapitres choisi à l'installation appliqué : $valide",
+      );
+    } catch (erreur) {
+      // Base illisible ou autre imprévu : on démarre sur le réglage actuel
+      // plutôt que d'empêcher le démarrage.
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        "Dossier choisi à l'installation non appliqué",
+        erreur: erreur,
+      );
+    }
+  }
+
+  /// Comparaison des chemins de l'installateur : normalisés, sans séparateur
+  /// final et sans tenir compte de la casse (chemins Windows).
+  static bool _memeCheminInstallation(String a, String b) {
+    String propre(String chemin) {
+      var texte = chemins.normalize(chemin.trim()).toLowerCase();
+      while (texte.length > 1 &&
+          (texte.endsWith('/') || texte.endsWith(r'\')) &&
+          !texte.endsWith(r':\') &&
+          !texte.endsWith(':/')) {
+        texte = texte.substring(0, texte.length - 1);
+      }
+      return texte;
+    }
+
+    return propre(a) == propre(b);
+  }
+
   /// Prévient l'interface à chaque changement (accès au dossier, pause,
   /// file) : même flux que `ServiceTelechargement.changements`.
   Stream<void> get changements => _service.changements;
