@@ -144,6 +144,9 @@ void main() {
       serviceTelechargement: telechargement,
       depotParametres: depotParametres,
       cheminDossierParDefaut: () async => dossier.path,
+      // Jamais le vrai `emplacements.json` du poste (path_provider) : rien
+      // n'est écrit, pour ne pas ajouter de fichier au dossier des chapitres.
+      cheminFichierEmplacements: () async => null,
     );
     service = ServiceLectureWeb(
       depotChapitres: depotChapitres,

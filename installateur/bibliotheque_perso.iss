@@ -17,14 +17,22 @@
 ;   toujours conservée. Les chapitres téléchargés sont supprimés si le client
 ;   répond Oui (réponse par défaut ; en silencieux : supprimés sauf
 ;   /GARDERCHAPITRES). Seul le contenu propre à l'application est supprimé dans
-;   le dossier de installation.json : les sous-dossiers des types de titres
-;   (TypeTitre de lib/modeles/titre.dart) et le fichier repère
-;   .bibliotheque_perso (lib/donnees/constantes_donnees.dart), puis le dossier
-;   s'il est vide. Journaux, rapports et exports de ce dossier sont gardés,
-;   sauf confirmation (Non par défaut, jamais en silencieux).
-;   LIMITE : un dossier des chapitres changé dans l'application (réglage en
-;   base) n'est pas connu de l'installateur : ces chapitres ne sont pas
-;   supprimés.
+;   le dossier de installation.json : dans les sous-dossiers des types de
+;   titres (TypeTitre de lib/modeles/titre.dart), seulement les archives et
+;   couvertures écrites par l'application, puis le fichier repère
+;   .bibliotheque_perso et les dossiers devenus vides. Règles de sécurité
+;   (repère obligatoire hors de Documents\bibliotheque_perso, ni racine ni
+;   dossier connu, liens jamais suivis) : suppression_commune.iss.
+;   Journaux, rapports et exports (dans Documents\bibliotheque_perso
+;   seulement) sont gardés, sauf confirmation (Non par défaut, jamais en
+;   silencieux).
+;   Le dossier des chapitres choisi dans l'application (Paramètres > Dossier
+;   des chapitres) est lu dans emplacements.json (clé "dossierChapitres"),
+;   écrit par l'application dans le dossier de sa base :
+;   %APPDATA%\io.github.zerma1\bibliotheque_perso (getApplicationSupportDirectory,
+;   CompanyName et ProductName de windows\runner\Runner.rc). Il est traité de
+;   la même façon, en plus de celui de installation.json s'il est différent.
+;   Désinstallation complète (base comprise) : desinstallateur.iss.
 ;
 ; Paramètres de la ligne de commande (en plus de ceux d'Inno Setup) :
 ;   /BIBLIOTHEQUE="D:\Mes chapitres"   dossier de la bibliothèque (installation
@@ -48,7 +56,10 @@
 ;   ce dossier d'installation, ainsi que celle de
 ;   ...\Explorer\StartupApproved\Run (si aucune valeur Run ne reste).
 ; Essais seulement : /DIdApplication="{{…}" donne un autre AppId, pour ne pas
-; toucher à l'installation réelle du client.
+; toucher à l'installation réelle du client ; /DDossierBase="C:\essai\base"
+; donne un autre dossier de la base (où emplacements.json est lu) ;
+; /DNomEntreeDemarrage="Essai…" un autre nom de valeur Run ;
+; /DDossierDocuments="C:\essai\doc" un autre dossier Documents.
 
 #ifndef Version
   #error Version absente : lancer outils\construire_installateur.ps1, ou ISCC /DVersion=X.Y.Z
@@ -62,6 +73,17 @@
 
 #ifndef IdApplication
   #define IdApplication "{{827D980C-013C-4734-94F1-BB09CBAA7712}"
+#endif
+; Dossier de la base de l'application (emplacements.json).
+#ifndef DossierBase
+  #define DossierBase "{userappdata}\io.github.zerma1\bibliotheque_perso"
+#endif
+#ifndef NomEntreeDemarrage
+  #define NomEntreeDemarrage "Bibliotheque perso"
+#endif
+; Dossier Documents (dossier des chapitres par défaut ; suppression_commune.iss).
+#ifndef DossierDocuments
+  #define DossierDocuments "{userdocs}"
 #endif
 
 #define NomApplication "Bibliothèque perso"
@@ -134,15 +156,21 @@ Filename: "{app}\{#NomExecutable}"; Description: "Lancer {#NomApplication}"; Fla
 Type: files; Name: "{app}\installation.json"
 
 [Code]
+#include "suppression_commune.iss"
+
 const
   NomFichierInstallation = 'installation.json';
   CleDossierBibliotheque = 'dossierBibliotheque';
   // Mémorisé aussi dans les données d'Inno Setup (registre de l'utilisateur),
   // au cas où installation.json aurait disparu.
   ClePreviousData = 'DossierBibliotheque';
+  // Écrit par l'application dans le dossier de sa base : dossier des
+  // chapitres choisi dans Paramètres.
+  NomFichierEmplacements = 'emplacements.json';
+  CleDossierChapitres = 'dossierChapitres';
   // Démarrage avec Windows (nomEntreeDemarrageWindows, lib/main.dart ; paquet
   // launch_at_startup).
-  NomEntreeDemarrage = 'Bibliotheque perso';
+  NomEntreeDemarrage = '{#NomEntreeDemarrage}';
   CleDemarrageRun = 'Software\Microsoft\Windows\CurrentVersion\Run';
   CleDemarrageApprouve =
     'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run';
@@ -155,8 +183,9 @@ var
   // Figé dans PrepareToInstall (avant la copie des fichiers).
   MiseAJourEnCours: Boolean;
   // Désinstallation : décidés à l'étape usUninstall (installation.json encore
-  // présent), appliqués à l'étape usPostUninstall.
-  DossierChapitresDesinstallation: String;
+  // présent), appliqués à l'étape usPostUninstall. Un ou deux dossiers :
+  // installation.json et emplacements.json.
+  DossiersChapitresDesinstallation: TArrayOfString;
   SupprimerChapitres: Boolean;
   SupprimerDonneesApplication: Boolean;
 
@@ -181,12 +210,13 @@ begin
   end;
 end;
 
-// Lit la valeur de "dossierBibliotheque" dans un installation.json existant
-// (UTF-8, avec ou sans BOM). Renvoie '' si le fichier est absent ou illisible.
-function LireDossierInstallationJson(const Fichier: String): String;
+// Lit la valeur texte de "Cle" dans un fichier JSON simple (UTF-8, avec ou
+// sans BOM). Renvoie '' si le fichier est absent ou illisible, ou si la valeur
+// n'est pas une chaîne.
+function LireValeurJson(const Fichier, Cle: String): String;
 var
   Brut: AnsiString;
-  Texte, Cle, Valeur: String;
+  Texte, Motif, Valeur: String;
   P, I, Code: Integer;
   C: Char;
 begin
@@ -196,11 +226,11 @@ begin
   if not LoadStringFromFile(Fichier, Brut) then
     Exit;
   Texte := UTF8Decode(Brut);
-  Cle := '"' + CleDossierBibliotheque + '"';
-  P := Pos(Cle, Texte);
+  Motif := '"' + Cle + '"';
+  P := Pos(Motif, Texte);
   if P = 0 then
     Exit;
-  I := P + Length(Cle);
+  I := P + Length(Motif);
   while (I <= Length(Texte)) and ((Texte[I] = ' ') or (Texte[I] = #9) or
     (Texte[I] = #10) or (Texte[I] = #13) or (Texte[I] = ':')) do
     I := I + 1;
@@ -213,6 +243,11 @@ begin
     C := Texte[I];
     if C = '"' then
     begin
+      // Un caractère de contrôle (< 32) n'a rien à faire dans un chemin :
+      // valeur refusée.
+      for I := 1 to Length(Valeur) do
+        if Ord(Valeur[I]) < 32 then
+          Exit;
       Result := Valeur;
       Exit;
     end;
@@ -251,6 +286,12 @@ begin
       Valeur := Valeur + C;
     I := I + 1;
   end;
+end;
+
+// Lit la valeur de "dossierBibliotheque" dans un installation.json existant.
+function LireDossierInstallationJson(const Fichier: String): String;
+begin
+  Result := LireValeurJson(Fichier, CleDossierBibliotheque);
 end;
 
 // Dossier de la bibliothèque proposé : paramètre /BIBLIOTHEQUE=, sinon
@@ -326,8 +367,8 @@ begin
       'Elle vous demande si vos chapitres téléchargés doivent être supprimés ' +
       '(Oui par défaut). Dans le dossier de la bibliothèque, seuls les dossiers ' +
       'des chapitres de l''application sont alors supprimés ; vos autres ' +
-      'fichiers sont gardés. Les chapitres déplacés ailleurs depuis ' +
-      'l''application ne sont pas supprimés.' + #13#10#13#10 +
+      'fichiers sont gardés. Le dossier des chapitres choisi depuis ' +
+      'l''application est traité de la même façon.' + #13#10#13#10 +
       'Pour mettre à jour, il suffit ' +
       'de relancer un installateur plus récent : il remplace seulement les ' +
       'fichiers du programme, sans toucher à votre bibliothèque ni à ses ' +
@@ -548,38 +589,8 @@ end;
 // Désinstallation : suppression des chapitres téléchargés.
 // ---------------------------------------------------------------------------
 
-// Sous-dossiers propres à l'application dans le dossier des chapitres : un
-// par valeur de TypeTitre (lib/modeles/titre.dart, `type.name`). À tenir à
-// jour si un type est ajouté.
-procedure RemplirDossiersChapitres(var Noms: TArrayOfString);
-begin
-  SetArrayLength(Noms, 6);
-  Noms[0] := 'manga';
-  Noms[1] := 'manhwa';
-  Noms[2] := 'manhua';
-  Noms[3] := 'roman';
-  Noms[4] := 'livre';
-  Noms[5] := 'autre';
-end;
-
-// Données de l'application qui peuvent se trouver dans le même dossier quand
-// c'est le dossier par défaut (Documents\bibliotheque_perso) : journaux
-// (lib/donnees/journal_fichier.dart), rapports et exports
-// (lib/services/constantes_services.dart). Gardées par défaut.
-procedure RemplirDossiersDonneesApplication(var Noms: TArrayOfString);
-begin
-  SetArrayLength(Noms, 3);
-  Noms[0] := 'journaux';
-  Noms[1] := 'rapports';
-  Noms[2] := 'exports';
-end;
-
-// Fichier repère du dossier des chapitres (nomFichierMarqueurRacine,
-// lib/donnees/constantes_donnees.dart).
-function NomFichierRepere: String;
-begin
-  Result := '.bibliotheque_perso';
-end;
+// Listes des dossiers de l'application, repère et règles de sécurité :
+// suppression_commune.iss (inclus au début de la section [Code]).
 
 // Vrai si /Nom figure sur la ligne de commande (sans tenir compte de la casse).
 function ParametrePresent(const Nom: String): Boolean;
@@ -612,37 +623,28 @@ begin
     Result := RemoveBackslashUnlessRoot(Result);
 end;
 
-// Liste, séparée par des virgules, des noms de Noms présents dans Dossier.
-function SousDossiersPresents(const Dossier: String; const Noms: TArrayOfString): String;
-var
-  I: Integer;
+// Dossier des chapitres choisi dans l'application : emplacements.json du
+// dossier de la base, '' si absent.
+function DossierChapitresApplication: String;
 begin
-  Result := '';
-  for I := 0 to GetArrayLength(Noms) - 1 do
-    if DirExists(AddBackslash(Dossier) + Noms[I]) then
-    begin
-      if Result <> '' then
-        Result := Result + ', ';
-      Result := Result + Noms[I];
-    end;
+  Result := Trim(LireValeurJson(AddBackslash(ExpandConstant('{#DossierBase}')) +
+    NomFichierEmplacements, CleDossierChapitres));
+  if Result <> '' then
+    Result := RemoveBackslashUnlessRoot(Result);
 end;
 
-// Étape usUninstall : lit le dossier et pose les questions (pas en silencieux).
-procedure DeciderSuppressionChapitres;
+// Garde Dossier dans DossiersChapitresDesinstallation s'il est valable (même
+// contrôle qu'à l'installation, puis règles de suppression_commune.iss :
+// repère obligatoire hors du dossier par défaut, ni racine ni dossier connu),
+// joignable, contient des chapitres de l'application et n'y est pas déjà.
+// Complète Chapitres et Donnees (« dossier : noms » pour les questions).
+procedure RetenirDossierChapitres(const Dossier: String;
+  var Chapitres, Donnees: String);
 var
-  Dossier, Chapitres, Donnees: String;
+  Presents, Motif: String;
   Noms: TArrayOfString;
+  I, N: Integer;
 begin
-  SupprimerChapitres := False;
-  SupprimerDonneesApplication := False;
-  Dossier := DossierChapitresInstalle;
-  DossierChapitresDesinstallation := Dossier;
-  if ParametrePresent('GARDERCHAPITRES') then
-  begin
-    Log('Désinstallation : /GARDERCHAPITRES, chapitres gardés.');
-    Exit;
-  end;
-  // Même contrôle qu'à l'installation : chemin complet seulement.
   if (Dossier = '') or (VerifierDossierBibliotheque(Dossier,
     ExpandConstant('{app}')) <> '') then
   begin
@@ -650,21 +652,58 @@ begin
       Dossier + '), rien à supprimer.');
     Exit;
   end;
-  if not DirExists(Dossier) then
+  N := GetArrayLength(DossiersChapitresDesinstallation);
+  for I := 0 to N - 1 do
+    if CompareText(AddBackslash(DossiersChapitresDesinstallation[I]),
+      AddBackslash(Dossier)) = 0 then
+      Exit;
+  Motif := MotifRefusChapitres(Dossier, ExpandConstant('{app}'));
+  if Motif <> '' then
   begin
-    Log('Désinstallation : dossier des chapitres absent ou injoignable (' +
-      Dossier + '), rien à supprimer.');
+    Log('Désinstallation : dossier des chapitres gardé (' + Motif + ') : ' +
+      Dossier);
     Exit;
   end;
   RemplirDossiersChapitres(Noms);
-  Chapitres := SousDossiersPresents(Dossier, Noms);
-  if (Chapitres = '') and not FileExists(AddBackslash(Dossier) + NomFichierRepere) then
+  Presents := SousDossiersPresents(Dossier, Noms);
+  if (Presents = '') and not FileExists(AddBackslash(Dossier) + NomFichierRepere) then
   begin
     Log('Désinstallation : aucun chapitre dans ' + Dossier + '.');
     Exit;
   end;
-  RemplirDossiersDonneesApplication(Noms);
-  Donnees := SousDossiersPresents(Dossier, Noms);
+  SetArrayLength(DossiersChapitresDesinstallation, N + 1);
+  DossiersChapitresDesinstallation[N] := Dossier;
+  Chapitres := Chapitres + '  - ' + Dossier + #13#10;
+  // Journaux, rapports, exports : seulement dans le dossier par défaut.
+  if EstDossierParDefaut(Dossier) then
+  begin
+    RemplirDossiersDonneesApplication(Noms);
+    Presents := SousDossiersPresents(Dossier, Noms);
+    if Presents <> '' then
+      Donnees := Donnees + '  - ' + Dossier + ' : ' + Presents + #13#10;
+  end;
+end;
+
+// Étape usUninstall : lit les dossiers (installation.json, puis
+// emplacements.json) et pose les questions (pas en silencieux).
+procedure DeciderSuppressionChapitres;
+var
+  Chapitres, Donnees: String;
+begin
+  SupprimerChapitres := False;
+  SupprimerDonneesApplication := False;
+  SetArrayLength(DossiersChapitresDesinstallation, 0);
+  if ParametrePresent('GARDERCHAPITRES') then
+  begin
+    Log('Désinstallation : /GARDERCHAPITRES, chapitres gardés.');
+    Exit;
+  end;
+  Chapitres := '';
+  Donnees := '';
+  RetenirDossierChapitres(DossierChapitresInstalle, Chapitres, Donnees);
+  RetenirDossierChapitres(DossierChapitresApplication, Chapitres, Donnees);
+  if GetArrayLength(DossiersChapitresDesinstallation) = 0 then
+    Exit;
 
   if UninstallSilent then
   begin
@@ -674,68 +713,59 @@ begin
   end;
 
   SupprimerChapitres := MsgBox(
-    'Supprimer aussi vos chapitres téléchargés (dossier ' + Dossier + ') ?' + #13#10#13#10 +
-    'Oui : seuls les dossiers des chapitres de l''application (manga, manhwa, ' +
-    'manhua, roman, livre, autre) et le fichier repère ' + NomFichierRepere +
-    ' sont supprimés, puis le dossier s''il est vide. Vos autres fichiers de ce ' +
-    'dossier sont gardés.' + #13#10 +
+    'Supprimer aussi vos chapitres téléchargés ?' + #13#10 + Chapitres + #13#10 +
+    'Oui : seuls les chapitres et couvertures enregistrés par l''application ' +
+    '(dans manga, manhwa, manhua, roman, livre, autre) et le fichier repère ' +
+    NomFichierRepere + ' sont supprimés, puis les dossiers devenus vides. Vos ' +
+    'autres fichiers sont gardés.' + #13#10 +
     'Non : vos chapitres sont gardés ; une nouvelle installation les retrouvera.' + #13#10#13#10 +
-    'Les chapitres déplacés ailleurs depuis l''application (Paramètres > ' +
-    'Dossier des chapitres) ne sont pas supprimés. Votre base (titres, ' +
-    'sources, listes, réglages) est toujours conservée.',
+    'Votre base (titres, sources, listes, réglages) est toujours conservée.',
     mbConfirmation, MB_YESNO) = IDYES;
 
   if SupprimerChapitres and (Donnees <> '') then
     SupprimerDonneesApplication := MsgBox(
-      'Ce dossier contient aussi des données de l''application : ' + Donnees +
-      ' (journaux, rapports d''erreur, exports de la bibliothèque).' + #13#10#13#10 +
+      'Ces dossiers contiennent aussi des données de l''application (journaux, ' +
+      'rapports d''erreur, exports de la bibliothèque) :' + #13#10 + Donnees + #13#10 +
       'Les supprimer aussi ?' + #13#10#13#10 +
       'Non (par défaut) : ils sont gardés.',
       mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
 end;
 
-// Supprime Dossier\Nom (dossier) pour chaque nom présent ; journalise.
-procedure SupprimerSousDossiers(const Dossier: String; const Noms: TArrayOfString);
+// Étape usPostUninstall : applique la décision à un dossier (règles de
+// suppression_commune.iss, vérifiées de nouveau).
+procedure AppliquerSuppressionChapitresDossier(const Dossier: String);
 var
-  I: Integer;
-  Chemin: String;
+  Supprimes, Restes: Integer;
+  Motif: String;
 begin
-  for I := 0 to GetArrayLength(Noms) - 1 do
+  Motif := MotifRefusChapitres(Dossier, ExpandConstant('{app}'));
+  if Motif <> '' then
   begin
-    Chemin := AddBackslash(Dossier) + Noms[I];
-    if DirExists(Chemin) then
-    begin
-      if DelTree(Chemin, True, True, True) then
-        Log('Désinstallation : supprimé ' + Chemin)
-      else
-        Log('Désinstallation : suppression incomplète de ' + Chemin);
-    end;
+    Log('Désinstallation : dossier des chapitres gardé (' + Motif + ') : ' +
+      Dossier);
+    Exit;
   end;
+  Supprimes := 0;
+  Restes := 0;
+  SupprimerChapitresDossier(Dossier, SupprimerDonneesApplication, Supprimes,
+    Restes);
+  Log('Désinstallation : ' + IntToStr(Supprimes) + ' élément(s) supprimé(s), ' +
+    IntToStr(Restes) + ' gardé(s) dans ' + Dossier);
+  if DirExists(Dossier) then
+    Log('Désinstallation : dossier gardé (non vide ou lien) ' + Dossier)
+  else
+    Log('Désinstallation : dossier vide supprimé ' + Dossier);
 end;
 
-// Étape usPostUninstall : applique la décision.
+// Étape usPostUninstall : applique la décision à chaque dossier retenu.
 procedure AppliquerSuppressionChapitres;
 var
-  Dossier: String;
-  Noms: TArrayOfString;
+  I: Integer;
 begin
-  Dossier := DossierChapitresDesinstallation;
-  if not SupprimerChapitres or (Dossier = '') then
+  if not SupprimerChapitres then
     Exit;
-  RemplirDossiersChapitres(Noms);
-  SupprimerSousDossiers(Dossier, Noms);
-  if SupprimerDonneesApplication then
-  begin
-    RemplirDossiersDonneesApplication(Noms);
-    SupprimerSousDossiers(Dossier, Noms);
-  end;
-  if FileExists(AddBackslash(Dossier) + NomFichierRepere) then
-    DeleteFile(AddBackslash(Dossier) + NomFichierRepere);
-  // RemoveDir échoue sans rien supprimer si le dossier n'est pas vide.
-  if RemoveDir(Dossier) then
-    Log('Désinstallation : dossier vide supprimé ' + Dossier)
-  else
-    Log('Désinstallation : dossier gardé (non vide) ' + Dossier);
+  for I := 0 to GetArrayLength(DossiersChapitresDesinstallation) - 1 do
+    AppliquerSuppressionChapitresDossier(DossiersChapitresDesinstallation[I]);
 end;
 
 // Supprime le démarrage avec Windows de cette installation : la valeur Run

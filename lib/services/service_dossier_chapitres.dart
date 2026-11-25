@@ -26,18 +26,26 @@ class ServiceDossierChapitres {
   ///
   /// [cheminDossierParDefaut] : dossier par défaut de l'application
   /// (`cheminParDefautDossierTelechargements`, remplacé dans les tests).
+  ///
+  /// [cheminFichierEmplacements] : chemin du fichier `emplacements.json`
+  /// réécrit après chaque changement réussi ([ecrireEmplacements] ;
+  /// `cheminParDefautFichierEmplacements` sinon, remplacé dans les tests).
   ServiceDossierChapitres({
     required ServiceTelechargement serviceTelechargement,
     required DepotParametres depotParametres,
     Future<String> Function()? cheminDossierParDefaut,
+    Future<String?> Function()? cheminFichierEmplacements,
   }) : _service = serviceTelechargement,
        _depot = depotParametres,
        _cheminDossierParDefaut =
-           cheminDossierParDefaut ?? cheminParDefautDossierTelechargements;
+           cheminDossierParDefaut ?? cheminParDefautDossierTelechargements,
+       _cheminFichierEmplacements =
+           cheminFichierEmplacements ?? cheminParDefautFichierEmplacements;
 
   final ServiceTelechargement _service;
   final DepotParametres _depot;
   final Future<String> Function() _cheminDossierParDefaut;
+  final Future<String?> Function() _cheminFichierEmplacements;
 
   /// Changement de dossier en cours (un seul à la fois).
   Future<ResultatChangementDossier>? _changement;
@@ -51,12 +59,60 @@ class ServiceDossierChapitres {
   /// ([accesDossier]) prévient le client et rien n'est modifié en base. Une
   /// erreur de lecture de la base remonte : se rabattre sur le dossier par
   /// défaut ferait croire toutes les archives perdues.
+  ///
+  /// Le dossier obtenu est aussi écrit dans `emplacements.json`
+  /// ([ecrireEmplacements], sans jamais lever) pour le désinstalleur
+  /// Windows. [cheminFichierEmplacements] : chemin de ce fichier
+  /// (`cheminParDefautFichierEmplacements` sinon, remplacé dans les tests).
   static Future<StockageTelechargements> creerStockage(
-    DepotParametres depot,
-  ) async {
-    return StockageTelechargements.depuisReglage(
+    DepotParametres depot, {
+    Future<String?> Function()? cheminFichierEmplacements,
+  }) async {
+    final stockage = await StockageTelechargements.depuisReglage(
       await depot.chargerTexte(ServiceParametres.cleDossierChapitres),
     );
+    // Réécrit à chaque démarrage, pas seulement au changement : le fichier
+    // reste juste même s'il a été effacé, ou si le réglage a changé par un
+    // autre chemin (dossier de l'installateur appliqué juste avant, base
+    // restaurée, version antérieure à ce fichier).
+    await ecrireEmplacements(
+      stockage.dossierRacine,
+      cheminFichierEmplacements: cheminFichierEmplacements,
+    );
+    return stockage;
+  }
+
+  /// Écrit `emplacements.json` (`ecrireFichierEmplacements`) avec
+  /// [dossierChapitres], pour que le désinstalleur Windows sache quel
+  /// dossier de chapitres effacer : il ne sait pas lire la base SQLite où le
+  /// réglage est enregistré.
+  ///
+  /// [cheminFichierEmplacements] renvoie le chemin du fichier, ou `null` pour
+  /// ne rien écrire (Android) ; `cheminParDefautFichierEmplacements` par
+  /// défaut.
+  ///
+  /// Ne lève jamais : un échec (disque plein, droits, `path_provider`
+  /// indisponible) est seulement noté dans le journal. Le fichier ne sert
+  /// qu'à la désinstallation, il ne doit jamais empêcher le démarrage ni un
+  /// changement de dossier.
+  static Future<void> ecrireEmplacements(
+    String dossierChapitres, {
+    Future<String?> Function()? cheminFichierEmplacements,
+  }) async {
+    try {
+      final chemin =
+          await (cheminFichierEmplacements ??
+              cheminParDefautFichierEmplacements)();
+      if (chemin == null) return;
+      await ecrireFichierEmplacements(chemin, dossierChapitres);
+    } catch (erreur) {
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        'Fichier $nomFichierEmplacements non écrit : le désinstalleur ne '
+        'saura pas où sont les chapitres téléchargés',
+        erreur: erreur,
+      );
+    }
   }
 
   /// Clé (table `parametres`) : dossier de la bibliothèque choisi dans
@@ -537,6 +593,15 @@ class ServiceDossierChapitres {
       service._dossierChange = true;
       service._archivesDeplacees = deplacerArchives;
       reussi = true;
+      // Le désinstalleur doit effacer le dossier où les chapitres iront
+      // désormais, même avant le redémarrage qui l'applique. Ne lève jamais.
+      // LIMITE : sans déplacement des archives, les chapitres restés dans
+      // l'ancien dossier n'y figurent plus (le fichier ne porte qu'un
+      // dossier) : le désinstalleur les laissera.
+      await ecrireEmplacements(
+        valide,
+        cheminFichierEmplacements: _cheminFichierEmplacements,
+      );
       // Dossier de l'installateur en attente : le client a maintenant choisi
       // (en l'acceptant, ou en préférant un autre dossier), on ne le lui
       // repropose plus. Le changement est déjà fait : un échec ici est

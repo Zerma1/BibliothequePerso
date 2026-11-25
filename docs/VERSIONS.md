@@ -6,6 +6,20 @@
 > restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
 > chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
 
+## 0.3.2-test — version de test, Windows (2026-11-25)
+
+Contient la 0.3.1-test, plus :
+- **Désinstalleur complet** (`…-desinstallation.exe`, livré à côté de l'installateur) : supprime
+  tout ce que l'application a créé (programme, base, chapitres, journaux, rapports, exports,
+  données du navigateur intégré, démarrage avec Windows). Dans les dossiers choisis par vous,
+  seuls les dossiers de l'application sont supprimés ; vos autres fichiers sont gardés.
+  Confirmation Oui/Non (Non par défaut).
+- **Désinstallation normale** : supprime aussi les chapitres d'un dossier choisi dans
+  l'application (Paramètres → Dossier des chapitres), qui n'était pas connu jusqu'ici
+  (l'application l'écrit maintenant dans `emplacements.json`, à côté de la base).
+- Corrigé (retour Z6) : après « Quitter » depuis l'icône, l'application restait dans le
+  gestionnaire des tâches.
+
 ## 0.3.1-test — version de test, Windows (2026-11-25)
 
 Contient la 0.3.0-test, plus :

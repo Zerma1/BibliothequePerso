@@ -145,5 +145,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
 
   ::CoUninitialize();
+  // Fin immediate du processus (retour 0.3.1-test, Z6 : apres « Quitter », le
+  // processus restait dans le gestionnaire des taches). La fenetre et le
+  // moteur sont deja detruits et le journal vide ; un retour normal passerait
+  // par la liberation des bibliotheques (DllMain, destructeurs statiques), ou
+  // une bibliotheque native (cnativeapi.dll, icone de la zone de notification)
+  // peut bloquer indefiniment.
+  ::TerminateProcess(::GetCurrentProcess(), EXIT_SUCCESS);
   return EXIT_SUCCESS;
 }

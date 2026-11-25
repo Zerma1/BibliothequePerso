@@ -59,6 +59,9 @@ void main() {
       serviceTelechargement: telechargement,
       depotParametres: depotParametres,
       cheminDossierParDefaut: () async => dossierParDefaut,
+      // Jamais le vrai `emplacements.json` du poste (path_provider).
+      cheminFichierEmplacements: () async =>
+          p.join(temporaire.path, 'emplacements.json'),
     );
     etat = EtatDossierChapitres(dossiers);
   });
