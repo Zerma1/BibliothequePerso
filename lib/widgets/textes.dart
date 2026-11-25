@@ -1517,6 +1517,26 @@ abstract final class Textes {
       'ils seront supprimés à la fin du compte à rebours, sauf si vous les '
       'gardez.';
 
+  /// Bouton de l'intertitre des suppressions prévues : tout supprimer tout
+  /// de suite.
+  static const String supprimerToutesSuppressionsPrevues =
+      'Supprimer tous les chapitres à supprimer';
+
+  /// Titre du dialogue de confirmation de la suppression groupée.
+  static const String titreSupprimerToutesSuppressionsPrevues =
+      'Supprimer les chapitres prévus';
+
+  /// Question avant la suppression groupée des [nombre] chapitres prévus.
+  static String confirmationSupprimerToutesSuppressionsPrevues(int nombre) =>
+      'Supprimer définitivement $nombre chapitre(s) maintenant ?';
+
+  /// Résultat de la suppression groupée : [nombre] archives supprimées.
+  /// Un chapitre ouvert dans le lecteur est épargné (supprimé plus tard),
+  /// d'où un nombre parfois plus petit que celui demandé.
+  static String suppressionsPrevuesFaites(int nombre) => nombre == 0
+      ? 'Aucun chapitre supprimé.'
+      : '$nombre chapitre(s) supprimé(s).';
+
   /// Intertitre de la file de téléchargement.
   static const String sectionFile = 'File de téléchargement';
 

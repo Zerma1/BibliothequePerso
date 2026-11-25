@@ -5,6 +5,7 @@ import 'package:bibliotheque_perso/ecrans/ecran_telechargements.dart';
 import 'package:bibliotheque_perso/etat/etat_telechargements.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
 import 'package:bibliotheque_perso/modeles/telechargement.dart';
+import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -86,6 +87,88 @@ void main() {
     expect(find.text(Textes.sectionSuppressionsPrevues(1)), findsNothing);
   });
 
+  group('« Supprimer tous les chapitres à supprimer »', () {
+    setUp(() {
+      telechargement.planifierSuppressionDeTest(
+        2,
+        _maintenant.add(const Duration(hours: 8)),
+      );
+    });
+
+    testWidgets('annuler la confirmation ne supprime rien', (tester) async {
+      await afficher(tester);
+      expect(find.text(Textes.sectionSuppressionsPrevues(2)), findsOneWidget);
+
+      await tester.tap(find.text(Textes.supprimerToutesSuppressionsPrevues));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(Textes.confirmationSupprimerToutesSuppressionsPrevues(2)),
+        findsOneWidget,
+      );
+      await tester.tap(find.text(Textes.annuler));
+      await tester.pumpAndSettle();
+
+      expect(telechargement.journal, isNot(contains('supprimerToutes')));
+      expect(find.text(Textes.sectionSuppressionsPrevues(2)), findsOneWidget);
+    });
+
+    testWidgets('confirmer supprime tout et affiche le nombre supprimé', (
+      tester,
+    ) async {
+      await afficher(tester);
+
+      await tester.tap(find.text(Textes.supprimerToutesSuppressionsPrevues));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(Textes.supprimer));
+      await tester.pumpAndSettle();
+
+      expect(telechargement.journal, contains('supprimerToutes'));
+      expect(find.text(Textes.suppressionsPrevuesFaites(2)), findsOneWidget);
+      // Section vidée, bouton disparu.
+      expect(find.textContaining('Suppressions prévues'), findsNothing);
+      expect(
+        find.text(Textes.supprimerToutesSuppressionsPrevues),
+        findsNothing,
+      );
+    });
+
+    testWidgets('un refus du service (déplacement en cours) est affiché', (
+      tester,
+    ) async {
+      telechargement.erreurSuppression = const ErreurService(
+        'Les chapitres sont en cours de déplacement.',
+      );
+      await afficher(tester);
+
+      await tester.tap(find.text(Textes.supprimerToutesSuppressionsPrevues));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(Textes.supprimer));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('en cours de déplacement'), findsOneWidget);
+      expect(find.text(Textes.sectionSuppressionsPrevues(2)), findsOneWidget);
+    });
+
+    test("EtatTelechargements : un chapitre ouvert dans le lecteur est "
+        'épargné', () async {
+      telechargement.protegerChapitre(2);
+      final etat = EtatTelechargements(
+        telechargement,
+        bibliotheque,
+        controlerEcheances: false,
+        maintenant: () => _maintenant,
+      );
+      addTearDown(etat.dispose);
+      await etat.charger();
+
+      final resultat = await etat.supprimerToutesSuppressionsPrevues();
+
+      expect(resultat.estReussi, isTrue);
+      expect(resultat.donnee, 1);
+      expect(etat.suppressionsPrevues.map((e) => e.idChapitre), <int>[2]);
+    });
+  });
+
   testWidgets('repère « gardé » sur une ligne de la file', (tester) async {
     telechargement
       ..modifierLigne(2, StatutTelechargement.termine)
@@ -94,6 +177,8 @@ void main() {
     await afficher(tester, largeur: 1000);
 
     expect(find.text(Textes.sectionSuppressionsPrevues(1)), findsNothing);
+    // Sans suppression prévue, pas de bouton de suppression groupée.
+    expect(find.text(Textes.supprimerToutesSuppressionsPrevues), findsNothing);
     expect(find.text(Textes.garde), findsOneWidget);
     expect(find.byTooltip(Textes.infoGarde), findsOneWidget);
   });
