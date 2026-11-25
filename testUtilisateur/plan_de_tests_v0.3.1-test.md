@@ -45,3 +45,5 @@ Notez **OK**, **KO** (avec ce qui s'est passé) ou **non testé**. Joignez le jo
 
 ## Remarques libres
 
+pour la conneccion ssh au NAS
+conneccion ssh haker recement voir pour metre en place une defenceInDepth
