@@ -23,6 +23,19 @@ enum ModeTheme {
   sombre,
 }
 
+/// Lancement de l'application à l'ouverture de la session (Paramètres,
+/// ordinateur seulement).
+enum ModeDemarrage {
+  /// Pas de lancement automatique (par défaut).
+  desactive,
+
+  /// Lancement avec la fenêtre affichée.
+  pleineFenetre,
+
+  /// Lancement caché : seule l'icône de la zone de notification apparaît.
+  iconeMasquee,
+}
+
 /// Lecture et écriture des réglages, avec leurs valeurs par défaut.
 class ServiceParametres {
   /// Crée le service.
@@ -312,6 +325,49 @@ class ServiceParametres {
   Future<void> enregistrerModeTheme(ModeTheme mode) async {
     await _depot.enregistrerTexte(cleModeTheme, mode.name);
     _journaliser('thème : ${mode.name}');
+  }
+
+  // ---------------------------------------------------------- Démarrage
+
+  /// Clé : lancement à l'ouverture de la session, texte `desactive`,
+  /// `pleine_fenetre` ou `icone_masquee` (voir [ModeDemarrage]).
+  static const String cleModeDemarrage = 'mode_demarrage';
+
+  /// Lancement à l'ouverture de session tant que le client n'a rien choisi :
+  /// aucun (l'application ne s'inscrit pas au démarrage sans son accord).
+  static const ModeDemarrage modeDemarrageParDefaut = ModeDemarrage.desactive;
+
+  // Textes enregistrés, fixés à la main plutôt que dérivés de `name` : un
+  // renommage de l'énumération ne doit pas faire oublier le choix du client.
+  // Le `switch` exhaustif oblige à choisir un texte pour toute nouvelle
+  // valeur.
+  static String _texteModeDemarrage(ModeDemarrage mode) => switch (mode) {
+    ModeDemarrage.desactive => 'desactive',
+    ModeDemarrage.pleineFenetre => 'pleine_fenetre',
+    ModeDemarrage.iconeMasquee => 'icone_masquee',
+  };
+
+  /// Lancement à l'ouverture de session choisi par le client
+  /// ([modeDemarrageParDefaut] si rien n'est enregistré ou si la valeur est
+  /// inconnue).
+  ///
+  /// Ce service ne fait qu'enregistrer le choix : l'inscription réelle au
+  /// démarrage du système est faite par la plateforme (`main.dart`).
+  Future<ModeDemarrage> chargerModeDemarrage() async {
+    final texte = (await _depot.chargerTexte(cleModeDemarrage))?.trim();
+    for (final mode in ModeDemarrage.values) {
+      if (_texteModeDemarrage(mode) == texte) return mode;
+    }
+    // Valeur inconnue (base abîmée, écrite à la main) : désactivé plutôt
+    // qu'un lancement que le client n'aurait pas demandé.
+    return modeDemarrageParDefaut;
+  }
+
+  /// Enregistre le lancement à l'ouverture de session choisi par le client.
+  Future<void> enregistrerModeDemarrage(ModeDemarrage mode) async {
+    final texte = _texteModeDemarrage(mode);
+    await _depot.enregistrerTexte(cleModeDemarrage, texte);
+    _journaliser('démarrage avec la session : $texte');
   }
 
   // ------------------------------------- Durée de conservation avant suppression

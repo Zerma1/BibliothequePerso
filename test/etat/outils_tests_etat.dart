@@ -1708,6 +1708,17 @@ class FauxServiceParametres implements ServiceParametres {
     modeTheme = mode;
   }
 
+  /// Lancement à l'ouverture de session « enregistré ».
+  ModeDemarrage modeDemarrage = ServiceParametres.modeDemarrageParDefaut;
+
+  @override
+  Future<ModeDemarrage> chargerModeDemarrage() async => modeDemarrage;
+
+  @override
+  Future<void> enregistrerModeDemarrage(ModeDemarrage mode) async {
+    modeDemarrage = mode;
+  }
+
   /// Durée de conservation avant suppression « enregistrée ».
   Duration delaiSuppression = ServiceParametres.delaiSuppressionParDefaut;
 

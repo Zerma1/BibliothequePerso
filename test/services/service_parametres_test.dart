@@ -1,6 +1,7 @@
 // Réglages du client : valeurs par défaut, nettoyage et bornes (base en
 // mémoire).
 import 'package:bibliotheque_perso/donnees/depot_parametres.dart';
+import 'package:bibliotheque_perso/modeles/journal.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/services/politique_telechargement.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
@@ -105,6 +106,46 @@ void main() {
     test('une valeur inconnue écrite en base retombe sur le système', () async {
       await depot.enregistrerTexte(ServiceParametres.cleModeTheme, 'violet');
       expect(await parametres.chargerModeTheme(), ModeTheme.systeme);
+    });
+  });
+
+  group('démarrage avec la session', () {
+    test('est désactivé tant que rien n\'est choisi', () async {
+      expect(await parametres.chargerModeDemarrage(), ModeDemarrage.desactive);
+    });
+
+    test('se relit après enregistrement, sous le texte attendu', () async {
+      final attendus = <ModeDemarrage, String>{
+        ModeDemarrage.pleineFenetre: 'pleine_fenetre',
+        ModeDemarrage.iconeMasquee: 'icone_masquee',
+        ModeDemarrage.desactive: 'desactive',
+      };
+      for (final MapEntry(key: mode, value: texte) in attendus.entries) {
+        await parametres.enregistrerModeDemarrage(mode);
+        expect(await parametres.chargerModeDemarrage(), mode);
+        expect(await depot.chargerTexte('mode_demarrage'), texte);
+      }
+    });
+
+    test('une valeur inconnue écrite en base retombe sur désactivé', () async {
+      for (final texte in <String>['iconeMasquee', 'oui', '']) {
+        await depot.enregistrerTexte(ServiceParametres.cleModeDemarrage, texte);
+        expect(
+          await parametres.chargerModeDemarrage(),
+          ModeDemarrage.desactive,
+        );
+      }
+    });
+
+    test('le changement est noté dans le journal', () async {
+      final journal = JournalMemoire();
+      Journal.actuel = journal;
+      addTearDown(() => Journal.actuel = const JournalSilencieux());
+      await parametres.enregistrerModeDemarrage(ModeDemarrage.iconeMasquee);
+      expect(
+        journal.entrees.map((e) => e.message),
+        contains(contains('icone_masquee')),
+      );
     });
   });
 
