@@ -106,3 +106,21 @@ const String contenuMarqueurRacine =
 /// Préfixe du fichier d'essai écrit puis supprimé pour vérifier qu'un dossier
 /// candidat accepte l'écriture (`.essai_ecriture_<horodatage>`).
 const String prefixeFichierEssaiEcriture = '.essai_ecriture_';
+
+/// Nom du fichier qui indique au désinstalleur Windows où sont les chapitres
+/// téléchargés, écrit dans le dossier de la base de données
+/// (`fichier_emplacements.dart`).
+///
+/// NE PAS RENOMMER : le désinstalleur (`installateur/*.iss`) lit ce nom tel
+/// quel, et il ne sait pas lire la base SQLite où le réglage est enregistré.
+const String nomFichierEmplacements = 'emplacements.json';
+
+/// Clé du chemin absolu du dossier des chapitres dans
+/// [nomFichierEmplacements] : `{"dossierChapitres": "<chemin>"}`.
+///
+/// NE PAS RENOMMER : lue telle quelle par `installateur/*.iss`.
+const String cleDossierChapitresEmplacements = 'dossierChapitres';
+
+/// Suffixe du fichier temporaire écrit avant d'être renommé en
+/// [nomFichierEmplacements] (`emplacements.json.tmp`).
+const String suffixeFichierTemporaireEmplacements = '.tmp';

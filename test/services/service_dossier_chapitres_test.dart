@@ -51,6 +51,8 @@ void main() {
   late int nombreImagesDemandees;
   late Titre titre;
   late String dossierParDefaut;
+  // `emplacements.json` dans le dossier temporaire : jamais le vrai %APPDATA%.
+  late String cheminEmplacements;
   // Action lancée une fois, à la première demande du contenu d'un chapitre
   // (avant l'ouverture de l'archive).
   Future<void> Function()? avantContenu;
@@ -61,6 +63,7 @@ void main() {
     base = await ouvrirBaseDeTest();
     temporaire = await Directory.systemTemp.createTemp('dossier_chapitres');
     dossierParDefaut = p.join(temporaire.path, 'defaut');
+    cheminEmplacements = p.join(temporaire.path, 'appli', 'emplacements.json');
     requetes = <http.Request>[];
     nombreImagesDemandees = 0;
     avantContenu = null;
@@ -188,7 +191,27 @@ void main() {
         serviceTelechargement: service,
         depotParametres: depotParametres,
         cheminDossierParDefaut: () async => dossierParDefaut,
+        cheminFichierEmplacements: () async => cheminEmplacements,
       );
+
+  /// Stockage du démarrage ([ServiceDossierChapitres.creerStockage]), avec
+  /// `emplacements.json` écrit dans le dossier temporaire.
+  Future<StockageTelechargements> demarrerStockage() =>
+      ServiceDossierChapitres.creerStockage(
+        depotParametres,
+        cheminFichierEmplacements: () async => cheminEmplacements,
+      );
+
+  /// Dossier lu dans `emplacements.json`, comme le désinstalleur, ou `null`
+  /// si le fichier n'existe pas.
+  Future<String?> lireEmplacements() async {
+    final fichier = File(cheminEmplacements);
+    if (!await fichier.exists()) return null;
+    final donnees = jsonDecode(
+      utf8.decode(await fichier.readAsBytes()),
+    ) as Map<String, Object?>;
+    return donnees['dossierChapitres'] as String?;
+  }
 
   /// Dossier « NAS » accepté par la validation (fichier repère écrit).
   Future<String> preparerNas([String nom = 'nas']) =>
@@ -446,9 +469,7 @@ void main() {
       );
 
       // Prochain démarrage : le stockage suit le réglage.
-      final apres = await ServiceDossierChapitres.creerStockage(
-        depotParametres,
-      );
+      final apres = await demarrerStockage();
       expect(apres.estPersonnalise, isTrue);
       expect(apres.dossierRacine, p.normalize(nouveau));
       final redemarre = creerService(apres, identifiant: 'redemarre');
@@ -1123,9 +1144,7 @@ void main() {
       expect(await File(cheminArchive(ancien, nomConflit)).exists(), isTrue);
 
       // Prochain démarrage : le retéléchargement choisit un nom libre.
-      final apres = await ServiceDossierChapitres.creerStockage(
-        depotParametres,
-      );
+      final apres = await demarrerStockage();
       final redemarre = creerService(apres, identifiant: 'redemarre');
       await redemarre.telechargerChapitre(premier.id!);
       await redemarre.lancerTraitement();
@@ -1193,9 +1212,7 @@ void main() {
 
       expect(await reglage(), p.normalize(nas));
       expect(await repere(), p.normalize(nas));
-      final stockage = await ServiceDossierChapitres.creerStockage(
-        depotParametres,
-      );
+      final stockage = await demarrerStockage();
       expect(stockage.estPersonnalise, isTrue);
       expect(stockage.dossierRacine, p.normalize(nas));
     });
@@ -1395,6 +1412,163 @@ void main() {
         ),
         completes,
       );
+    });
+  });
+
+  group('fichier emplacements.json pour le désinstalleur', () {
+    test('le démarrage écrit le dossier choisi, en JSON UTF-8 sans BOM, sans '
+        'laisser de fichier temporaire', () async {
+      final nas = await preparerNas();
+      await stockageNas(nas);
+
+      final stockage = await demarrerStockage();
+
+      expect(stockage.dossierRacine, p.normalize(nas));
+      final octets = await File(cheminEmplacements).readAsBytes();
+      expect(octets.take(3), isNot(<int>[0xEF, 0xBB, 0xBF]));
+      expect(
+        utf8.decode(octets),
+        jsonEncode(<String, String>{'dossierChapitres': p.normalize(nas)}),
+      );
+      expect(await lireEmplacements(), p.normalize(nas));
+      expect(await File('$cheminEmplacements.tmp').exists(), isFalse);
+    });
+
+    test('un NAS éteint au démarrage est quand même noté comme dossier des '
+        'chapitres', () async {
+      final nas = await preparerNas();
+      await stockageNas(nas);
+      await eteindre(nas);
+
+      await demarrerStockage();
+
+      expect(await lireEmplacements(), p.normalize(nas));
+    });
+
+    test('un chemin avec accents, espaces et antislashs est relu tel quel '
+        'après décodage JSON', () async {
+      final dossier = p.join(temporaire.path, 'Bibliothèque perso', r'a\b');
+
+      await ServiceDossierChapitres.ecrireEmplacements(
+        dossier,
+        cheminFichierEmplacements: () async => cheminEmplacements,
+      );
+
+      expect(await lireEmplacements(), p.normalize(dossier));
+    });
+
+    test("l'ancien fichier est remplacé à chaque écriture", () async {
+      await ServiceDossierChapitres.ecrireEmplacements(
+        p.join(temporaire.path, 'premier'),
+        cheminFichierEmplacements: () async => cheminEmplacements,
+      );
+      await ServiceDossierChapitres.ecrireEmplacements(
+        p.join(temporaire.path, 'second'),
+        cheminFichierEmplacements: () async => cheminEmplacements,
+      );
+
+      expect(await lireEmplacements(), p.join(temporaire.path, 'second'));
+    });
+
+    test("un fichier impossible à écrire n'empêche ni le démarrage ni le "
+        'changement de dossier', () async {
+      // Le dossier parent prévu est un fichier : création impossible.
+      final bloquant = File(p.join(temporaire.path, 'appli'));
+      await bloquant.writeAsString('pas un dossier');
+      final nas = await preparerNas();
+      await stockageNas(nas);
+
+      final stockage = await demarrerStockage();
+      expect(stockage.dossierRacine, p.normalize(nas));
+      await expectLater(
+        ServiceDossierChapitres.ecrireEmplacements(
+          nas,
+          cheminFichierEmplacements: () async =>
+              throw StateError('path_provider absent'),
+        ),
+        completes,
+      );
+
+      final dossiers = creerDossiers(creerService(stockage));
+      final resultat = await dossiers.changerDossierChapitres(
+        null,
+        deplacerArchives: false,
+      );
+      expect(resultat.dossierChoisi, isNull);
+      expect(await dossiers.chargerDossierChoisi(), isNull);
+      expect(await bloquant.readAsString(), 'pas un dossier');
+    });
+
+    test("sans chemin (Android), aucun fichier n'est écrit", () async {
+      await ServiceDossierChapitres.ecrireEmplacements(
+        p.join(temporaire.path, 'chapitres'),
+        cheminFichierEmplacements: () async => null,
+      );
+
+      expect(await Directory(p.dirname(cheminEmplacements)).exists(), isFalse);
+    });
+
+    test('un changement réussi note le nouveau dossier, avec ou sans '
+        'déplacement des archives', () async {
+      final ancien = p.join(temporaire.path, 'ancien');
+      final stockage = StockageTelechargements(ancien);
+      await ecrireArchive(stockage, await chapitre(1));
+      final nouveau = p.join(temporaire.path, 'nouveau');
+
+      final dossiers = creerDossiers(creerService(stockage));
+      await dossiers.changerDossierChapitres(nouveau);
+
+      expect(await lireEmplacements(), p.normalize(nouveau));
+
+      // Sans déplacement (nouvelle session) : même règle.
+      final autre = p.join(temporaire.path, 'autre');
+      final suivants = creerDossiers(
+        creerService(StockageTelechargements(ancien), identifiant: 'suivant'),
+      );
+      await suivants.changerDossierChapitres(autre, deplacerArchives: false);
+
+      expect(await lireEmplacements(), p.normalize(autre));
+    });
+
+    test(
+      'le retour au dossier par défaut note le dossier par défaut',
+      () async {
+        final nas = await preparerNas();
+        final dossiers = creerDossiers(creerService(await stockageNas(nas)));
+
+        await dossiers.changerDossierChapitres(null, deplacerArchives: false);
+
+        expect(await lireEmplacements(), p.normalize(dossierParDefaut));
+      },
+    );
+
+    test("un changement refusé ne modifie pas le fichier", () async {
+      final nas = await preparerNas();
+      final stockage = await stockageNas(nas);
+      await demarrerStockage();
+      final dossiers = creerDossiers(creerService(stockage));
+
+      await expectLater(
+        dossiers.changerDossierChapitres(p.join('relatif', 'dossier')),
+        throwsA(isA<ErreurService>()),
+      );
+
+      expect(await lireEmplacements(), p.normalize(nas));
+    });
+
+    test("le dossier de l'installateur appliqué au premier démarrage est "
+        'celui noté dans le fichier', () async {
+      final nas = p.join(temporaire.path, 'bibliotheque');
+      await ServiceDossierChapitres.appliquerDossierInstallation(
+        depotParametres,
+        nas,
+        depotChapitres: depotChapitres,
+        cheminDossierParDefaut: () async => dossierParDefaut,
+      );
+
+      await demarrerStockage();
+
+      expect(await lireEmplacements(), p.normalize(nas));
     });
   });
 

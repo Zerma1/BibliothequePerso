@@ -3,8 +3,11 @@
 #include <flutter/method_result_functions.h>
 #include <flutter/standard_method_codec.h>
 
+#include <chrono>
+#include <cstdlib>
 #include <optional>
 #include <string>
+#include <thread>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -21,6 +24,10 @@ constexpr char kMethodeDemanderFermeture[] = "demanderFermeture";
 // ferme quand meme (Dart attend lui-meme au plus 2 s l'ecriture du journal).
 constexpr UINT_PTR kMinuteurFermeture = 0xB1B1;
 constexpr UINT kDelaiMaxFermetureMs = 5000;
+
+// Fermeture confirmee : delai maximal avant que le processus soit termine de
+// force s'il ne s'est pas arrete tout seul (voir FermerMaintenant).
+constexpr int kDelaiMaxFinProcessusMs = 5000;
 
 // Methodes appelees par Dart (zone de notification, lib/main.dart) :
 // cacher la fenetre (croix), l'afficher (clic sur l'icone, menu « Ouvrir ») et
@@ -103,8 +110,10 @@ void FlutterWindow::OnDestroy() {
 
 void FlutterWindow::DemanderFermeture(HWND hwnd) {
   if (fermeture_en_cours_) {
-    // Deuxieme clic sur la croix pendant l'attente : on ferme sans attendre.
-    FermerMaintenant(hwnd);
+    // Deuxieme clic sur la croix (ou Alt+F4) pendant l'attente : ignore. Dart
+    // peut encore repondre « cancel » (cacher dans la zone de notification)
+    // ou etre en train de vider le journal ; le minuteur de securite couvre
+    // un Dart qui ne repond pas.
     return;
   }
   if (!canal_fenetre_) {
@@ -193,6 +202,18 @@ void FlutterWindow::TraiterAppelDart(
 
 void FlutterWindow::FermerMaintenant(HWND hwnd) {
   fermeture_en_cours_ = false;
+  if (!fermeture_confirmee_) {
+    // Filet de securite (retour 0.3.1-test, Z6 : apres « Quitter », le
+    // processus restait dans le gestionnaire des taches). La fermeture est
+    // decidee et le journal deja vide : si le processus n'a pas fini dans le
+    // delai (arret du moteur ou d'une bibliotheque native bloque, par exemple
+    // cnativeapi.dll de l'icone de la zone de notification), il est termine.
+    std::thread([]() {
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(kDelaiMaxFinProcessusMs));
+      ::TerminateProcess(::GetCurrentProcess(), EXIT_SUCCESS);
+    }).detach();
+  }
   fermeture_confirmee_ = true;
   ::KillTimer(hwnd, kMinuteurFermeture);
   ::PostMessage(hwnd, WM_CLOSE, 0, 0);
@@ -213,8 +234,13 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     return 0;
   }
   if (message == WM_TIMER && wparam == kMinuteurFermeture) {
-    // Pas de reponse de Dart a temps : on ferme quand meme.
-    FermerMaintenant(hwnd);
+    // Pas de reponse de Dart a temps : on ferme quand meme. KillTimer ne
+    // retire pas un WM_TIMER deja en file : si Dart a repondu « cancel »
+    // entre-temps, la fenetre doit rester.
+    ::KillTimer(hwnd, kMinuteurFermeture);
+    if (fermeture_en_cours_) {
+      FermerMaintenant(hwnd);
+    }
     return 0;
   }
   if (message_afficher_ != 0 && message == message_afficher_) {
