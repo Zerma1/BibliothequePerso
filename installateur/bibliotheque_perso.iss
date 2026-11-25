@@ -32,7 +32,21 @@
 ;                                      ignoré lors d'une mise à jour.
 ;   /GARDERCHAPITRES                   désinstallation : garde les chapitres
 ;                                      téléchargés (pas de question).
-; Mise à jour silencieuse avec l'application ouverte : ajouter /CLOSEAPPLICATIONS.
+;
+; Application ouverte (2026-11-25) : elle se cache dans la zone de notification
+; au lieu de se fermer et refuse donc WM_CLOSE ; le Restart Manager
+; (CloseApplications) ne parvient pas à l'arrêter (essai : abandon après 30 s).
+; L'installation, la mise à jour et la désinstallation arrêtent donc elles-mêmes
+; le processus bibliotheque_perso.exe lancé depuis le dossier d'installation,
+; et lui seul (chemin complet comparé : une autre copie, par exemple une
+; version de développement, n'est jamais touchée). Avec l'interface, le client
+; est d'abord prévenu (Non = annuler, pour quitter lui-même par l'icône) ; en
+; silencieux, l'arrêt est fait sans question.
+; - Désinstallation : la valeur « Bibliotheque perso » du démarrage avec Windows
+;   (HKCU\...\CurrentVersion\Run, écrite par lib/main.dart,
+;   appliquerDemarrageAvecWindows) est supprimée si elle lance l'exécutable de
+;   ce dossier d'installation, ainsi que celle de
+;   ...\Explorer\StartupApproved\Run (si aucune valeur Run ne reste).
 ; Essais seulement : /DIdApplication="{{…}" donne un autre AppId, pour ne pas
 ; toucher à l'installation réelle du client.
 
@@ -75,6 +89,9 @@ DisableProgramGroupPage=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ; Mise à jour : ferme l'application si elle utilise les fichiers à remplacer.
+; L'application elle-même est d'abord arrêtée dans PrepareToInstall (section
+; [Code], FermerApplication) : cachée dans la zone de notification, elle ne
+; répond pas au Restart Manager. Celui-ci reste pour les autres programmes.
 CloseApplications=yes
 CloseApplicationsFilter=*.exe,*.dll
 RestartApplications=no
@@ -123,6 +140,14 @@ const
   // Mémorisé aussi dans les données d'Inno Setup (registre de l'utilisateur),
   // au cas où installation.json aurait disparu.
   ClePreviousData = 'DossierBibliotheque';
+  // Démarrage avec Windows (nomEntreeDemarrageWindows, lib/main.dart ; paquet
+  // launch_at_startup).
+  NomEntreeDemarrage = 'Bibliotheque perso';
+  CleDemarrageRun = 'Software\Microsoft\Windows\CurrentVersion\Run';
+  CleDemarrageApprouve =
+    'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run';
+  // Attente de la fin des processus arrêtés (pas de 250 ms).
+  AttenteArretMaxMs = 15000;
 
 var
   PageBibliotheque: TInputDirWizardPage;
@@ -369,11 +394,107 @@ begin
   end;
 end;
 
+// ---------------------------------------------------------------------------
+// Application ouverte : arrêt avant installation, mise à jour ou
+// désinstallation (voir l'en-tête).
+// ---------------------------------------------------------------------------
+
+// Nombre de processus {#NomExecutable} dont le chemin complet est Exe (casse
+// ignorée) ; si Arreter, chacun est arrêté (Win32_Process.Terminate). Les
+// processus d'un autre chemin ne sont jamais touchés. -1 si WMI est
+// indisponible (le Restart Manager reste alors seul).
+function ProcessusApplication(const Exe: String; const Arreter: Boolean): Integer;
+var
+  Localisateur, Service, Liste, Element: Variant;
+  I, Total: Integer;
+  Chemin: String;
+begin
+  Result := 0;
+  try
+    Localisateur := CreateOleObject('WbemScripting.SWbemLocator');
+    Service := Localisateur.ConnectServer('.', 'root\CIMV2');
+    Liste := Service.ExecQuery(
+      'SELECT * FROM Win32_Process WHERE Name = ''{#NomExecutable}''');
+    Total := Liste.Count;
+    for I := 0 to Total - 1 do
+    begin
+      Element := Liste.ItemIndex(I);
+      // Chemin illisible (processus d'un autre utilisateur) : pas le nôtre.
+      if not VarIsNull(Element.ExecutablePath) then
+      begin
+        Chemin := Element.ExecutablePath;
+        if CompareText(Chemin, Exe) = 0 then
+        begin
+          Result := Result + 1;
+          if Arreter then
+          begin
+            Log('Arrêt du processus ' + IntToStr(Element.ProcessId) + ' (' +
+              Chemin + ').');
+            Element.Terminate();
+          end;
+        end;
+      end;
+    end;
+  except
+    Log('Recherche des processus impossible (WMI) : ' + GetExceptionMessage);
+    Result := -1;
+  end;
+end;
+
+// Arrête l'application lancée depuis Exe, après accord du client si Demander
+// (Oui par défaut avec /SUPPRESSMSGBOXES). Renvoie '' si elle n'est pas (ou
+// plus) ouverte, sinon le message d'erreur (refus du client ou échec).
+// Action : « l'installation » ou « la désinstallation ».
+function FermerApplication(const Exe, Action: String; const Demander: Boolean): String;
+var
+  Attente: Integer;
+begin
+  Result := '';
+  if ProcessusApplication(Exe, False) <= 0 then
+    Exit;
+  if Demander and (SuppressibleMsgBox(
+    '{#NomApplication} est ouverte, peut-être seulement dans la zone de ' +
+    'notification (icône près de l''horloge). Elle doit être fermée pour ' +
+    'continuer ' + Action + '.' + #13#10#13#10 +
+    'Oui : la fermer maintenant. Un téléchargement en cours sera interrompu.' + #13#10 +
+    'Non : annuler. Vous pouvez la quitter vous-même (clic droit sur son ' +
+    'icône > Quitter), puis relancer ' + Action + '.',
+    mbConfirmation, MB_YESNO, IDYES) <> IDYES) then
+  begin
+    Result := '{#NomApplication} est encore ouverte : quittez-la (clic droit ' +
+      'sur son icône dans la zone de notification > Quitter), puis relancez ' +
+      Action + '.';
+    Exit;
+  end;
+  ProcessusApplication(Exe, True);
+  Attente := 0;
+  while (ProcessusApplication(Exe, False) > 0) and (Attente < AttenteArretMaxMs) do
+  begin
+    Sleep(250);
+    Attente := Attente + 250;
+  end;
+  if ProcessusApplication(Exe, False) > 0 then
+    Result := 'Impossible de fermer {#NomApplication}. Quittez-la (clic droit ' +
+      'sur son icône dans la zone de notification > Quitter), puis relancez ' +
+      Action + '.'
+  else
+  begin
+    Log('Application arrêtée : ' + Exe);
+    // Le temps que Windows libère les fichiers (vues web comprises).
+    Sleep(1000);
+  end;
+end;
+
 // Toujours appelé, y compris en mode silencieux : dernière vérification avant
 // de copier quoi que ce soit (une chaîne non vide annule l'installation).
 // Le type d'installation est figé ici, avant la copie des fichiers.
+// Appelé avant la recherche des fichiers utilisés (Restart Manager).
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
+  Result := FermerApplication(AddBackslash(WizardDirValue) + '{#NomExecutable}',
+    'l''installation', not WizardSilent);
+  if Result <> '' then
+    Exit;
   MiseAJourEnCours := EstMiseAJour;
   if MiseAJourEnCours then
   begin
@@ -617,10 +738,74 @@ begin
     Log('Désinstallation : dossier gardé (non vide) ' + Dossier);
 end;
 
+// Supprime le démarrage avec Windows de cette installation : la valeur Run
+// seulement si elle lance l'exécutable de {app} (une autre copie garde la
+// sienne), puis la valeur StartupApproved\Run si aucune valeur Run ne reste.
+procedure SupprimerDemarrageAvecWindows;
+var
+  Commande, Exe: String;
+begin
+  Exe := ExpandConstant('{app}\{#NomExecutable}');
+  if RegQueryStringValue(HKCU, CleDemarrageRun, NomEntreeDemarrage, Commande) then
+  begin
+    if Pos(Lowercase(Exe), Lowercase(Commande)) = 0 then
+    begin
+      Log('Désinstallation : démarrage avec Windows d''une autre copie, gardé (' +
+        Commande + ').');
+      Exit;
+    end;
+    if RegDeleteValue(HKCU, CleDemarrageRun, NomEntreeDemarrage) then
+      Log('Désinstallation : démarrage avec Windows supprimé (Run).')
+    else
+      Log('Désinstallation : suppression impossible de la valeur Run.');
+  end;
+  if not RegValueExists(HKCU, CleDemarrageRun, NomEntreeDemarrage) and
+    RegValueExists(HKCU, CleDemarrageApprouve, NomEntreeDemarrage) then
+  begin
+    if RegDeleteValue(HKCU, CleDemarrageApprouve, NomEntreeDemarrage) then
+      Log('Désinstallation : démarrage avec Windows supprimé (StartupApproved).')
+    else
+      Log('Désinstallation : suppression impossible de la valeur StartupApproved.');
+  end;
+end;
+
+// Avant la confirmation : si l'application est ouverte, le client accepte
+// qu'elle soit fermée (arrêt à l'étape usUninstall, après la confirmation) ou
+// annule. En silencieux : pas de question.
+function InitializeUninstall: Boolean;
+begin
+  Result := True;
+  if UninstallSilent then
+    Exit;
+  if ProcessusApplication(ExpandConstant('{app}\{#NomExecutable}'), False) <= 0 then
+    Exit;
+  if SuppressibleMsgBox(
+    '{#NomApplication} est ouverte, peut-être seulement dans la zone de ' +
+    'notification (icône près de l''horloge). Elle sera fermée pendant la ' +
+    'désinstallation.' + #13#10#13#10 +
+    'Oui : continuer. Un téléchargement en cours sera interrompu.' + #13#10 +
+    'Non : annuler. Vous pouvez la quitter vous-même (clic droit sur son ' +
+    'icône > Quitter), puis relancer la désinstallation.',
+    mbConfirmation, MB_YESNO, IDYES) <> IDYES then
+    Result := False;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Erreur: String;
 begin
   if CurUninstallStep = usUninstall then
-    DeciderSuppressionChapitres
+  begin
+    // Accord déjà donné (InitializeUninstall) ou désinstallation silencieuse.
+    Erreur := FermerApplication(ExpandConstant('{app}\{#NomExecutable}'),
+      'la désinstallation', False);
+    if Erreur <> '' then
+      Log('Désinstallation : ' + Erreur);
+    DeciderSuppressionChapitres;
+  end
   else if CurUninstallStep = usPostUninstall then
+  begin
+    SupprimerDemarrageAvecWindows;
     AppliquerSuppressionChapitres;
+  end;
 end;
