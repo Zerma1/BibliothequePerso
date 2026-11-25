@@ -264,6 +264,7 @@ void main() {
           Textes.confirmationPassageLienSeul(
             nombreNonLusRetires: 1,
             nombreTelecharges: 0,
+            delaiSuppression: const Duration(hours: 24),
           ),
         ),
         findsOneWidget,

@@ -80,15 +80,19 @@ void main() {
       expect(etat.estParDefaut, isFalse);
     });
 
-    test('+ / − modifient le brouillon, bornés entre 0 et le maximum', () {
+    test('+ / − modifient le brouillon, bornés entre le minimum de la '
+        'limite et le maximum', () {
       etat.ajouter(LimiteTelechargement.suivisApres, 1);
       expect(etat.valeur(LimiteTelechargement.suivisApres), 6);
       expect(etat.estModifie, isTrue);
       // Rien n'est écrit avant « Enregistrer ».
       expect(parametres.nombreEnregistrements, 0);
 
+      // « avant » des suivis : 1 au moins, comme dans le service.
       etat.modifier(LimiteTelechargement.suivisAvant, -4);
-      expect(etat.valeur(LimiteTelechargement.suivisAvant), 0);
+      expect(etat.valeur(LimiteTelechargement.suivisAvant), 1);
+      etat.modifier(LimiteTelechargement.favorisLusConserves, -4);
+      expect(etat.valeur(LimiteTelechargement.favorisLusConserves), 0);
       etat.modifier(LimiteTelechargement.suivisAvant, 100000);
       expect(
         etat.valeur(LimiteTelechargement.suivisAvant),

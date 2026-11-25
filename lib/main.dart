@@ -44,6 +44,8 @@ import 'etat/etat_dossier_chapitres.dart';
 import 'etat/etat_couvertures.dart';
 import 'etat/etat_mises_a_jour.dart';
 import 'etat/etat_parametres.dart';
+import 'etat/etat_theme.dart';
+import 'widgets/theme_application.dart';
 import 'etat/etat_parutions.dart';
 import 'etat/etat_rapports_erreur.dart';
 import 'etat/etat_sources.dart';
@@ -957,6 +959,10 @@ Widget construireApplication({
           create: (_) =>
               EtatDossierChapitres(serviceDossierChapitres)..charger(),
         ),
+      // Thème choisi dans Paramètres → Apparence (suivi par la racine).
+      ChangeNotifierProvider<EtatTheme>(
+        create: (_) => EtatTheme(serviceParametres)..charger(),
+      ),
       ChangeNotifierProvider<EtatParametres>(
         create: (_) => EtatParametres(
           serviceParametres,
@@ -996,19 +1002,12 @@ class BibliothequePersoApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: Textes.titreApplication,
-      // Material 3 avec une palette dérivée d'une seule couleur, pour garder un thème
-      // cohérent en clair comme en sombre sans définir chaque couleur à la main.
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-      ),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.indigo,
-          brightness: Brightness.dark,
-        ),
-      ),
+      // Palette dérivée de l'indigo du logo, en clair comme en sombre.
+      theme: themeClair,
+      darkTheme: themeSombre,
+      // Choix du client (Paramètres → Apparence) ; absent sur l'écran
+      // d'erreur de démarrage : thème du système.
+      themeMode: versThemeMode(context.watch<EtatTheme?>()?.mode),
       home: accueil,
     );
   }

@@ -52,6 +52,16 @@ class EtatParametres extends EtatNotifiant {
   /// Valeur maximale d'une limite (même borne que le service).
   static const int limiteMaximale = ServiceParametres.limiteMaximale;
 
+  /// Valeur minimale de [limite] (mêmes bornes que le service) : 0 pour
+  /// « favoris : lus gardés » et « suivis : au départ », 1 pour « avant » et
+  /// « après » des suivis.
+  static int minimumLimite(LimiteTelechargement limite) => switch (limite) {
+    LimiteTelechargement.favorisLusConserves ||
+    LimiteTelechargement.suivisInitial => ServiceParametres.limiteMinimale,
+    LimiteTelechargement.suivisAvant || LimiteTelechargement.suivisApres =>
+      ServiceParametres.limiteMinimaleSuivisAvantApres,
+  };
+
   ReglagesTelechargement _enregistres = const ReglagesTelechargement();
   ReglagesTelechargement _brouillon = const ReglagesTelechargement();
   bool _estCharge = false;
@@ -112,11 +122,29 @@ class EtatParametres extends EtatNotifiant {
   DateTime? _derniereVerification;
   bool _estEnEnregistrementPlanification = false;
 
-  /// Horaires des recherches de mises à jour.
-  PlanificationMisesAJour get planification => _planification;
+  /// Valeur affichée pendant le glissement de la jauge des recherches par
+  /// jour (rien n'est enregistré avant le lâcher), ou `null`.
+  int? _apercuParJour;
 
-  /// Nombre de recherches de mises à jour par jour.
-  int get verificationsParJour => _planification.verificationsParJour;
+  /// Horaires des recherches de mises à jour (ceux de la valeur affichée
+  /// par la jauge pendant son glissement : le client voit les horaires
+  /// qu'il s'apprête à choisir).
+  PlanificationMisesAJour get planification {
+    final apercu = _apercuParJour;
+    return apercu == null ? _planification : PlanificationMisesAJour(apercu);
+  }
+
+  /// Nombre de recherches de mises à jour par jour (valeur affichée).
+  int get verificationsParJour =>
+      _apercuParJour ?? _planification.verificationsParJour;
+
+  /// Affiche [nombre] pendant le glissement de la jauge, sans l'enregistrer.
+  void previsualiserVerificationsParJour(int nombre) {
+    final borne = nombre.clamp(minimumParJour, maximumParJour);
+    if (borne == _apercuParJour) return;
+    _apercuParJour = borne;
+    notifier();
+  }
 
   /// Date (UTC) de la dernière recherche de mises à jour, ou `null`.
   DateTime? get derniereVerification => _derniereVerification;
@@ -137,6 +165,9 @@ class EtatParametres extends EtatNotifiant {
       PlanificationMisesAJour.maximumParJour,
     );
     _estEnEnregistrementPlanification = true;
+    // La jauge garde la valeur lâchée pendant l'enregistrement (pas de
+    // retour visible à l'ancienne valeur).
+    _apercuParJour = borne;
     notifier();
     try {
       await _serviceParametres.enregistrerVerificationsParJour(borne);
@@ -150,6 +181,7 @@ class EtatParametres extends EtatNotifiant {
         DescriptionErreur.depuis(erreur, pile),
       );
     } finally {
+      _apercuParJour = null;
       _estEnEnregistrementPlanification = false;
       notifier();
     }
@@ -158,8 +190,28 @@ class EtatParametres extends EtatNotifiant {
   int _heuresEnAttente = 1;
   bool _estEnEnregistrementEnAttente = false;
 
-  /// Écart en heures entre deux vérifications des titres « En attente ».
-  int get heuresEnAttente => _heuresEnAttente;
+  /// Valeur affichée pendant le glissement de la jauge « En attente », ou
+  /// `null`.
+  int? _apercuHeuresEnAttente;
+
+  /// Borne basse de l'écart « En attente » (même borne que le service).
+  static const int minimumHeuresEnAttente =
+      ServiceParametres.minimumHeuresEnAttente;
+
+  /// Écart en heures entre deux vérifications des titres « En attente »
+  /// (valeur affichée), jamais au-delà de [maximumHeuresEnAttente].
+  int get heuresEnAttente => (_apercuHeuresEnAttente ?? _heuresEnAttente).clamp(
+    minimumHeuresEnAttente,
+    maximumHeuresEnAttente,
+  );
+
+  /// Affiche [heures] pendant le glissement de la jauge, sans l'enregistrer.
+  void previsualiserHeuresEnAttente(int heures) {
+    final borne = heures.clamp(minimumHeuresEnAttente, maximumHeuresEnAttente);
+    if (borne == _apercuHeuresEnAttente) return;
+    _apercuHeuresEnAttente = borne;
+    notifier();
+  }
 
   /// Écart maximal autorisé : l'intervalle des vérifications normales.
   int get maximumHeuresEnAttente =>
@@ -173,6 +225,10 @@ class EtatParametres extends EtatNotifiant {
   /// prévient ensuite `EtatMisesAJour.replanifier`.
   Future<ResultatAction<int>> modifierHeuresEnAttente(int heures) async {
     _estEnEnregistrementEnAttente = true;
+    _apercuHeuresEnAttente = heures.clamp(
+      minimumHeuresEnAttente,
+      maximumHeuresEnAttente,
+    );
     notifier();
     try {
       await _serviceParametres.enregistrerHeuresEnAttente(heures);
@@ -181,7 +237,63 @@ class EtatParametres extends EtatNotifiant {
     } catch (erreur, pile) {
       return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
     } finally {
+      _apercuHeuresEnAttente = null;
       _estEnEnregistrementEnAttente = false;
+      notifier();
+    }
+  }
+
+  // ------------------------------- Durée de conservation avant suppression
+
+  /// Durée de conservation tant que le client n'a rien choisi (24 h).
+  static const Duration delaiSuppressionParDefaut =
+      ServiceParametres.delaiSuppressionParDefaut;
+
+  /// Crans de la jauge, du plus court au plus long (1 h à 30 jours).
+  static const List<Duration> delaisSuppressionProposes =
+      ServiceParametres.delaisSuppressionProposes;
+
+  Duration _delaiSuppression = delaiSuppressionParDefaut;
+
+  /// Valeur affichée pendant le glissement de la jauge, ou `null`.
+  Duration? _apercuDelaiSuppression;
+  bool _estEnEnregistrementDelai = false;
+
+  /// Durée pendant laquelle une archive sortie des règles reste sur
+  /// l'appareil avant d'être supprimée (valeur affichée). Sert aussi aux
+  /// textes des autres écrans (« supprimé dans … »).
+  Duration get delaiSuppression => _apercuDelaiSuppression ?? _delaiSuppression;
+
+  /// `true` pendant l'enregistrement de la durée de conservation.
+  bool get estEnEnregistrementDelai => _estEnEnregistrementDelai;
+
+  /// Affiche [delai] pendant le glissement de la jauge, sans l'enregistrer.
+  void previsualiserDelaiSuppression(Duration delai) {
+    if (delai == _apercuDelaiSuppression) return;
+    _apercuDelaiSuppression = delai;
+    notifier();
+  }
+
+  /// Enregistre la durée de conservation (le service l'arrondit à l'heure
+  /// et la borne). Ne relance pas les règles : seules les nouvelles
+  /// suppressions prévues utilisent la nouvelle durée.
+  Future<ResultatAction<Duration>> modifierDelaiSuppression(
+    Duration delai,
+  ) async {
+    _estEnEnregistrementDelai = true;
+    _apercuDelaiSuppression = delai;
+    notifier();
+    try {
+      await _serviceParametres.enregistrerDelaiSuppression(delai);
+      _delaiSuppression = await _serviceParametres.chargerDelaiSuppression();
+      return ResultatAction<Duration>.reussite(_delaiSuppression);
+    } catch (erreur, pile) {
+      return ResultatAction<Duration>.echec(
+        DescriptionErreur.depuis(erreur, pile),
+      );
+    } finally {
+      _apercuDelaiSuppression = null;
+      _estEnEnregistrementDelai = false;
       notifier();
     }
   }
@@ -264,8 +376,9 @@ class EtatParametres extends EtatNotifiant {
 
   /// Enregistre aussitôt (comme le nombre de recherches par jour) puis
   /// applique les règles à tous les favoris et suivis : sans risque, car
-  /// une archive dans une langue retirée n'est supprimée qu'après 24 heures
-  /// (le client peut revenir en arrière ou la garder).
+  /// une archive dans une langue retirée n'est supprimée qu'après la durée
+  /// de conservation réglée (le client peut revenir en arrière ou la
+  /// garder).
   // LIMITE : les chapitres d'une langue ajoutée n'apparaissent qu'à la
   // prochaine recherche de nouveaux chapitres ou actualisation d'un titre
   // (le site n'est pas relu pour tous les titres ici : trop de requêtes).
@@ -431,6 +544,7 @@ class EtatParametres extends EtatNotifiant {
           .chargerDerniereVerification();
       _telechargementsSimultanes = await _serviceParametres
           .chargerTelechargementsSimultanes();
+      _delaiSuppression = await _serviceParametres.chargerDelaiSuppression();
       _enregistres = reglages;
       _brouillon = reglages;
       _estCharge = true;
@@ -441,9 +555,10 @@ class EtatParametres extends EtatNotifiant {
     notifier();
   }
 
-  /// Change une limite du brouillon, ramenée entre 0 et [limiteMaximale].
+  /// Change une limite du brouillon, ramenée entre [minimumLimite] et
+  /// [limiteMaximale].
   void modifier(LimiteTelechargement limite, int valeur) {
-    final bornee = valeur.clamp(0, limiteMaximale);
+    final bornee = valeur.clamp(minimumLimite(limite), limiteMaximale);
     switch (limite) {
       case LimiteTelechargement.favorisLusConserves:
         _brouillon = _brouillon.copierAvec(favorisLusConserves: bornee);

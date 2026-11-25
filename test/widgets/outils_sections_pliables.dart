@@ -2,6 +2,7 @@
 import 'package:bibliotheque_perso/widgets/section_pliable.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Appuie sur l'en-tête de la section repliable intitulée [titre] (la
 /// déplie si elle est repliée, la replie sinon), après l'avoir amenée à
@@ -32,6 +33,22 @@ Future<void> basculerSitesDuTitre(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+/// Bouton « + » ([plus]) ou « − » de la jauge des Paramètres de clé
+/// [cle] (`JaugeReglage`).
+Finder boutonJauge(String cle, {required bool plus}) => find.descendant(
+  of: find.byKey(ValueKey<String>(cle)),
+  matching: find.widgetWithIcon(
+    IconButton,
+    plus ? Icons.add_circle_outline : Icons.remove_circle_outline,
+  ),
+);
+
+/// Curseur de la jauge des Paramètres de clé [cle].
+Finder curseurJauge(String cle) => find.descendant(
+  of: find.byKey(ValueKey<String>(cle)),
+  matching: find.byType(Slider),
+);
+
 /// Déplie toutes les sections de l'écran Paramètres repliées au départ
 /// (« Mes langues » est déjà dépliée). Les sections absentes (export sans
 /// service) sont ignorées. De bas en haut : tous les en-têtes sont visibles
@@ -41,6 +58,7 @@ Future<void> deplierParametres(WidgetTester tester) async {
   for (final titre in <String>[
     Textes.sectionAPropos,
     Textes.sectionJournal,
+    Textes.sectionApparence,
     Textes.sectionSauvegardeExport,
     Textes.sectionSites,
     Textes.sectionTelechargements,

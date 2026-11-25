@@ -1,6 +1,7 @@
 // Tests de EcranParametres avec de faux services.
 import 'package:bibliotheque_perso/ecrans/ecran_parametres.dart';
 import 'package:bibliotheque_perso/etat/etat_parametres.dart';
+import 'package:bibliotheque_perso/etat/etat_theme.dart';
 import 'package:bibliotheque_perso/modeles/source.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/widgets/constantes_interface.dart';
@@ -56,8 +57,13 @@ void main() {
         'montrent un résumé', (tester) async {
       await afficher(tester, toutDeplier: false);
 
-      // Cinq sections : pas de service d'export ici (section masquée).
-      expect(find.byType(SectionPliable), findsNWidgets(5));
+      // Six sections (dont « Apparence ») : pas de service d'export ici
+      // (section masquée).
+      expect(find.byType(SectionPliable), findsNWidgets(6));
+      expect(
+        find.text(Textes.resumeApparence(ModeTheme.systeme)),
+        findsOneWidget,
+      );
       // Mes langues : dépliée.
       expect(find.text(Textes.ajouterLangue), findsOneWidget);
       expect(
@@ -88,7 +94,9 @@ void main() {
     ) async {
       await afficher(tester, toutDeplier: false);
       await basculerSection(tester, Textes.sectionTelechargements);
-      await tester.tap(find.byTooltip(Textes.augmenter).first);
+      await tester.tap(
+        boutonJauge('jauge.limite.favorisLusConserves', plus: true),
+      );
       await tester.pump();
       await basculerSection(tester, Textes.sectionTelechargements);
 
@@ -201,9 +209,10 @@ void main() {
     final enregistrer = find.widgetWithText(FilledButton, Textes.enregistrer);
     expect(tester.widget<FilledButton>(enregistrer).onPressed, isNull);
 
-    // + sur la première limite (favoris : 10 → 11) ; les deux premiers « + »
-    // sont ceux des recherches par jour et de la surveillance « En attente ».
-    await tester.tap(find.byTooltip(Textes.augmenter).at(2));
+    // + sur la première limite (favoris : 10 → 11).
+    await tester.tap(
+      boutonJauge('jauge.limite.favorisLusConserves', plus: true),
+    );
     await tester.pump();
     expect(
       find.text(
@@ -243,8 +252,7 @@ void main() {
         findsOneWidget,
       );
 
-      // Premier « + » de l'écran : la section Mises à jour est en haut.
-      await tester.tap(find.byTooltip(Textes.augmenter).first);
+      await tester.tap(boutonJauge('jauge.recherchesParJour', plus: true));
       await tester.pump();
       await tester.pump();
       expect(parametres.verificationsParJour, 3);

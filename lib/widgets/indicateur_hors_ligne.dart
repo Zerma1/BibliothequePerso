@@ -3,10 +3,26 @@
 library;
 
 import 'package:material_ui/material_ui.dart';
+import 'package:provider/provider.dart';
 
+import '../etat/etat_parametres.dart';
 import '../etat/outils_chapitres.dart';
 import 'constantes_interface.dart';
 import 'textes.dart';
+
+/// Durée de conservation avant suppression réglée par le client
+/// (Paramètres), pour les textes « supprimé dans … » de tous les écrans.
+///
+/// [ecouter] : `true` dans un `build` (le texte suit un changement du
+/// réglage), `false` dans un rappel (appui sur un bouton). Sans
+/// [EtatParametres] (tests d'un écran isolé) ou avant la lecture des
+/// réglages, durée par défaut (24 h).
+Duration delaiSuppressionRegle(BuildContext context, {bool ecouter = true}) {
+  final etat = ecouter
+      ? context.watch<EtatParametres?>()
+      : context.read<EtatParametres?>();
+  return etat?.delaiSuppression ?? EtatParametres.delaiSuppressionParDefaut;
+}
 
 /// Icône d'un statut hors-ligne.
 IconData iconeHorsLigne(StatutHorsLigne statut) {
@@ -129,7 +145,7 @@ class IndicateurHorsLigne extends StatelessWidget {
       iconeEtatHorsLigne(etat),
       color: couleur,
       semanticLabel: etat.aSuppressionPrevue
-          ? Textes.legendeSuppressionPrevue
+          ? Textes.legendeSuppressionPrevue(delaiSuppressionRegle(context))
           : (etat.estDoublon && etat.statut == StatutHorsLigne.telecharge
                 ? Textes.legendeDoublon
                 : Textes.libelleStatutHorsLigne(etat.statut)),
@@ -166,11 +182,12 @@ class LegendeHorsLigne extends StatelessWidget {
             couleurHorsLigne(statut, theme.colorScheme),
             Textes.libelleStatutHorsLigne(statut),
           ),
-        // Décisions du client : rouge = supprimé dans 24 h, orange = doublon.
+        // Décisions du client : rouge = supprimé après la durée réglée,
+        // orange = doublon.
         entree(
           iconeSuppressionPrevue,
           couleurSuppressionPrevue(theme.colorScheme),
-          Textes.legendeSuppressionPrevue,
+          Textes.legendeSuppressionPrevue(delaiSuppressionRegle(context)),
         ),
         entree(
           iconeDoublon,

@@ -26,6 +26,7 @@ import 'package:bibliotheque_perso/etat/etat_parutions.dart';
 import 'package:bibliotheque_perso/etat/etat_rapports_erreur.dart';
 import 'package:bibliotheque_perso/etat/etat_sources.dart';
 import 'package:bibliotheque_perso/etat/etat_telechargements.dart';
+import 'package:bibliotheque_perso/etat/etat_theme.dart';
 import 'package:bibliotheque_perso/main.dart';
 import 'package:bibliotheque_perso/modeles/categorie.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
@@ -2591,6 +2592,10 @@ Widget envelopper(
           serviceTelechargement,
           serviceBibliotheque: bibliotheque,
         )..charger(),
+      ),
+      // Section « Apparence » des Paramètres (thème lu dans le faux service).
+      ChangeNotifierProvider<EtatTheme>(
+        create: (_) => EtatTheme(serviceParametres)..charger(),
       ),
       // Section « Dossier des chapitres » et bandeaux seulement si un faux
       // service est fourni (comme l'application sans service).

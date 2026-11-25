@@ -406,6 +406,8 @@ void main() {
           Textes.confirmationRetraitSite(
             nombreNonLusRetires: 2,
             nombreTelecharges: 1,
+            // Réglage par défaut du faux service des paramètres.
+            delaiSuppression: const Duration(hours: 24),
           ),
         ),
         findsOneWidget,
