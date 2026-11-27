@@ -19,14 +19,18 @@ grâce à un repère unique `BP-…` dans le texte du ticket.
 - [x] Données : modèle `Ticket`, migration 14, `DepotTickets` (developpeur-donnees)
 - [x] Réseau : lecture des issues et commentaires, URL de création (developpeur-sources)
 - [x] Service tickets (developpeur-services)
-- [ ] Écran « Mes tickets » + création + assemblage (developpeur-interface, orchestrateur)
+- [x] Écran « Mes tickets » + création + assemblage (developpeur-interface, orchestrateur)
+- [ ] À faire valider par le client : section « Aide et retours » entre Démarrage et Journal ;
+  point sur l'onglet Paramètres ; bouton « Continuer sur GitHub » ; type par défaut Bug ;
+  commentaires en texte brut (Markdown non mis en forme)
 
 ### E3. Mise à jour automatique (demande du client, 2026-11-27)
 Une fois par jour, l'application consulte la dernière release GitHub publiée depuis `main`
 (non *pre-release*, API publique sans jeton) ; si la version est plus récente, un bandeau
 propose « Mettre à jour » : téléchargement de l'installateur, vérification d'une somme SHA-256
 publiée avec la release, puis lancement de la mise à jour (`/ACTION=METTREAJOUR`).
-- [ ] CI : construire l'installateur Inno Setup et sa somme SHA-256 dans la release (integrateur)
+- [x] CI : construire l'installateur Inno Setup et sa somme SHA-256 dans la release (integrateur ;
+  noms figés dans docs/DEPLOIEMENT.md ; jamais exécuté sur GitHub à ce stade)
 - [ ] Réseau : dernière release + téléchargement (developpeur-sources)
 - [ ] Service : vérification quotidienne, réglage activé par défaut (developpeur-services)
 - [ ] Interface : bandeau, progression, notes de version (developpeur-interface)

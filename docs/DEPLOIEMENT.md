@@ -114,7 +114,7 @@ temps** sur les machines de GitHub.
 | Événement | Ce qui est fait |
 |-----------|-----------------|
 | Push sur la branche `test` | analyse + tests, puis les trois compilations ; fichiers en **artefacts** |
-| Étiquette `v*` poussée (`v0.1.0-test.4`, `v0.1.0`…) | idem, puis **release GitHub** avec les trois fichiers : *pre-release* si l'étiquette contient `-test.`, release normale sinon |
+| Étiquette `v*` poussée (`v0.1.0-test.4`, `v0.1.0`…) | idem, puis **release GitHub** avec les cinq fichiers (section « Où trouver les fichiers ») : *pre-release* si l'étiquette contient `-test.`, release normale sinon |
 | Lancement manuel | onglet **Actions** → « Compilation » → « Run workflow » (choisir la branche ou l'étiquette) |
 | Push sur `dev` ou `main` | **rien** (économie de minutes) |
 | Push sur `test` ne touchant que `livraisons/` (section 4) | **rien** (`paths-ignore`) |
@@ -137,7 +137,12 @@ GitHub lance alors deux exécutions, mais celle de la branche voit que le commit
    rien n'est compilé.
 3. **En parallèle** (Flutter 3.50.0, révision `ab2912035e`, vérifiée à chaque job) :
    - Windows (`windows-latest`) : `flutter build windows --release`, dossier
-     `build\windows\x64\runner\Release` compressé ;
+     `build\windows\x64\runner\Release` compressé ; puis installation d'**Inno Setup 6.7.3**
+     (installateur officiel `innosetup-6.7.3.exe` des releases GitHub `jrsoftware/issrc`,
+     vérifié avant exécution par son empreinte SHA-256 épinglée dans le workflow et par sa
+     signature Authenticode « Pyrsys B.V. »), et construction de l'installateur par
+     `outils\construire_installateur.ps1 -SansCompilation -CheminIscc <ISCC.exe>` (même
+     script que sur le PC) ; enfin calcul de son empreinte SHA-256 ;
    - Linux (`ubuntu-latest`) : paquets `clang cmake ninja-build pkg-config libgtk-3-dev`, puis
      `flutter build linux --release`, dossier `bundle` compressé (il se décompresse dans un
      dossier `bibliotheque_perso-<version>/`) ;
@@ -148,8 +153,33 @@ GitHub lance alors deux exécutions, mais celle de la branche voit que le commit
 
 ### Où trouver les fichiers
 
-- `bibliotheque_perso-<version>-windows.zip`, `bibliotheque_perso-<version>-linux.tar.gz`,
-  `bibliotheque_perso-<version>-android.apk`.
+- `bibliotheque_perso-<version>-windows.zip`, `bibliotheque_perso-<version>-installation.exe`,
+  `bibliotheque_perso-<version>-installation.exe.sha256`,
+  `bibliotheque_perso-<version>-linux.tar.gz`, `bibliotheque_perso-<version>-android.apk`.
+  `<version>` est l'étiquette sans le `v` (`0.4.0`, `0.4.0-test`) ou `X.Y.Z-build.N` sans
+  étiquette. L'installateur est renommé avec cette version (Inno Setup le produit sous le
+  nom `bibliotheque_perso-X.Y.Z-installation.exe`, sans suffixe) ; la version affichée par
+  l'installateur reste `X.Y.Z` de `pubspec.yaml`.
+
+#### Noms figés (mise à jour automatique de l'application, 0.4.0)
+
+L'application consulte la **dernière release publiée** (étiquette `vX.Y.Z`, ni brouillon ni
+*pre-release*) et télécharge l'installateur. Elle se fie à ces noms exacts ; **ils ne
+doivent plus changer** (sinon les versions déjà installées ne trouvent plus la mise à jour) :
+
+| Fichier de la release `vX.Y.Z` | Contenu |
+|--------------------------------|---------|
+| `bibliotheque_perso-X.Y.Z-installation.exe` | installateur Inno Setup (installer / mettre à jour) |
+| `bibliotheque_perso-X.Y.Z-installation.exe.sha256` | une seule ligne au format `sha256sum` : 64 caractères hexadécimaux **minuscules**, **deux espaces**, le nom du fichier `.exe`, puis un saut de ligne LF ; encodage ASCII sans BOM |
+
+Exemple de contenu du `.sha256` :
+`574f2a4ac49af7d2700d5a80f40da2b6768b16618f57f1d5c0024321e3421372  bibliotheque_perso-0.3.3-installation.exe`
+
+Les releases de test (`vX.Y.Z-test`, *pre-release*) contiennent les mêmes fichiers nommés
+`bibliotheque_perso-X.Y.Z-test-installation.exe` et `.exe.sha256`. Les releases antérieures
+à 0.4.0 n'ont pas d'installateur. Vérification à la main sous Windows :
+`(Get-FileHash bibliotheque_perso-X.Y.Z-installation.exe -Algorithm SHA256).Hash`
+(majuscules : comparer sans tenir compte de la casse) ; sous Linux : `sha256sum -c <fichier>.sha256`.
 - **Artefacts** (toutes les exécutions) : https://github.com/Zerma1/BibliothequePerso/actions
   → cliquer l'exécution → bas de la page, « Artifacts ». Il faut être connecté à GitHub ; ils
   sont **effacés au bout de 30 jours**.
@@ -220,7 +250,9 @@ ne relance pas la compilation automatique (`paths-ignore`, section 3 bis).
 
 Pour **chaque étiquette** `v*` poussée (`v0.1.0-test.N` sur `test`, `v0.1.0` sur `main`), la
 release GitHub est désormais **créée automatiquement** par le workflow de compilation
-(section 3 bis), avec les trois fichiers ; *pre-release* pour une version de test. Les
+(section 3 bis), avec les cinq fichiers (zip Windows, installateur et son empreinte
+`.sha256`, tar.gz Linux, apk) ; *pre-release* pour une version de test. Les noms de
+l'installateur et de son empreinte sont **figés** (section 3 bis, « Noms figés »). Les
 fichiers de `livraisons/` sur `test` restent le moyen du client pour télécharger en
 déplacement (téléchargement du dépôt), la release étant l'autre accès.
 

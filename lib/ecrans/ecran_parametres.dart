@@ -11,6 +11,7 @@ import '../etat/etat_mises_a_jour.dart';
 import '../etat/etat_parametres.dart';
 import '../etat/etat_sources.dart';
 import '../etat/etat_theme.dart';
+import '../etat/etat_tickets.dart';
 import '../modeles/source.dart';
 import '../widgets/constantes_interface.dart';
 import '../widgets/dialogue_import.dart';
@@ -24,6 +25,7 @@ import '../widgets/section_journal.dart';
 import '../widgets/section_pliable.dart';
 import '../widgets/textes.dart';
 import '../widgets/vues_etat.dart';
+import 'ecran_tickets.dart';
 
 /// Réglages de l'application : langues, mises à jour, téléchargements,
 /// sites, sauvegarde et export, apparence, puis « À propos ».
@@ -66,6 +68,9 @@ class EcranParametres extends StatelessWidget {
               // Autre réglage général et rare, à côté de l'apparence ; absent
               // hors de Windows.
               _SectionDemarrage(),
+              // Tickets GitHub : à côté du journal et de « À propos », là où
+              // le client vient pour un retour sur l'application.
+              _SectionAideRetours(),
               // Juste avant « À propos » : on vient y chercher le journal à
               // joindre à un retour de test, comme la version.
               SectionJournal(),
@@ -890,6 +895,50 @@ class _SectionDemarrage extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ],
+    );
+  }
+}
+
+// ------------------------------------------------------------ Aide et retours
+
+/// Entrée vers « Mes tickets » (tickets GitHub), avec une pastille quand
+/// un ticket a du nouveau. Absente si l'application ne fournit pas
+/// d'[EtatTickets] (tests).
+class _SectionAideRetours extends StatelessWidget {
+  const _SectionAideRetours();
+
+  @override
+  Widget build(BuildContext context) {
+    final etat = context.watch<EtatTickets?>();
+    if (etat == null) return const SizedBox.shrink();
+    final nouveautes = etat.nombreNouveautes;
+    return SectionPliable(
+      identifiant: 'parametres.aideRetours',
+      titre: Textes.sectionAideRetours,
+      icone: Icons.forum_outlined,
+      // Le nombre de tickets avec du nouveau reste lisible section repliée.
+      resume: Textes.resumeAideRetours(nouveautes),
+      enfants: <Widget>[
+        const Text(Textes.explicationAideRetours),
+        const SizedBox(height: espacementPetit),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: nouveautes > 0
+              ? Semantics(
+                  label: Textes.ticketsAvecNouveautes(nouveautes),
+                  child: Badge.count(
+                    count: nouveautes,
+                    child: const Icon(Icons.forum_outlined),
+                  ),
+                )
+              : const Icon(Icons.forum_outlined),
+          title: const Text(Textes.mesTickets),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(
+            context,
+          ).push(MaterialPageRoute<void>(builder: (_) => const EcranTickets())),
         ),
       ],
     );

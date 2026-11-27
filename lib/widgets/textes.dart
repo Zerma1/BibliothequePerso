@@ -10,6 +10,7 @@ import '../etat/etat_theme.dart' show ModeTheme;
 import '../etat/outils_chapitres.dart';
 import '../modeles/source.dart';
 import '../modeles/telechargement.dart';
+import '../modeles/ticket.dart';
 import '../modeles/titre.dart';
 
 /// Textes de l'interface. Les textes qui dépendent d'une valeur sont des
@@ -2607,6 +2608,156 @@ abstract final class Textes {
 
   /// Menu de l'icône : vraie fermeture de l'application.
   static const String menuZoneNotificationQuitter = 'Quitter';
+
+  // ---------------------------------------------------------------- Tickets
+
+  /// Section des Paramètres qui mène aux tickets.
+  static const String sectionAideRetours = 'Aide et retours';
+
+  /// Résumé de la section repliée.
+  static String resumeAideRetours(int nouveautes) => nouveautes <= 0
+      ? 'Signaler un bug, proposer une idée, poser une question'
+      : ticketsAvecNouveautes(nouveautes);
+
+  /// Explication de la section « Aide et retours ».
+  static const String explicationAideRetours =
+      'Vos tickets sont publiés sur la page GitHub (publique) de '
+      "l'application. Leur avancée et les réponses sont suivies ici.";
+
+  /// Titre de l'écran et entrée des Paramètres.
+  static const String mesTickets = 'Mes tickets';
+
+  /// Libellé accessible de la pastille des tickets.
+  static String ticketsAvecNouveautes(int nombre) => nombre <= 1
+      ? '$nombre ticket avec du nouveau'
+      : '$nombre tickets avec du nouveau';
+
+  /// Bouton de création.
+  static const String nouveauTicket = 'Nouveau ticket';
+
+  /// Liste vide.
+  static const String aucunTicket =
+      "Aucun ticket pour l'instant. Signalez un bug, proposez une idée ou "
+      'posez une question avec « Nouveau ticket ».';
+
+  /// Marque d'un ticket qui a changé depuis sa dernière consultation.
+  static const String ticketNouveau = 'Nouveau';
+
+  /// Libellé d'un type de ticket.
+  static String nomTypeTicket(TypeTicket type) => switch (type) {
+    TypeTicket.bug => 'Bug',
+    TypeTicket.suggestion => 'Suggestion',
+    TypeTicket.question => 'Question',
+  };
+
+  /// État affiché d'un ticket.
+  static String etatTicket(Ticket ticket) {
+    if (!ticket.estRetrouve) return 'En attente de publication';
+    return switch (ticket.etat) {
+      EtatTicket.ferme => switch (ticket.raisonFermeture) {
+        RaisonFermetureTicket.termine => 'Fermé : terminé',
+        RaisonFermetureTicket.nonRetenu => 'Fermé : non retenu',
+        null => 'Fermé',
+      },
+      _ => 'Ouvert',
+    };
+  }
+
+  /// Nombre de commentaires d'un ticket.
+  static String nombreCommentaires(int nombre) =>
+      nombre <= 1 ? '$nombre commentaire' : '$nombre commentaires';
+
+  /// Numéro GitHub d'un ticket.
+  static String numeroTicket(int numero) => 'n°$numero';
+
+  /// Date de création d'un ticket.
+  static String ticketCreeLe(DateTime date) => 'Créé le ${formaterDate(date)}';
+
+  /// Bouton d'ouverture de la page du ticket.
+  static const String voirSurGithub = 'Voir sur GitHub';
+
+  /// Bouton pour rouvrir la page de création pré-remplie.
+  static const String rouvrirPageCreation = 'Rouvrir la page de création';
+
+  /// Bouton de retrait d'un ticket.
+  static const String retirerDeMaListe = 'Retirer de ma liste';
+
+  /// Confirmation du retrait.
+  static const String confirmationRetraitTicket =
+      "Retirer ce ticket de votre liste ? Il n'est pas supprimé sur GitHub : "
+      'il y reste visible, mais ne sera plus suivi ici.';
+
+  /// Bouton de confirmation du retrait.
+  static const String retirer = 'Retirer';
+
+  /// Retrait réussi.
+  static const String ticketRetire = 'Ticket retiré de votre liste.';
+
+  /// Ticket pas encore retrouvé sur GitHub.
+  static const String ticketEnAttente =
+      'Validez le ticket sur la page GitHub ouverte ; il apparaîtra ici '
+      'après publication.';
+
+  /// Ticket pas encore retrouvé, page de création inconnue.
+  static const String ticketEnAttenteSansPage =
+      "Si vous n'avez pas validé le ticket sur GitHub, retirez-le de votre "
+      'liste et créez-en un nouveau.';
+
+  /// Intertitre des commentaires.
+  static const String commentaires = 'Commentaires';
+
+  /// Ticket sans commentaire.
+  static const String aucunCommentaire = 'Aucun commentaire pour le moment.';
+
+  /// Auteur d'un commentaire dont le compte a été supprimé.
+  static const String auteurInconnu = 'Compte supprimé';
+
+  /// En-tête d'un commentaire.
+  static String enteteCommentaire(String? auteur, DateTime date) =>
+      '${auteur ?? auteurInconnu} · ${formaterDateHeure(date)}';
+
+  /// Titre du dialogue de création.
+  static const String titreDialogueNouveauTicket = 'Nouveau ticket';
+
+  /// Champ du type.
+  static const String libelleTypeTicket = 'Type';
+
+  /// Champ du titre.
+  static const String libelleTitreTicket = 'Titre';
+
+  /// Champ de la description.
+  static const String libelleDescriptionTicket = 'Description';
+
+  /// Aide du champ de description.
+  static const String aideDescriptionTicket =
+      "Ce qui s'est passé, ce que vous attendiez, les étapes pour le "
+      'reproduire…';
+
+  /// Avertissement avant la création.
+  static const String avertissementTicketPublic =
+      'Le ticket est publié sur GitHub (public) avec votre compte GitHub ; '
+      "n'y mettez aucune donnée personnelle.";
+
+  /// Bouton de validation du dialogue.
+  static const String continuerSurGithub = 'Continuer sur GitHub';
+
+  /// Ticket préparé, page ouverte.
+  static const String ticketPrepare =
+      'Page GitHub ouverte : validez-y le ticket pour le publier.';
+
+  /// Titre du dialogue affiché si le navigateur ne s'ouvre pas.
+  static const String ouvertureImpossible = 'Navigateur indisponible';
+
+  /// Explication du dialogue affiché si le navigateur ne s'ouvre pas.
+  static const String explicationOuvertureImpossible =
+      "La page n'a pas pu s'ouvrir dans le navigateur. Copiez l'adresse "
+      'ci-dessous et collez-la dans votre navigateur.';
+
+  /// Bouton de copie d'une adresse.
+  static const String copierAdresse = "Copier l'adresse";
+
+  /// Adresse copiée.
+  static const String adresseCopiee = 'Adresse copiée.';
 
   // ------------------------------------------------------------- Formatage
 

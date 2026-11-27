@@ -62,6 +62,10 @@ import 'services/service_bibliotheque.dart';
 import 'donnees/constantes_donnees.dart' show nomFichierInstallationWindows;
 import 'services/service_categories.dart';
 import 'services/service_desinstallation.dart';
+import 'services/service_tickets.dart';
+import 'donnees/depot_tickets.dart';
+import 'etat/etat_tickets.dart';
+import 'sources/client_tickets_github.dart';
 import 'services/service_export.dart';
 import 'services/service_import.dart';
 import 'services/service_journal.dart';
@@ -173,6 +177,7 @@ class ServicesApplication {
     required this.serviceTelechargement,
     required this.serviceRapportsErreur,
     required this.serviceExport,
+    required this.serviceTickets,
     required this.serviceImport,
     required this.serviceCategories,
     required this.serviceDossierChapitres,
@@ -194,6 +199,10 @@ class ServicesApplication {
 
   /// Export des titres et des sites (section « Sauvegarde et export »).
   final ServiceExport serviceExport;
+
+  /// Tickets GitHub (section « Aide et retours ») : une seule instance, qui
+  /// garde l'heure de reprise après une limite GitHub.
+  final ServiceTickets serviceTickets;
 
   /// Réimport d'un export JSON (même section).
   final ServiceImport serviceImport;
@@ -335,6 +344,11 @@ ServicesApplication assemblerServices(
       versionApplication: versionApplication,
       // Les dernières lignes du journal sont jointes aux rapports.
       dossierJournaux: cheminDossierJournaux(racineApplication),
+    ),
+    serviceTickets: ServiceTickets(
+      DepotTickets(base),
+      ClientTicketsGithub(clientUtilise),
+      versionApplication: versionApplication,
     ),
     // Exports à côté des rapports : `<dossier de l'application>/exports/`.
     serviceExport: ServiceExport(
@@ -1232,6 +1246,7 @@ Future<void> demarrer() async {
       serviceParametres: services.serviceParametres,
       serviceRapportsErreur: services.serviceRapportsErreur,
       serviceExport: services.serviceExport,
+      serviceTickets: services.serviceTickets,
       serviceImport: services.serviceImport,
       serviceCategories: services.serviceCategories,
       serviceDossierChapitres: services.serviceDossierChapitres,
@@ -1316,6 +1331,7 @@ Widget construireApplication({
   required ServiceParametres serviceParametres,
   ServiceRapportsErreur? serviceRapportsErreur,
   ServiceExport? serviceExport,
+  ServiceTickets? serviceTickets,
   ServiceImport? serviceImport,
   ServiceCategories? serviceCategories,
   ServiceDossierChapitres? serviceDossierChapitres,
@@ -1346,6 +1362,11 @@ Widget construireApplication({
             serviceImport: serviceImport,
             listerExports: serviceExport.listerExportsJson,
           ),
+        ),
+      // Sans service (tests), la section « Aide et retours » est masquée.
+      if (serviceTickets != null)
+        ChangeNotifierProvider<EtatTickets>(
+          create: (_) => EtatTickets(serviceTickets)..chargerNombreNouveautes(),
         ),
       // Navigateur intégré : sans service (tests), les liens s'ouvrent dans
       // le navigateur du système.
