@@ -239,6 +239,24 @@ const int nombreMaxPagesApiGithub = 5;
 /// reprise (« Otherwise, wait for at least one minute before retrying »).
 const Duration attenteMinLimiteGithub = Duration(minutes: 1);
 
+/// Début du nom de l'installateur joint à une release (`docs/DEPLOIEMENT.md`,
+/// « Noms figés ») : `bibliotheque_perso-X.Y.Z-installation.exe`.
+const String prefixeNomInstallateur = 'bibliotheque_perso-';
+
+/// Fin du nom de l'installateur joint à une release (« Noms figés »).
+const String suffixeNomInstallateur = '-installation.exe';
+
+/// Extension du fichier d'empreinte joint à l'installateur (« Noms figés ») :
+/// `<installateur>.sha256`.
+const String extensionFichierEmpreinte = '.sha256';
+
+/// Taille maximale acceptée pour un installateur téléchargé (200 Mo) : au
+/// delà, le téléchargement est interrompu (fichier inattendu).
+const int tailleMaxInstallateur = 200 * 1024 * 1024;
+
+/// Taille maximale acceptée pour le fichier `.sha256` (une seule ligne).
+const int tailleMaxFichierEmpreinte = 1024;
+
 /// Longueur maximale (en caractères) de l'adresse de création d'un ticket
 /// pré-remplie.
 ///

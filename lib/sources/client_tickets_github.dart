@@ -24,6 +24,11 @@ import 'client_http_poli.dart';
 import 'constantes_sources.dart';
 import 'erreur_source.dart';
 import 'lecture_json.dart';
+import 'limite_github.dart';
+
+// [ErreurLimiteGithub] et [SuiviLimiteGithub] sont partagés avec le client de
+// mise à jour : réexportés pour les appelants existants.
+export 'limite_github.dart' show ErreurLimiteGithub, SuiviLimiteGithub;
 
 /// État d'un ticket GitHub (champ `state`).
 enum EtatTicketGithub {
@@ -99,28 +104,6 @@ class CommentaireTicketGithub {
   /// Corps du commentaire tel que saisi (`body`, Markdown brut, à afficher
   /// comme texte brut) ; vide s'il est absent.
   final String corps;
-}
-
-/// Limite de requêtes de l'API GitHub atteinte (403 ou 429 avec
-/// `x-ratelimit-remaining` à 0, `retry-after`, ou limite secondaire).
-///
-/// Aucune requête n'est envoyée à GitHub avant [heureReprise] : la
-/// documentation prévient que « continuing to make requests while you are
-/// rate limited may result in the banning of your integration ».
-class ErreurLimiteGithub extends ErreurSource {
-  /// Crée l'erreur pour [url], avec l'heure (UTC) où réessayer.
-  const ErreurLimiteGithub(
-    super.url,
-    super.message, {
-    required this.heureReprise,
-    super.cause,
-    super.codeStatut,
-    super.enTetesReponse,
-  });
-
-  /// Heure (UTC) à partir de laquelle GitHub accepte de nouveau les
-  /// requêtes.
-  final DateTime heureReprise;
 }
 
 /// Expression d'un repère de ticket : `BP-` suivi de 12 hexadécimaux, sans
@@ -248,21 +231,26 @@ typedef HorlogeTicketsGithub = DateTime Function();
 ///   y manquer) ni à son découpage des mots (`BP-` + hexadécimaux).
 class ClientTicketsGithub {
   /// Crée le client ; [maintenant] remplace `DateTime.now` dans les tests.
-  ClientTicketsGithub(this._client, {HorlogeTicketsGithub? maintenant})
-    : _maintenant = maintenant ?? DateTime.now;
+  ///
+  /// [limite] : suivi de la limite GitHub à partager avec les autres
+  /// clients sans jeton (la limite de 60 requêtes par heure vaut pour toute
+  /// l'adresse IP) ; à défaut, un suivi propre à ce client.
+  ClientTicketsGithub(
+    this._client, {
+    HorlogeTicketsGithub? maintenant,
+    SuiviLimiteGithub? limite,
+  }) : _limite = limite ?? SuiviLimiteGithub(maintenant: maintenant);
 
   final ClientHttpPoli _client;
-  final HorlogeTicketsGithub _maintenant;
-  DateTime? _heureReprise;
-  int? _requetesRestantes;
+  final SuiviLimiteGithub _limite;
 
   /// Requêtes restantes dans la fenêtre courante selon la dernière réponse
   /// (`x-ratelimit-remaining`), ou `null` si inconnu.
-  int? get requetesRestantes => _requetesRestantes;
+  int? get requetesRestantes => _limite.requetesRestantes;
 
   /// Heure (UTC) avant laquelle aucune requête n'est envoyée, après une
   /// limite atteinte, ou `null`.
-  DateTime? get heureReprise => _heureReprise;
+  DateTime? get heureReprise => _limite.heureReprise;
 
   /// En-têtes envoyés à l'API (en plus du User-Agent de [ClientHttpPoli]).
   static const Map<String, String> _enTetes = <String, String>{
@@ -384,16 +372,9 @@ class ClientTicketsGithub {
   /// `Link`), en traduisant les erreurs de limite et 404.
   Future<(List<Map<String, Object?>>, Uri?)> _recupererListe(Uri uri) async {
     final url = uri.toString();
-    final reprise = _heureReprise;
-    if (reprise != null && _maintenant().toUtc().isBefore(reprise)) {
-      // Aucune requête pendant la limite : insister peut faire bannir
-      // l'application (« Exceeding the rate limit »).
-      throw ErreurLimiteGithub(
-        url,
-        _messageLimite(reprise),
-        heureReprise: reprise,
-      );
-    }
+    // Aucune requête pendant la limite : insister peut faire bannir
+    // l'application (« Exceeding the rate limit »).
+    _limite.verifierAvantRequete(url);
     final ReponseOctets reponse;
     try {
       reponse = await _client.recupererOctetsAvecDetails(
@@ -403,7 +384,7 @@ class ClientTicketsGithub {
     } on ErreurSource catch (erreur) {
       throw _traduireErreur(erreur, url);
     }
-    _noterLimite(reponse.enTetes);
+    _limite.noterReponse(reponse.enTetes);
 
     final Object? valeur;
     try {
@@ -437,83 +418,24 @@ class ClientTicketsGithub {
     return (liste, _pageSuivante(reponse.enTetes['link']));
   }
 
-  /// Retient `x-ratelimit-remaining` et, s'il vaut 0, l'heure de reprise
-  /// (`x-ratelimit-reset`) pour ne plus rien envoyer d'ici là.
-  void _noterLimite(Map<String, String> enTetes) {
-    final restantes = int.tryParse(enTetes['x-ratelimit-remaining'] ?? '');
-    if (restantes == null) {
-      return;
-    }
-    _requetesRestantes = restantes;
-    if (restantes == 0) {
-      _heureReprise = _repriseDepuisEnTetes(enTetes);
-    }
-  }
-
   /// Transforme l'[ErreurSource] de [ClientHttpPoli] en erreur lisible :
   /// [ErreurLimiteGithub] (403/429 de limite), 404 explicite, sinon
   /// inchangée (réseau absent, délai dépassé, 5xx…).
   ErreurSource _traduireErreur(ErreurSource erreur, String url) {
-    final code = erreur.codeStatut;
-    final enTetes = erreur.enTetesReponse ?? const <String, String>{};
-    if (code == 403 || code == 429) {
-      final estLimite =
-          code == 429 ||
-          enTetes['x-ratelimit-remaining'] == '0' ||
-          enTetes.containsKey('retry-after') ||
-          // Limite secondaire : « an error message that indicates that you
-          // exceeded a secondary rate limit ».
-          erreur.message.toLowerCase().contains('rate limit');
-      if (estLimite) {
-        final reprise =
-            _repriseDepuisEnTetes(enTetes) ??
-            _maintenant().toUtc().add(attenteMinLimiteGithub);
-        _heureReprise = reprise;
-        _requetesRestantes = 0;
-        return ErreurLimiteGithub(
-          url,
-          _messageLimite(reprise),
-          heureReprise: reprise,
-          cause: erreur,
-          codeStatut: code,
-          enTetesReponse: erreur.enTetesReponse,
-        );
-      }
+    final limite = _limite.traduireLimite(erreur, url);
+    if (limite != null) {
+      return limite;
     }
-    if (code == 404) {
+    if (erreur.codeStatut == 404) {
       return ErreurSource(
         url,
         'Introuvable sur GitHub (dépôt privé ou supprimé, ou ticket '
         'inexistant)',
         cause: erreur,
-        codeStatut: code,
+        codeStatut: 404,
       );
     }
     return erreur;
-  }
-
-  /// Heure de reprise (UTC) lue dans `retry-after` (secondes) ou, si
-  /// `x-ratelimit-remaining` vaut 0, dans `x-ratelimit-reset` (secondes
-  /// UNIX), ou `null` si aucun en-tête ne la donne.
-  DateTime? _repriseDepuisEnTetes(Map<String, String> enTetes) {
-    final secondes = int.tryParse(enTetes['retry-after'] ?? '');
-    if (secondes != null && secondes >= 0) {
-      return _maintenant().toUtc().add(Duration(seconds: secondes));
-    }
-    if (enTetes['x-ratelimit-remaining'] == '0') {
-      final fin = int.tryParse(enTetes['x-ratelimit-reset'] ?? '');
-      if (fin != null) {
-        return DateTime.fromMillisecondsSinceEpoch(fin * 1000, isUtc: true);
-      }
-    }
-    return null;
-  }
-
-  static String _messageLimite(DateTime reprise) {
-    final locale = reprise.toLocal();
-    String deuxChiffres(int n) => n.toString().padLeft(2, '0');
-    return 'Limite de requêtes GitHub atteinte : nouvel essai possible à '
-        '${deuxChiffres(locale.hour)}:${deuxChiffres(locale.minute)}';
   }
 
   /// Adresse `rel="next"` de l'en-tête `Link` (« Using pagination in the
