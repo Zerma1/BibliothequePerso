@@ -127,6 +127,16 @@ jobs:
           # Jeton non conservé dans .git/config : la compilation n'a pas à écrire dans le dépôt.
           persist-credentials: false
 
+      # `flutter test` compile les « native assets » des paquets pour la machine hôte (Linux) :
+      # le hook de cnativeapi (dépendance de tray_manager via nativeapi) lance
+      # `pkg-config --cflags gtk+-3.0 x11 xi` puis compile du C++ (clang ou gcc).
+      # Sans ces paquets : « pkg-config ... failed », code 255 (JOURNAL_ERREURS.md, E13).
+      # Même liste que dans le job « Linux » : les garder identiques.
+      - name: Paquets système pour les native assets
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libx11-dev libxi-dev
+
       - name: Installer Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
@@ -140,6 +150,11 @@ jobs:
           flutter --version
           flutter --version --machine | grep -q "\"frameworkRevision\": *\"${FLUTTER_REVISION}\"" \
             || { echo "::error::Flutter installé différent de ${FLUTTER_VERSION} (${FLUTTER_REVISION})."; exit 1; }
+
+      # Échoue tôt et clairement si un paquet système manque (liste lue dans
+      # hook/build.dart de cnativeapi 0.6.2 : _linuxPackages).
+      - name: Vérifier pkg-config
+        run: pkg-config --exists --print-errors gtk+-3.0 x11 xi
 
       - name: Dépendances
         run: flutter pub get
@@ -292,10 +307,12 @@ jobs:
           # Jeton non conservé dans .git/config : la compilation n'a pas à écrire dans le dépôt.
           persist-credentials: false
 
+      # gtk+-3.0, x11 et xi : exigés par le hook de cnativeapi (voir job « Analyse et tests »).
+      # Même liste que dans le job « Analyse et tests » : les garder identiques.
       - name: Paquets système pour la compilation Linux
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libx11-dev libxi-dev
 
       - name: Installer Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
