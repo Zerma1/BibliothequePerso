@@ -264,6 +264,43 @@ const Duration dureeNouveaute = Duration(days: 30);
 /// l'heure qui suit un ajout.
 const Duration margeDecouverteApresAjout = Duration(hours: 1);
 
+/// Argument de ligne de commande qui lance l'application en mode
+/// désinstallation (sans fenêtre : `windows/runner/main.cpp`), avant que le
+/// programme soit retiré.
+///
+/// Lu par installateur/*.iss : ne pas renommer.
+const String argumentDesinstallation = '--desinstallation';
+
+/// Mode désinstallation : supprimer toutes les sources (toujours accompagné
+/// de [argumentSupprimerTitres], les titres dépendant de leurs sources).
+///
+/// Lu par installateur/*.iss : ne pas renommer.
+const String argumentSupprimerSources = '--supprimer-sources';
+
+/// Mode désinstallation : supprimer tous les titres (et leurs chapitres,
+/// file de téléchargement, appartenances aux listes…).
+///
+/// Lu par installateur/*.iss : ne pas renommer.
+const String argumentSupprimerTitres = '--supprimer-titres';
+
+/// Mode désinstallation : le désinstallateur efface les chapitres
+/// téléchargés ; la base doit les marquer « non téléchargés ».
+///
+/// Lu par installateur/*.iss : ne pas renommer.
+const String argumentChapitresSupprimes = '--chapitres-supprimes';
+
+/// Code de sortie du mode désinstallation quand tout a réussi (ou qu'il n'y
+/// avait rien à faire).
+///
+/// Lu par installateur/*.iss : ne pas modifier.
+const int codeSortieDesinstallationReussie = 0;
+
+/// Code de sortie du mode désinstallation en cas d'échec (arguments
+/// inconnus, base impossible à ouvrir, écriture refusée).
+///
+/// Lu par installateur/*.iss (toute valeur autre que 0 est un échec).
+const int codeSortieDesinstallationEchec = 1;
+
 /// Plus ancienne version du format JSON que l'import sait lire.
 const int versionFormatImportMinimale = 1;
 

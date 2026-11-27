@@ -823,6 +823,55 @@ class DepotTitres {
     );
   }
 
+  /// Supprime **tous** les titres et tout ce qui en dépend, en une seule
+  /// transaction (tout ou rien), et renvoie le nombre de titres supprimés.
+  ///
+  /// Sert à la désinstallation partielle (« supprimer les titres »). Sont
+  /// effacés : les téléchargements en file (`telechargements`), les
+  /// chapitres avec leur état de lecture (`chapitres`), les noms
+  /// alternatifs (`titres_alternatifs`), les appartenances aux listes
+  /// (`titres_listes`), les liens de catégories (`titres_categories`) et
+  /// les sites de chaque titre (`titres_sources`).
+  ///
+  /// Restent : les listes elles-mêmes (système et personnelles, vides), les
+  /// sources, les catégories et leurs regroupements
+  /// (`categories_equivalences`), les réglages (`parametres`). Les fichiers
+  /// (archives, couvertures) ne sont pas touchés : c'est au désinstalleur ou
+  /// au service de les supprimer.
+  ///
+  /// Les tables dépendantes sont vidées explicitement, des feuilles vers
+  /// `titres`, au lieu de compter sur les `ON DELETE CASCADE` : le résultat
+  /// ne dépend pas de `PRAGMA foreign_keys`, et aucune clé `RESTRICT`
+  /// (`chapitres.id_source`, `titres_sources.id_source`) n'est concernée
+  /// puisqu'aucune source n'est supprimée. Aucune valeur extérieure dans ces
+  /// requêtes : rien à paramétrer.
+  ///
+  /// Lève une [ErreurBaseDeDonnees] si l'écriture échoue (rien n'est alors
+  /// supprimé).
+  Future<int> supprimerTousLesTitres() async {
+    try {
+      return await _baseDeDonnees.transaction((txn) async {
+        const tablesDependantes = <String>[
+          'telechargements',
+          'chapitres',
+          'titres_alternatifs',
+          'titres_listes',
+          'titres_categories',
+          'titres_sources',
+        ];
+        for (final table in tablesDependantes) {
+          await txn.delete(table);
+        }
+        return txn.delete('titres');
+      });
+    } on DatabaseException catch (erreur) {
+      throw ErreurBaseDeDonnees(
+        'Impossible de supprimer tous les titres.',
+        cause: erreur,
+      );
+    }
+  }
+
   /// Exécute la requête de titres avec une clause `WHERE` facultative, puis
   /// charge les titres alternatifs de tous les résultats.
   Future<List<Titre>> _chargerAvecConditions(

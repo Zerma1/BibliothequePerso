@@ -5,7 +5,7 @@ publish_to: 'none'
 
 # Format X.Y.Z+N (voir PLAYBOOK.md section 12) : N est le numéro de build, qui doit
 # augmenter à chaque version publiée sur Android (versionCode).
-version: 0.3.2+13
+version: 0.3.3+14
 
 environment:
   sdk: ^3.14.0
@@ -56,6 +56,7 @@ dependencies:
   tray_manager: ^0.9.1
   # Démarrage avec Windows (clé HKCU\...\Run), appelé sous Windows seulement.
   launch_at_startup: ^0.5.1
+  file_picker: ^11.0.3
 
 # Pas de navigateur intégré sous Linux (choix du client) : la partie Linux de
 # flutter_inappwebview exigerait WPE WebKit à la compilation et sur le poste. Ce paquet

@@ -15,25 +15,29 @@ import 'dart:convert' show jsonEncode, utf8;
 import 'dart:io';
 
 import 'package:path/path.dart' as chemins;
-import 'package:path_provider/path_provider.dart';
 
 import 'constantes_donnees.dart';
+import 'dossier_base_de_donnees.dart';
 
 /// Chemin par défaut de [nomFichierEmplacements] : dans le dossier de la base
-/// de données (`getApplicationSupportDirectory()`, comme
-/// `cheminParDefautBaseDeDonnees`), soit sous Windows
-/// `%APPDATA%\io.github.zerma1\bibliotheque_perso\emplacements.json`.
+/// de données **effectivement utilisé** ([preparerDossierBaseDeDonnees], le
+/// même que `cheminParDefautBaseDeDonnees`), soit sous Windows
+/// `%APPDATA%\bibliotheque_perso\emplacements.json` par défaut, ou le
+/// dossier choisi à l'installation (`dossierBase`). Si l'ancien dossier n'a
+/// pas pu être déplacé, le fichier reste à côté de la base, dans l'ancien
+/// dossier.
 ///
-/// Renvoie `null` sous Android : la base y est dans un autre dossier
-/// (`getDatabasesPath()`) et aucun désinstalleur ne lit ce fichier (Android
-/// efface lui-même les données privées de l'application).
+/// Renvoie `null` sous Android : aucun désinstalleur ne lit ce fichier
+/// (Android efface lui-même les données privées de l'application).
 ///
-/// Peut lever l'erreur de `path_provider` (par exemple dans les tests, où le
-/// greffon n'est pas enregistré).
+/// Peut lever l'erreur de [preparerDossierBaseDeDonnees] (dans les tests
+/// notamment, où elle lève une `StateError`).
 Future<String?> cheminParDefautFichierEmplacements() async {
   if (Platform.isAndroid) return null;
-  final dossier = await getApplicationSupportDirectory();
-  return chemins.join(dossier.path, nomFichierEmplacements);
+  return chemins.join(
+    await preparerDossierBaseDeDonnees(),
+    nomFichierEmplacements,
+  );
 }
 
 /// Contenu de [nomFichierEmplacements] pour [dossierChapitres] (chemin

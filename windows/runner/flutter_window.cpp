@@ -37,11 +37,21 @@ constexpr char kMethodeCacher[] = "cacher";
 constexpr char kMethodeAfficher[] = "afficher";
 constexpr char kMethodeQuitter[] = "quitter";
 
+// Fin immediate du processus avec un code de sortie (argument entier, 0 par
+// defaut). Prevu pour le mode --desinstallation : l'installateur lit ce code
+// (0 = reussi). Le processus est termine directement (TerminateProcess) : une
+// fin normale peut bloquer dans une bibliotheque native (voir main.cpp, Z6) et
+// rendrait toujours 0. A n'appeler qu'apres avoir ferme la base et vide le
+// journal.
+constexpr char kMethodeTerminer[] = "terminer";
+
 }  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project,
-                             bool demarrage_masque)
-    : project_(project), demarrage_masque_(demarrage_masque) {}
+                             bool demarrage_masque, bool jamais_afficher)
+    : demarrage_masque_(demarrage_masque || jamais_afficher),
+      jamais_afficher_(jamais_afficher),
+      project_(project) {}
 
 FlutterWindow::~FlutterWindow() {}
 
@@ -159,6 +169,10 @@ void FlutterWindow::DemanderFermeture(HWND hwnd) {
 }
 
 void FlutterWindow::AfficherFenetre(HWND hwnd) {
+  if (jamais_afficher_) {
+    // Desinstallation : aucune fenetre, quelle que soit la demande.
+    return;
+  }
   if (::IsIconic(hwnd)) {
     ::ShowWindow(hwnd, SW_RESTORE);
   } else {
@@ -195,6 +209,17 @@ void FlutterWindow::TraiterAppelDart(
     // (qui sait que l'on quitte vraiment et vide le journal).
     ::PostMessage(hwnd, WM_CLOSE, 0, 0);
     resultat->Success();
+  } else if (methode == kMethodeTerminer) {
+    UINT code = EXIT_SUCCESS;
+    if (const auto* argument = appel.arguments()) {
+      if (const auto* entier32 = std::get_if<int32_t>(argument)) {
+        code = static_cast<UINT>(*entier32);
+      } else if (const auto* entier64 = std::get_if<int64_t>(argument)) {
+        code = static_cast<UINT>(*entier64);
+      }
+    }
+    resultat->Success();
+    ::TerminateProcess(::GetCurrentProcess(), code);
   } else {
     resultat->NotImplemented();
   }
@@ -208,10 +233,12 @@ void FlutterWindow::FermerMaintenant(HWND hwnd) {
     // decidee et le journal deja vide : si le processus n'a pas fini dans le
     // delai (arret du moteur ou d'une bibliotheque native bloque, par exemple
     // cnativeapi.dll de l'icone de la zone de notification), il est termine.
-    std::thread([]() {
+    // Desinstallation : sans « terminer », la fin est un echec (main.cpp).
+    const UINT code = jamais_afficher_ ? EXIT_FAILURE : EXIT_SUCCESS;
+    std::thread([code]() {
       std::this_thread::sleep_for(
           std::chrono::milliseconds(kDelaiMaxFinProcessusMs));
-      ::TerminateProcess(::GetCurrentProcess(), EXIT_SUCCESS);
+      ::TerminateProcess(::GetCurrentProcess(), code);
     }).detach();
   }
   fermeture_confirmee_ = true;

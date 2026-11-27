@@ -811,7 +811,7 @@ class _SectionApparence extends StatelessWidget {
 
 // ------------------------------------------------------------------ Démarrage
 
-/// « Démarrer avec Windows » : Off, Pleine fenêtre ou Icône masquée,
+/// « Démarrer avec Windows » : Désactivé, Pleine fenêtre ou Icône masquée,
 /// enregistré et appliqué aussitôt. Absente hors de Windows.
 class _SectionDemarrage extends StatelessWidget {
   const _SectionDemarrage();

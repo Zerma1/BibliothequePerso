@@ -144,4 +144,50 @@ class DepotSources {
       await txn.delete('sources', where: 'id = ?', whereArgs: <Object?>[id]);
     });
   }
+
+  /// Supprime, en une seule transaction, toutes les sources dont plus rien
+  /// ne dépend, et renvoie le nombre de sources supprimées (`supprimees`) et
+  /// gardées (`gardees`).
+  ///
+  /// Sert à la désinstallation partielle (« supprimer les sources »). Une
+  /// source est gardée tant qu'un titre l'utilise comme site principal
+  /// (`titres.id_source`) ou secondaire (`titres_sources`), ou qu'un
+  /// chapitre en vient (`chapitres.id_source`) : ces trois clés sont en `ON
+  /// DELETE RESTRICT` et `titres.id_source` est `NOT NULL`, un titre ne peut
+  /// donc pas rester sans source. Pour tout supprimer, appeler d'abord
+  /// `DepotTitres.supprimerTousLesTitres` : après lui, `gardees` vaut 0.
+  ///
+  /// Les titres ne sont jamais touchés. Les sous-requêtes `NOT EXISTS` sont
+  /// servies par `index_titres_id_source` et `index_titres_sources_id_source`
+  /// ; celle sur `chapitres` parcourt la table (pas d'index avec `id_source`
+  /// en tête, même LIMITE que [supprimerSource]) — opération rare.
+  ///
+  /// Lève une [ErreurBaseDeDonnees] si l'écriture échoue (rien n'est alors
+  /// supprimé).
+  Future<({int supprimees, int gardees})> supprimerSourcesInutilisees() async {
+    try {
+      return await _baseDeDonnees.transaction((txn) async {
+        // Aucune valeur extérieure : la requête ne compare que des colonnes.
+        final supprimees = await txn.rawDelete(
+          'DELETE FROM sources WHERE '
+          'NOT EXISTS (SELECT 1 FROM titres t WHERE t.id_source = sources.id) '
+          'AND NOT EXISTS (SELECT 1 FROM titres_sources ts '
+          'WHERE ts.id_source = sources.id) '
+          'AND NOT EXISTS (SELECT 1 FROM chapitres c '
+          'WHERE c.id_source = sources.id)',
+        );
+        final gardees =
+            Sqflite.firstIntValue(
+              await txn.rawQuery('SELECT COUNT(*) FROM sources'),
+            ) ??
+            0;
+        return (supprimees: supprimees, gardees: gardees);
+      });
+    } on DatabaseException catch (erreur) {
+      throw ErreurBaseDeDonnees(
+        'Impossible de supprimer les sources.',
+        cause: erreur,
+      );
+    }
+  }
 }
