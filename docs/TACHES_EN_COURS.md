@@ -31,9 +31,10 @@ propose « Mettre à jour » : téléchargement de l'installateur, vérification
 publiée avec la release, puis lancement de la mise à jour (`/ACTION=METTREAJOUR`).
 - [x] CI : construire l'installateur Inno Setup et sa somme SHA-256 dans la release (integrateur ;
   noms figés dans docs/DEPLOIEMENT.md ; jamais exécuté sur GitHub à ce stade)
-- [ ] Réseau : dernière release + téléchargement (developpeur-sources)
-- [ ] Service : vérification quotidienne, réglage activé par défaut (developpeur-services)
-- [ ] Interface : bandeau, progression, notes de version (developpeur-interface)
+- [x] Réseau : dernière release + téléchargement (developpeur-sources)
+- [x] Service : vérification quotidienne, réglage activé par défaut (developpeur-services) ; relance après mise à jour (/RELANCER)
+- [x] Interface : bandeau, progression, notes de version (developpeur-interface), assemblé dans main.dart
+- [ ] Vérifier la CI corrigée (E13) à la prochaine étiquette : sans release, la mise à jour automatique ne trouve rien
 
 ### E2. Lecture des formats de liseuse (à faire après E1)
 Décisions du client : **CBZ, PDF, EPUB d'abord** (CBR, MOBI/AZW3 ensuite si une bibliothèque

@@ -2624,6 +2624,113 @@ abstract final class Textes {
       'Vos tickets sont publiés sur la page GitHub (publique) de '
       "l'application. Leur avancée et les réponses sont suivies ici.";
 
+  // ------------------------------------- Mise à jour de l'application (0.4)
+
+  /// Bandeau de l'accueil : nouvelle version publiée.
+  static String versionDisponible(String version) =>
+      'Version $version disponible';
+
+  /// Bouton du bandeau et du dialogue des notes.
+  static const String mettreAJour = 'Mettre à jour';
+
+  /// Bouton qui ouvre les notes de version.
+  static const String notesDeVersion = 'Notes de version';
+
+  /// Bouton « Ignorer cette version ».
+  static const String ignorerCetteVersion = 'Ignorer cette version';
+
+  /// Bouton qui masque le bandeau jusqu'au prochain démarrage.
+  static const String plusTard = 'Plus tard';
+
+  /// Titre du dialogue des notes de version.
+  static String titreNotesDeVersion(String version) =>
+      'Nouveautés de la version $version';
+
+  /// Notes de version absentes.
+  static const String aucuneNoteDeVersion =
+      "Aucune note n'a été publiée pour cette version.";
+
+  /// Lien vers la page de la version sur GitHub.
+  static const String ouvrirPageVersion = 'Ouvrir la page de la version';
+
+  /// Mention d'une version que le client a choisi d'ignorer.
+  static const String versionIgnoreeMention =
+      'Vous avez choisi d\'ignorer cette version.';
+
+  /// Version sans installateur vérifiable : seule sa page est utilisable.
+  static const String versionSansInstallateur =
+      "Cette version n'a pas d'installateur vérifiable : téléchargez-la "
+      'depuis sa page.';
+
+  /// Confirmation après « Ignorer cette version ».
+  static String versionIgnoree(String version) =>
+      'La version $version ne sera plus proposée.';
+
+  /// Titre de la confirmation avant installation.
+  static String titreConfirmationMiseAJour(String version) =>
+      'Installer la version $version ?';
+
+  /// Confirmation avant installation (Windows).
+  static const String confirmationMiseAJour =
+      "L'application va se fermer pour installer la mise à jour.";
+
+  /// Téléchargement de l'installateur, avec le pourcentage s'il est connu.
+  static String telechargementMiseAJour(String version, double? progression) =>
+      progression == null
+      ? 'Téléchargement de la version $version…'
+      : 'Téléchargement de la version $version… '
+            '${(progression * 100).round()} %';
+
+  /// Section des Paramètres.
+  static const String sectionMiseAJourApplication =
+      "Mise à jour de l'application";
+
+  /// Résumé de la section repliée.
+  static String resumeMiseAJourApplication(String version, bool active) =>
+      'Version $version · '
+      '${active ? 'vérification quotidienne' : 'vérification désactivée'}';
+
+  /// Interrupteur de la vérification quotidienne.
+  static const String verifierChaqueJour =
+      'Vérifier les mises à jour chaque jour';
+
+  /// Explication sous l'interrupteur.
+  static const String explicationVerificationQuotidienne =
+      'Au plus une fois par jour, la dernière version publiée est demandée à '
+      'GitHub. Rien n\'est installé sans votre accord.';
+
+  /// Bouton de vérification forcée.
+  static const String verifierMaintenant = 'Vérifier maintenant';
+
+  /// Résultat : application à jour.
+  static const String applicationAJour = "L'application est à jour.";
+
+  /// Résultat : nouvelle version disponible (Paramètres).
+  static String nouvelleVersionTrouvee(String version) =>
+      'La version $version est disponible.';
+
+  /// Date de la dernière vérification réussie.
+  static String derniereVerificationApplication(
+    DateTime? date,
+    DateTime maintenant,
+  ) {
+    if (date == null) return 'Aucune vérification pour le moment';
+    final locale = date.toLocal();
+    final heure =
+        '${locale.hour.toString().padLeft(2, '0')}:'
+        '${locale.minute.toString().padLeft(2, '0')}';
+    return 'Dernière vérification : ${dateRelative(date, maintenant)} '
+        'à $heure';
+  }
+
+  /// Heure à laquelle GitHub accepte de nouveau les requêtes.
+  static String heureRepriseGithub(DateTime heure) {
+    final locale = heure.toLocal();
+    return 'Nouvel essai possible à partir de '
+        '${locale.hour.toString().padLeft(2, '0')}:'
+        '${locale.minute.toString().padLeft(2, '0')}.';
+  }
+
   /// Titre de l'écran et entrée des Paramètres.
   static const String mesTickets = 'Mes tickets';
 

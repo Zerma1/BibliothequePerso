@@ -210,14 +210,14 @@ class ServiceMiseAJourApplication {
   /// Paramètres de l'installateur : mise à jour sans question, avec la
   /// barre de progression visible (`/SILENT`, et non `/VERYSILENT`, pour
   /// que le client voie que quelque chose se passe), sans redémarrage de
-  /// Windows.
-  // LIMITE : `[Run]` de l'installateur porte `skipifsilent` : en `/SILENT`,
-  // l'application n'est pas relancée à la fin de la mise à jour (le client
-  // la rouvre lui-même).
+  /// Windows, puis relance de l'application (`/RELANCER`, lu par la section
+  /// `[Run]` de `installateur/bibliotheque_perso.iss`). `/SUPPRESSMSGBOXES`
+  /// est volontairement absent : une erreur de l'installateur reste visible.
   static const List<String> parametresInstallation = <String>[
     '/ACTION=METTREAJOUR',
     '/SILENT',
     '/NORESTART',
+    '/RELANCER',
   ];
 
   // ------------------------------------------------------- Règles pures

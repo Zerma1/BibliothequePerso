@@ -19,6 +19,7 @@ import '../widgets/dialogue_site.dart';
 import '../widgets/editeur_langues.dart';
 import '../widgets/jauge_reglage.dart';
 import '../widgets/messages.dart';
+import '../widgets/mise_a_jour_application.dart';
 import '../widgets/section_categories_regroupees.dart';
 import '../widgets/section_dossier_chapitres.dart';
 import '../widgets/section_journal.dart';
@@ -71,6 +72,9 @@ class EcranParametres extends StatelessWidget {
               // Tickets GitHub : à côté du journal et de « À propos », là où
               // le client vient pour un retour sur l'application.
               _SectionAideRetours(),
+              // À côté de l'aide et d'« À propos » : version et mises à
+              // jour de l'application elle-même.
+              SectionMiseAJourApplication(),
               // Juste avant « À propos » : on vient y chercher le journal à
               // joindre à un retour de test, comme la version.
               SectionJournal(),

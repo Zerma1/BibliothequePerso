@@ -66,6 +66,9 @@ import 'services/service_tickets.dart';
 import 'donnees/depot_tickets.dart';
 import 'etat/etat_tickets.dart';
 import 'sources/client_tickets_github.dart';
+import 'sources/client_mise_a_jour_github.dart';
+import 'services/service_mise_a_jour_application.dart';
+import 'etat/etat_mise_a_jour_application.dart';
 import 'services/service_export.dart';
 import 'services/service_import.dart';
 import 'services/service_journal.dart';
@@ -178,6 +181,7 @@ class ServicesApplication {
     required this.serviceRapportsErreur,
     required this.serviceExport,
     required this.serviceTickets,
+    required this.serviceMiseAJourApplication,
     required this.serviceImport,
     required this.serviceCategories,
     required this.serviceDossierChapitres,
@@ -203,6 +207,10 @@ class ServicesApplication {
   /// Tickets GitHub (section « Aide et retours ») : une seule instance, qui
   /// garde l'heure de reprise après une limite GitHub.
   final ServiceTickets serviceTickets;
+
+  /// Mise à jour automatique (vérification quotidienne de la dernière
+  /// release GitHub publiée depuis `main`).
+  final ServiceMiseAJourApplication serviceMiseAJourApplication;
 
   /// Réimport d'un export JSON (même section).
   final ServiceImport serviceImport;
@@ -260,6 +268,9 @@ ServicesApplication assemblerServices(
   // vers un même domaine est ainsi partagé par tous les services
   // (PLAYBOOK.md section 6).
   final clientUtilise = client ?? ClientHttpPoli();
+  // Limite GitHub (60 requêtes par heure et par adresse IP) : une seule
+  // instance partagée par les tickets et la mise à jour automatique.
+  final limiteGithub = SuiviLimiteGithub();
   final fabriqueSources = FabriqueSources(clientUtilise);
   final depotSources = DepotSources(base);
   final depotTitres = DepotTitres(base);
@@ -347,7 +358,12 @@ ServicesApplication assemblerServices(
     ),
     serviceTickets: ServiceTickets(
       DepotTickets(base),
-      ClientTicketsGithub(clientUtilise),
+      ClientTicketsGithub(clientUtilise, limite: limiteGithub),
+      versionApplication: versionApplication,
+    ),
+    serviceMiseAJourApplication: ServiceMiseAJourApplication(
+      DepotParametres(base),
+      ClientMiseAJourGithub(clientUtilise, limite: limiteGithub),
       versionApplication: versionApplication,
     ),
     // Exports à côté des rapports : `<dossier de l'application>/exports/`.
@@ -1247,6 +1263,7 @@ Future<void> demarrer() async {
       serviceRapportsErreur: services.serviceRapportsErreur,
       serviceExport: services.serviceExport,
       serviceTickets: services.serviceTickets,
+      serviceMiseAJourApplication: services.serviceMiseAJourApplication,
       serviceImport: services.serviceImport,
       serviceCategories: services.serviceCategories,
       serviceDossierChapitres: services.serviceDossierChapitres,
@@ -1332,6 +1349,7 @@ Widget construireApplication({
   ServiceRapportsErreur? serviceRapportsErreur,
   ServiceExport? serviceExport,
   ServiceTickets? serviceTickets,
+  ServiceMiseAJourApplication? serviceMiseAJourApplication,
   ServiceImport? serviceImport,
   ServiceCategories? serviceCategories,
   ServiceDossierChapitres? serviceDossierChapitres,
@@ -1364,6 +1382,17 @@ Widget construireApplication({
           ),
         ),
       // Sans service (tests), la section « Aide et retours » est masquée.
+      // Sans service (tests), le bandeau et la section sont masqués. Créé
+      // tout de suite : la vérification part même si l'application démarre
+      // dans la zone de notification.
+      if (serviceMiseAJourApplication != null)
+        ChangeNotifierProvider<EtatMiseAJourApplication>(
+          lazy: false,
+          create: (_) => EtatMiseAJourApplication(
+            serviceMiseAJourApplication,
+            quitterApplication: quitterApplication,
+          )..demarrer(),
+        ),
       if (serviceTickets != null)
         ChangeNotifierProvider<EtatTickets>(
           create: (_) => EtatTickets(serviceTickets)..chargerNombreNouveautes(),

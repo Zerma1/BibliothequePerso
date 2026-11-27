@@ -80,6 +80,10 @@
 ;   /BASE="D:\Base"                    installation : dossier de la base.
 ;   /SUPPRIMERSOURCES /SUPPRIMERTITRES /GARDERCHAPITRES
 ;       désinstallation silencieuse (installateur ou unins000.exe).
+;   /RELANCER   installation ou mise à jour (silencieuse ou non) : relance
+;       l'application à la fin si elle a réussi (sans la case « Lancer »).
+;       Utilisé par la mise à jour automatique :
+;       /ACTION=METTREAJOUR /SILENT /NORESTART /RELANCER
 ;
 ; Application ouverte : elle se cache dans la zone de notification et refuse
 ; WM_CLOSE ; le Restart Manager ne l'arrête pas. Le processus
@@ -276,7 +280,10 @@ Name: "{autoprograms}\{#NomRaccourci}"; Filename: "{app}\{#NomExecutable}"; Work
 Name: "{autodesktop}\{#NomRaccourci}"; Filename: "{app}\{#NomExecutable}"; WorkingDir: "{app}"; IconFilename: "{app}\{#NomExecutable}"; Tasks: bureau; Check: EstModeInstallation
 
 [Run]
-Filename: "{app}\{#NomExecutable}"; Description: "Lancer {#NomApplication}"; Flags: nowait postinstall skipifsilent; Check: EstModeInstallation
+Filename: "{app}\{#NomExecutable}"; Description: "Lancer {#NomApplication}"; Flags: nowait postinstall skipifsilent; Check: EstModeInstallation and not ParametrePresent('RELANCER')
+; /RELANCER (mise à jour automatique) : relance sans case à cocher, même en
+; silencieux, seulement après une installation ou mise à jour réussie.
+Filename: "{app}\{#NomExecutable}"; Flags: nowait; Check: EstModeInstallation and ParametrePresent('RELANCER')
 
 [UninstallDelete]
 ; Écrit par l'installateur (section [Code]) : à retirer avec le programme.

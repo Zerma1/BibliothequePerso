@@ -417,6 +417,7 @@ void main() {
           '/ACTION=METTREAJOUR',
           '/SILENT',
           '/NORESTART',
+          '/RELANCER',
         ]);
       },
     );
