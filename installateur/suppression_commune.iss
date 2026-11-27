@@ -1,7 +1,7 @@
-﻿// Règles de suppression communes à bibliotheque_perso.iss (désinstallation)
-// et desinstallateur.iss (désinstallation complète), incluses dans leur
-// section [Code] (#include). Requiert le define DossierDocuments (dossier
-// Documents, redirigé seulement pour les essais).
+﻿// Règles de suppression de bibliotheque_perso.iss (désinstallation et « Tout
+// supprimer », un seul script depuis 0.3.3), incluses dans sa section [Code]
+// (#include). Requiert le define DossierDocuments (dossier Documents, redirigé
+// seulement pour les essais).
 //
 // Sécurité (relecture du 2026-11-25) :
 // 1. Un dossier des chapitres n'est traité que s'il contient le repère
