@@ -173,7 +173,7 @@ void main() {
     final avertissements = avertissementsBase();
     expect(avertissements, hasLength(1));
     expect(avertissements.single.message, contains('enregistrée 6'));
-    expect(avertissements.single.message, contains('réelle 13'));
+    expect(avertissements.single.message, contains('réelle $versionSchema'));
     expect(avertissements.single.message, contains('aucun'));
 
     // Ouverture suivante : plus rien à réparer.
@@ -279,8 +279,9 @@ void main() {
         isA<ErreurBaseDeDonnees>().having(
           (e) => e.message,
           'message',
-          "Cette base a été créée par une version plus récente de "
-              "l'application (schéma 13) : installez la dernière version.",
+          'Cette base a été créée par une version plus récente de '
+              "l'application (schéma $versionSchema) : installez la dernière "
+              'version.',
         ),
       ),
     );
@@ -303,7 +304,7 @@ void main() {
         isA<ErreurBaseDeDonnees>().having(
           (e) => e.message,
           'message',
-          contains('schéma 13'),
+          contains('schéma $versionSchema'),
         ),
       ),
     );

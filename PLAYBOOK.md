@@ -356,6 +356,16 @@ agent ne doit écrire de déchiffrement d'images.
 
 Chaque étape se termine par une relecture (`relecteur-code`) et une validation du client.
 
+### Version 0.4.0 — suggestions d'utilisateurs (2026-11-27, demandées par le client)
+
+Détail et avancement : `docs/TACHES_EN_COURS.md` (E1 à E3). Ordre décidé par le client :
+
+| # | Fonctionnalité | Décisions du client |
+|---|----------------|---------------------|
+| E1 | **Tickets GitHub** : créer un ticket et suivre son avancée depuis l'application | Page « New issue » pré-remplie du dépôt public (aucun jeton dans l'application) ; écran « Mes tickets » (état, étiquettes, commentaires) par lecture publique de l'API, grâce à un repère `BP-…` |
+| E3 | **Mise à jour automatique** : une fois par jour, vérifier la dernière version publiée depuis `main` et proposer de se mettre à jour | Bandeau « Mettre à jour » ; installateur téléchargé depuis la release GitHub, vérifié par SHA-256 ; priorité avant E2 |
+| E2 | **Formats de liseuse** : CBZ, PDF, EPUB (puis CBR, MOBI/AZW3 si possible ; KFX non prévu) | Fichiers sans DRM seulement ; import par glisser-déposer ou explorateur ; fichier copié dans la bibliothèque ; paquets choisis par l'orchestrateur (`pdfrx`, `desktop_drop`, `flutter_widget_from_html_core`) |
+
 ### Idées pour des versions futures (à prévoir, pas à implémenter maintenant)
 
 Demandées par le client le 2026-11-15. Le code actuel ne doit pas les fermer :

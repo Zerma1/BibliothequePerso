@@ -32,6 +32,7 @@ const List<Migration> migrations = <Migration>[
   _migration11,
   _migration12,
   _migration13,
+  _migration14,
 ];
 
 /// Version actuelle du schéma (nombre de migrations).
@@ -896,4 +897,50 @@ Future<void> _migration13(DatabaseExecutor executeur) async {
   for (final instruction in instructions) {
     await executeur.execute(instruction);
   }
+}
+
+/// Migration 14 (tickets, 0.4.0) : tickets (issues GitHub) créés depuis
+/// l'application et leur avancée relevée sur GitHub (`Ticket`).
+///
+/// Table indépendante (aucune clé étrangère) : un ticket ne concerne ni un
+/// titre ni une source, et il n'est ni exporté ni importé avec la
+/// bibliothèque.
+///
+/// NE PLUS MODIFIER après livraison.
+Future<void> _migration14(DatabaseExecutor executeur) async {
+  // - repere UNIQUE : c'est par lui que l'issue est retrouvée ; deux tickets
+  //   au même repère rendraient la correspondance ambiguë. L'index implicite
+  //   de UNIQUE sert aussi `DepotTickets.chargerParRepere`.
+  // - type_ticket, etat, raison_fermeture : textes (valeurs des énumérations
+  //   du modèle) contrôlés par CHECK ; etat et raison_fermeture restent NULL
+  //   tant que l'issue n'est pas retrouvée (ou sans raison fournie).
+  // - numero UNIQUE : une issue GitHub correspond à un seul ticket local ;
+  //   SQLite accepte plusieurs NULL (tickets pas encore retrouvés).
+  // - etiquettes : tableau JSON de noms, NOT NULL DEFAULT '[]' (une seule
+  //   représentation de « aucune étiquette ») ; jamais cherché en SQL, donc
+  //   pas de table de liaison.
+  // - dates en millisecondes UTC (comme le reste du schéma).
+  // - Pas d'index sur date_creation (tri « plus récents d'abord ») : la
+  //   table ne contient que quelques dizaines de lignes, un parcours complet
+  //   suffit.
+  await executeur.execute('''
+    CREATE TABLE tickets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repere TEXT NOT NULL UNIQUE,
+      titre TEXT NOT NULL,
+      type_ticket TEXT NOT NULL
+        CHECK (type_ticket IN ('bug', 'suggestion', 'question')),
+      date_creation INTEGER NOT NULL,
+      numero INTEGER UNIQUE CHECK (numero IS NULL OR numero > 0),
+      etat TEXT CHECK (etat IS NULL OR etat IN ('ouvert', 'ferme')),
+      raison_fermeture TEXT CHECK (raison_fermeture IS NULL
+        OR raison_fermeture IN ('termine', 'non_retenu')),
+      etiquettes TEXT NOT NULL DEFAULT '[]',
+      nombre_commentaires INTEGER
+        CHECK (nombre_commentaires IS NULL OR nombre_commentaires >= 0),
+      date_maj_github INTEGER,
+      date_dernier_releve INTEGER,
+      date_consultation INTEGER
+    )
+    ''');
 }

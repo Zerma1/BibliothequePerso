@@ -9,6 +9,44 @@ coche les cases.
 Rappels : lire `CLAUDE.md` et `docs/JOURNAL_ERREURS.md` avant de commencer ; écrire les fichiers
 au fur et à mesure ; ne pas commiter ; `flutter analyze` à 0 sur son périmètre avant le rapport.
 
+## Version 0.4.0 — suggestions d'utilisateurs (2026-11-27)
+
+### E1. Tickets GitHub (en cours)
+Décisions du client : création par la page « New issue » pré-remplie du dépôt public
+Zerma1/BibliothequePerso (aucun jeton dans l'application) ; suivi dans l'application
+(écran « Mes tickets » : état, étiquettes, commentaires) par lecture publique de l'API,
+grâce à un repère unique `BP-…` dans le texte du ticket.
+- [x] Données : modèle `Ticket`, migration 14, `DepotTickets` (developpeur-donnees)
+- [x] Réseau : lecture des issues et commentaires, URL de création (developpeur-sources)
+- [x] Service tickets (developpeur-services)
+- [ ] Écran « Mes tickets » + création + assemblage (developpeur-interface, orchestrateur)
+
+### E3. Mise à jour automatique (demande du client, 2026-11-27)
+Une fois par jour, l'application consulte la dernière release GitHub publiée depuis `main`
+(non *pre-release*, API publique sans jeton) ; si la version est plus récente, un bandeau
+propose « Mettre à jour » : téléchargement de l'installateur, vérification d'une somme SHA-256
+publiée avec la release, puis lancement de la mise à jour (`/ACTION=METTREAJOUR`).
+- [ ] CI : construire l'installateur Inno Setup et sa somme SHA-256 dans la release (integrateur)
+- [ ] Réseau : dernière release + téléchargement (developpeur-sources)
+- [ ] Service : vérification quotidienne, réglage activé par défaut (developpeur-services)
+- [ ] Interface : bandeau, progression, notes de version (developpeur-interface)
+
+### E2. Lecture des formats de liseuse (à faire après E1)
+Décisions du client : **CBZ, PDF, EPUB d'abord** (CBR, MOBI/AZW3 ensuite si une bibliothèque
+sûre existe ; KFX non prévu) ; fichiers **sans DRM** seulement (aucun contournement) ; import
+par **glisser-déposer** ou **explorateur de fichiers** ; le fichier est copié dans la
+bibliothèque (titre de la source « Fichiers locaux », progression de lecture) ; paquets
+choisis par l'orchestrateur (annoncés dans le rapport).
+- [x] Choix des paquets (2026-11-27, laissé à l'orchestrateur par le client) : PDF `pdfrx` 3.2.0
+  (MIT ; PDFium embarqué à la compilation, à épingler après un essai de build Windows) ;
+  glisser-déposer `desktop_drop` 0.9.2 (Apache-2.0 ; Windows/Linux, file_picker sur Android) ;
+  EPUB : lecture maison (archive + xml + html déjà présents : container.xml → .opf → spine)
+  et rendu `flutter_widget_from_html_core` 0.17.4 (MIT, fonctionne aussi sous Linux) ;
+  CBZ : lecteur .zip existant. Plus tard : CBR (aucune bibliothèque Windows/Linux fiable),
+  MOBI/AZW3 (`kindle_unpack`, licence GPL-3.0 : accord du client nécessaire).
+- [ ] Conception (données : titres « Fichiers locaux », progression par format)
+- [ ] Données, services, interface, tests
+
 ## Étape 5 — corrections de la relecture et décisions du client (2026-11-15)
 
 ### developpeur-donnees (`lib/modeles/`, `lib/donnees/`)

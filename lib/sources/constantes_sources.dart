@@ -199,6 +199,61 @@ const int longueurMaxTextePageScripts = 200;
 /// le HTML reçu n'est qu'une coquille vide remplie ensuite en JavaScript.
 const int nombreMinLiensPageLisible = 3;
 
+/// Propriétaire du dépôt GitHub public qui reçoit les tickets de
+/// l'application (`ClientTicketsGithub`).
+const String proprietaireDepotTickets = 'Zerma1';
+
+/// Nom du dépôt GitHub public qui reçoit les tickets de l'application.
+const String nomDepotTickets = 'BibliothequePerso';
+
+/// Hôte de l'API REST de GitHub.
+const String hoteApiGithub = 'api.github.com';
+
+/// Hôte du site web de GitHub (page de création d'un ticket).
+const String hoteSiteGithub = 'github.com';
+
+/// Type de média demandé à l'API GitHub (en-tête `Accept`) : « Setting to
+/// application/vnd.github+json is recommended » (docs.github.com, « List
+/// repository issues »). Le corps reçu est alors le Markdown brut (`body`).
+const String typeMediaApiGithub = 'application/vnd.github+json';
+
+/// Version de l'API REST de GitHub (en-tête `X-GitHub-Api-Version`).
+///
+/// docs.github.com, « API Versions » (relevé le 2026-11-27) : versions
+/// prises en charge `2026-03-10` et `2022-11-28` (fin de prise en charge le
+/// 10 mars 2028). Les changements de rupture de `2026-03-10` (« Breaking
+/// changes ») ne touchent aucun champ lu ici (`number`, `title`, `state`,
+/// `state_reason`, `labels`, `comments`, `updated_at`, `html_url`, `body`,
+/// `pull_request`, `user.login`, `created_at`).
+const String versionApiGithub = '2026-03-10';
+
+/// Taille de page des listes de l'API GitHub (`per_page` : « The number of
+/// results per page (max 100) »).
+const int taillePageApiGithub = 100;
+
+/// Nombre maximal de pages lues par liste (tickets ou commentaires) : chaque
+/// page coûte une requête sur les 60 par heure autorisées sans jeton.
+const int nombreMaxPagesApiGithub = 5;
+
+/// Attente minimale après une limite secondaire GitHub sans en-tête de
+/// reprise (« Otherwise, wait for at least one minute before retrying »).
+const Duration attenteMinLimiteGithub = Duration(minutes: 1);
+
+/// Longueur maximale (en caractères) de l'adresse de création d'un ticket
+/// pré-remplie.
+///
+/// LIMITE : GitHub ne publie pas sa limite ; sa documentation (« Creating an
+/// issue », « Creating an issue from a URL query ») dit seulement qu'une URL
+/// trop longue renvoie « 414 URI Too Long ». 8 000 caractères restent sous
+/// les limites courantes des serveurs (8 Kio de ligne de requête) et des
+/// navigateurs.
+const int longueurMaxUrlCreationTicket = 8000;
+
+/// Mention ajoutée à la fin d'un corps de ticket tronqué pour tenir dans
+/// [longueurMaxUrlCreationTicket].
+const String mentionCorpsTicketTronque =
+    "[…] (texte tronqué : trop long pour l'adresse de création du ticket)";
+
 /// Texte dont la présence dans l'URL de base désigne un serveur MangaDex
 /// (docs/04-chapter/retrieving-chapter : signaler chaque image chargée
 /// « from a base url that doesn't contain mangadex.org »).

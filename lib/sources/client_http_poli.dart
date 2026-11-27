@@ -517,6 +517,13 @@ class ClientHttpPoli {
           octetsRecus: reponse.bodyBytes.length,
           duree: chrono.elapsed,
           extraitReponse: extrait,
+          // Noms en minuscules (même raison que dans
+          // [recupererOctetsAvecDetails]) : l'appelant peut lire les
+          // en-têtes de limite (`x-ratelimit-reset` de GitHub).
+          enTetesReponse: Map<String, String>.unmodifiable(<String, String>{
+            for (final entree in reponse.headers.entries)
+              entree.key.toLowerCase(): entree.value,
+          }),
         );
         if (code == codeHttpTropDeRequetes) {
           // Le serveur dit combien de temps patienter : on lui obéit, sauf si
@@ -699,6 +706,24 @@ class ClientHttpPoli {
       );
       final attente = fin.difference(_maintenant().toUtc());
       return attente.isNegative ? Duration.zero : attente;
+    }
+    // API GitHub (docs.github.com, « Rate limits for the REST API »,
+    // « Exceeding the rate limit ») : « If the x-ratelimit-remaining header
+    // is 0, you should not retry your request until after the time, in UTC
+    // epoch seconds, specified by the x-ratelimit-reset header ». Sans cette
+    // lecture, un 429 serait réessayé après 2 s, en pure perte.
+    if (reponse.headers['x-ratelimit-remaining'] == '0') {
+      final reinitialisation = int.tryParse(
+        reponse.headers['x-ratelimit-reset'] ?? '',
+      );
+      if (reinitialisation != null) {
+        final fin = DateTime.fromMillisecondsSinceEpoch(
+          reinitialisation * 1000,
+          isUtc: true,
+        );
+        final attente = fin.difference(_maintenant().toUtc());
+        return attente.isNegative ? Duration.zero : attente;
+      }
     }
     return null;
   }
