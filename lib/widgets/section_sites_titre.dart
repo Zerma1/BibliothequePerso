@@ -8,6 +8,7 @@ import '../etat/description_erreur.dart';
 import '../etat/etat_titre.dart';
 import 'bouton_rapport_erreur.dart';
 import 'constantes_interface.dart';
+import 'indicateur_hors_ligne.dart' show delaiSuppressionRegle;
 import 'messages.dart';
 import 'section_diagnostic_site.dart';
 import 'section_pliable.dart';
@@ -66,6 +67,7 @@ class SectionSitesTitre extends StatelessWidget {
                 site.idSource,
               ),
               nombreTelecharges: etat.nombreTelechargesDuSite(site.idSource),
+              delaiSuppression: delaiSuppressionRegle(context, ecouter: false),
             ),
           ),
         ),
@@ -117,6 +119,7 @@ class SectionSitesTitre extends StatelessWidget {
                 site.idSource,
               ),
               nombreTelecharges: etat.nombreTelechargesDuSite(site.idSource),
+              delaiSuppression: delaiSuppressionRegle(context, ecouter: false),
             ),
           ),
         ),

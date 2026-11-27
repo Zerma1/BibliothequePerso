@@ -6,6 +6,7 @@ import '../etat/description_erreur.dart';
 import '../etat/etat_bibliotheque.dart' show EtatFiltreCategorie;
 import '../etat/etat_navigateur.dart' show RefusEnregistrementWeb;
 import '../etat/etat_parametres.dart';
+import '../etat/etat_theme.dart' show ModeTheme;
 import '../etat/outils_chapitres.dart';
 import '../modeles/source.dart';
 import '../modeles/telechargement.dart';
@@ -579,18 +580,27 @@ abstract final class Textes {
   // --------------------------- Titre : suppressions prévues et doublons
 
   /// Légende : archive dont la suppression automatique est prévue.
-  static const String legendeSuppressionPrevue = 'Suppression prévue (24 h)';
+  /// [delai] : durée de conservation réglée dans les Paramètres.
+  static String legendeSuppressionPrevue(Duration delai) =>
+      'Suppression prévue (${dureeCourte(delai)})';
 
   /// Légende : archive en double.
   static const String legendeDoublon = 'Doublon (à vous de choisir)';
 
-  /// Compte à rebours d'une suppression prévue.
+  /// Compte à rebours d'une suppression prévue : minutes sous une heure,
+  /// heures et minutes jusqu'à 48 h, puis jours et heures (« Supprimé dans
+  /// 6 j 4 h ») : avec une conservation de 30 jours, « 724 h » ne parlerait
+  /// pas au client.
   static String suppressionDans(Duration reste) {
     if (reste.inMinutes < 1) return 'Suppression imminente';
     final heures = reste.inHours;
-    final minutes = reste.inMinutes % 60;
+    final minutes = reste.inMinutes % Duration.minutesPerHour;
     if (heures == 0) return 'Supprimé dans $minutes min';
-    return 'Supprimé dans $heures h ${minutes.toString().padLeft(2, '0')}';
+    if (heures < 2 * Duration.hoursPerDay) {
+      return 'Supprimé dans $heures h ${minutes.toString().padLeft(2, '0')}';
+    }
+    return 'Supprimé dans ${reste.inDays} j '
+        '${heures % Duration.hoursPerDay} h';
   }
 
   /// Explication d'une suppression prévue (sous le compte à rebours).
@@ -647,12 +657,13 @@ abstract final class Textes {
   /// Choix du dialogue : langues propres au titre.
   static const String languesPersonnalisees = 'Langues personnalisées';
 
-  /// Explication du dialogue des langues d'un titre.
-  static const String explicationLanguesTitre =
+  /// Explication du dialogue des langues d'un titre ([delai] : durée de
+  /// conservation réglée dans les Paramètres).
+  static String explicationLanguesTitre(Duration delai) =>
       "Seuls les chapitres dans ces langues sont téléchargés pour ce titre. "
       "Une langue retirée : ses chapitres téléchargés seront supprimés dans "
-      "24 heures (vous pourrez les garder). Une langue ajoutée : le site est "
-      "relu pour trouver ses chapitres.";
+      "${dureeEnToutesLettres(delai)} (vous pourrez les garder). Une langue "
+      "ajoutée : le site est relu pour trouver ses chapitres.";
 
   /// Langues d'un titre enregistrées.
   static String languesTitreEnregistrees(int? nombreNouveaux) {
@@ -946,8 +957,19 @@ abstract final class Textes {
 
   /// Aucun export trouvé dans le dossier des exports.
   static const String aucunExportTrouve =
-      "Aucun export trouvé dans le dossier des exports. Collez le chemin "
-      "d'un fichier ci-dessous.";
+      "Aucun export trouvé dans le dossier des exports. Choisissez un "
+      "fichier avec « Parcourir… » ou collez son chemin ci-dessous.";
+
+  /// Bouton qui ouvre l'explorateur de fichiers pour choisir l'export.
+  static const String parcourir = 'Parcourir…';
+
+  /// Titre de la fenêtre de l'explorateur de fichiers (ordinateur).
+  static const String titreChoixFichierImport = 'Choisir un export à importer';
+
+  /// L'explorateur de fichiers n'a pas pu s'ouvrir.
+  static const String explorateurIndisponible =
+      "L'explorateur de fichiers n'a pas pu s'ouvrir. Collez le chemin du "
+      'fichier dans le champ.';
 
   /// Champ du chemin d'un fichier à importer.
   static const String champCheminImport = 'Chemin du fichier JSON';
@@ -1054,14 +1076,15 @@ abstract final class Textes {
         ' Mo';
   }
 
-  /// Introduction des règles de téléchargement.
-  static const String introReglesTelechargement =
+  /// Introduction des règles de téléchargement ([delai] : durée de
+  /// conservation réglée juste au-dessus).
+  static String introReglesTelechargement(Duration delai) =>
       'Les chapitres sont téléchargés automatiquement pour la lecture '
-      'hors-ligne selon les listes du titre. Un titre ni favori ni suivi '
-      'n\'est jamais téléchargé automatiquement. Une seule version est '
+      "hors-ligne selon les listes du titre. Un titre ni favori ni suivi "
+      "n'est jamais téléchargé automatiquement. Une seule version est "
       'gardée par numéro de chapitre, selon « Mes langues ». Un chapitre '
-      'qui sort des règles est supprimé 24 heures plus tard (il est affiché '
-      'en rouge d\'ici là, et vous pouvez le garder).';
+      'qui sort des règles est supprimé ${dureeEnToutesLettres(delai)} plus '
+      "tard (il est affiché en rouge d'ici là, et vous pouvez le garder).";
 
   /// Nom d'une limite de téléchargement.
   static String libelleLimite(LimiteTelechargement limite) {
@@ -1505,6 +1528,26 @@ abstract final class Textes {
       'ils seront supprimés à la fin du compte à rebours, sauf si vous les '
       'gardez.';
 
+  /// Bouton de l'intertitre des suppressions prévues : tout supprimer tout
+  /// de suite.
+  static const String supprimerToutesSuppressionsPrevues =
+      'Supprimer tous les chapitres à supprimer';
+
+  /// Titre du dialogue de confirmation de la suppression groupée.
+  static const String titreSupprimerToutesSuppressionsPrevues =
+      'Supprimer les chapitres prévus';
+
+  /// Question avant la suppression groupée des [nombre] chapitres prévus.
+  static String confirmationSupprimerToutesSuppressionsPrevues(int nombre) =>
+      'Supprimer définitivement $nombre chapitre(s) maintenant ?';
+
+  /// Résultat de la suppression groupée : [nombre] archives supprimées.
+  /// Un chapitre ouvert dans le lecteur est épargné (supprimé plus tard),
+  /// d'où un nombre parfois plus petit que celui demandé.
+  static String suppressionsPrevuesFaites(int nombre) => nombre == 0
+      ? 'Aucun chapitre supprimé.'
+      : '$nombre chapitre(s) supprimé(s).';
+
   /// Intertitre de la file de téléchargement.
   static const String sectionFile = 'File de téléchargement';
 
@@ -1614,24 +1657,28 @@ abstract final class Textes {
   static String titreRetraitSite(String nomSite) => 'Retirer « $nomSite » ?';
 
   /// Confirmation du retrait d'un site secondaire.
+  ///
+  /// [delaiSuppression] : durée de conservation réglée dans les Paramètres.
   static String confirmationRetraitSite({
     required int nombreNonLusRetires,
     required int nombreTelecharges,
+    required Duration delaiSuppression,
   }) {
     final retires = switch (nombreNonLusRetires) {
       0 => 'Aucun chapitre non lu ne sera retiré.',
       1 => '1 chapitre non lu de ce site sera retiré.',
       _ => '$nombreNonLusRetires chapitres non lus de ce site seront retirés.',
     };
+    final delai = dureeEnToutesLettres(delaiSuppression);
     final telecharges = switch (nombreTelecharges) {
       0 => '',
       1 =>
         "\n\nLe chapitre téléchargé depuis ce site passera au rouge : son "
-            "archive sera supprimée dans 24 heures, sauf si vous le gardez.",
+            "archive sera supprimée dans $delai, sauf si vous le gardez.",
       _ =>
         "\n\nLes $nombreTelecharges chapitres téléchargés depuis ce site "
-            "passeront au rouge : leurs archives seront supprimées dans 24 "
-            "heures, sauf si vous les gardez.",
+            "passeront au rouge : leurs archives seront supprimées dans "
+            "$delai, sauf si vous les gardez.",
     };
     return '$retires Les chapitres lus restent dans votre historique.'
         '$telecharges';
@@ -1726,10 +1773,14 @@ abstract final class Textes {
       '« $nomSite » comme simple lien ?';
 
   /// Confirmation du passage d'un site lu en lien seul.
+  ///
+  /// [delaiSuppression] : durée de conservation réglée dans les Paramètres.
   static String confirmationPassageLienSeul({
     required int nombreNonLusRetires,
     required int nombreTelecharges,
+    required Duration delaiSuppression,
   }) {
+    final delai = dureeEnToutesLettres(delaiSuppression);
     final debut =
         "L'application ne lira plus ce site : il s'ouvrira seulement dans "
         'votre navigateur. ';
@@ -1743,11 +1794,11 @@ abstract final class Textes {
       0 => '',
       1 =>
         "\n\nLe chapitre téléchargé depuis ce site passera au rouge : son "
-            'archive sera supprimée dans 24 heures, sauf si vous la gardez.',
+            'archive sera supprimée dans $delai, sauf si vous la gardez.',
       _ =>
         "\n\nLes $nombreTelecharges chapitres téléchargés depuis ce site "
-            'passeront au rouge : leurs archives seront supprimées dans 24 '
-            'heures, sauf si vous les gardez.',
+            'passeront au rouge : leurs archives seront supprimées dans '
+            '$delai, sauf si vous les gardez.',
     };
     return '$debut$chapitres$lus$telecharges';
   }
@@ -2082,6 +2133,33 @@ abstract final class Textes {
       'Redémarrez l\'application pour utiliser le nouveau dossier des '
       'chapitres.';
 
+  /// Bandeau : dossier choisi dans l'installateur, non appliqué parce que
+  /// des chapitres étaient déjà téléchargés dans [dossierActuel].
+  static String bandeauDossierInstallation(
+    String dossierChoisi,
+    String dossierActuel,
+  ) =>
+      "Vous avez choisi $dossierChoisi à l'installation pour votre "
+      'bibliothèque. Vos chapitres sont encore dans $dossierActuel.';
+
+  /// Bouton du bandeau : déplacer les chapitres vers le dossier choisi à
+  /// l'installation.
+  static const String deplacerMesChapitres = 'Déplacer mes chapitres';
+
+  /// Titre de la confirmation « Ignorer » du dossier de l'installateur.
+  static const String ignorerDossierInstallation =
+      "Ignorer le dossier choisi à l'installation ?";
+
+  /// Texte de la confirmation « Ignorer » du dossier de l'installateur.
+  static String confirmationIgnorerDossierInstallation(String dossierActuel) =>
+      'Vos chapitres restent dans $dossierActuel et ce dossier ne vous sera '
+      'plus proposé. Vous pourrez toujours changer de dossier dans les '
+      'Paramètres.';
+
+  /// Message après « Ignorer » le dossier de l'installateur.
+  static const String dossierInstallationIgnore =
+      'Vos chapitres restent dans le dossier actuel.';
+
   // ------------------------------------------- Listes personnelles (X4)
 
   /// Bouton et titre du dialogue de création d'une liste.
@@ -2399,14 +2477,136 @@ abstract final class Textes {
 
   // ---------------------------- Téléchargements simultanés (Paramètres)
 
-  /// Libellé de la jauge.
-  static String telechargementsSimultanes(int nombre) =>
-      'Téléchargements simultanés : $nombre';
+  /// Libellé de la jauge (la valeur est affichée à droite).
+  static const String libelleTelechargementsSimultanes =
+      'Téléchargements simultanés';
 
   /// Explication sous la jauge.
   static const String explicationTelechargementsSimultanes =
       'Un même site reçoit au plus une requête par seconde : le gain se voit '
       'surtout avec plusieurs sites.';
+
+  // ------------------------ Durée de conservation avant suppression
+
+  /// Libellé de la jauge de la durée de conservation avant suppression.
+  static const String libelleDelaiSuppression =
+      'Conservation avant suppression';
+
+  /// Explication sous la jauge de la durée de conservation.
+  static const String explicationDelaiSuppression =
+      "Un chapitre téléchargé qui sort de vos règles reste ce temps-là sur "
+      "l'appareil (en rouge, avec un compte à rebours) avant d'être "
+      "supprimé : vous pouvez le garder d'ici là. Les suppressions déjà "
+      'prévues gardent leur date.';
+
+  /// Durée de conservation enregistrée.
+  static String delaiSuppressionEnregistre(Duration delai) =>
+      'Les chapitres sortis des règles seront supprimés après '
+      '${dureeEnToutesLettres(delai)}.';
+
+  /// Durée courte pour une jauge : « 6 h », « 24 h », « 2 jours »,
+  /// « 1 j 6 h ». Jusqu'à 24 h on compte en heures (les crans proposés
+  /// s'y arrêtent), au-delà en jours.
+  static String dureeCourte(Duration duree) {
+    final heures = duree.inHours;
+    if (heures <= Duration.hoursPerDay) return '$heures h';
+    final jours = duree.inDays;
+    final reste = heures % Duration.hoursPerDay;
+    if (reste == 0) return jours == 1 ? '1 jour' : '$jours jours';
+    return '$jours j $reste h';
+  }
+
+  /// Durée dans une phrase : « 1 heure », « 24 heures », « 2 jours »,
+  /// « 1 jour et 6 heures ».
+  static String dureeEnToutesLettres(Duration duree) {
+    String heuresEnLettres(int heures) =>
+        heures <= 1 ? '$heures heure' : '$heures heures';
+    final heures = duree.inHours;
+    if (heures <= Duration.hoursPerDay) return heuresEnLettres(heures);
+    final jours = duree.inDays;
+    final joursEnLettres = jours == 1 ? '1 jour' : '$jours jours';
+    final reste = heures % Duration.hoursPerDay;
+    if (reste == 0) return joursEnLettres;
+    return '$joursEnLettres et ${heuresEnLettres(reste)}';
+  }
+
+  // ------------------------------------------------------------- Apparence
+
+  /// Section « Apparence » (Paramètres).
+  static const String sectionApparence = 'Apparence';
+
+  /// Libellé du choix du thème.
+  static const String libelleTheme = 'Thème';
+
+  /// Explication du choix du thème.
+  static const String explicationTheme =
+      '« Système » suit le réglage clair ou sombre de votre appareil.';
+
+  /// Nom d'un thème (bouton et résumé de la section).
+  static String nomModeTheme(ModeTheme mode) => switch (mode) {
+    ModeTheme.systeme => 'Système',
+    ModeTheme.clair => 'Clair',
+    ModeTheme.sombre => 'Sombre',
+  };
+
+  /// Résumé de la section « Apparence », visible section repliée.
+  static String resumeApparence(ModeTheme mode) =>
+      'Thème : ${nomModeTheme(mode)}';
+
+  // ------------------------------------------------------------- Démarrage
+
+  /// Section « Démarrage » (Paramètres, Windows seulement).
+  static const String sectionDemarrage = 'Démarrage';
+
+  /// Libellé du choix du lancement avec Windows.
+  static const String libelleDemarrerAvecWindows = 'Démarrer avec Windows';
+
+  /// Nom d'un mode de démarrage (bouton et résumé de la section).
+  static String nomModeDemarrage(ModeDemarrage mode) => switch (mode) {
+    ModeDemarrage.desactive => 'Désactivé',
+    ModeDemarrage.pleineFenetre => 'Pleine fenêtre',
+    ModeDemarrage.iconeMasquee => 'Icône masquée',
+  };
+
+  /// Phrase d'explication du mode de démarrage choisi.
+  static String explicationModeDemarrage(ModeDemarrage mode) => switch (mode) {
+    ModeDemarrage.desactive =>
+      "L'application ne se lance pas toute seule à l'ouverture de "
+          'votre session Windows.',
+    ModeDemarrage.pleineFenetre =>
+      "L'application se lance à l'ouverture de votre session Windows, "
+          'fenêtre affichée.',
+    ModeDemarrage.iconeMasquee =>
+      "L'application se lance à l'ouverture de votre session Windows, "
+          'sans fenêtre : seule son icône apparaît dans la zone de '
+          'notification, et les nouveaux chapitres sont recherchés et '
+          'téléchargés en arrière-plan.',
+  };
+
+  /// Résumé de la section « Démarrage », visible section repliée.
+  static String resumeDemarrage(ModeDemarrage mode) =>
+      '$libelleDemarrerAvecWindows : ${nomModeDemarrage(mode)}';
+
+  /// Windows a refusé l'inscription au démarrage.
+  static const String demarrageRefuseParWindows =
+      "Windows a refusé de modifier le lancement au démarrage : l'ancien "
+      'réglage est conservé.';
+
+  // -------------------------------------------- Zone de notification (Windows)
+
+  /// Info-bulle de l'icône de la zone de notification.
+  static const String infoBulleZoneNotification =
+      'Bibliothèque perso (continue en arrière-plan)';
+
+  /// Menu de l'icône : afficher la fenêtre.
+  static const String menuZoneNotificationOuvrir = 'Ouvrir Bibliothèque perso';
+
+  /// Menu de l'icône : recherche manuelle des nouveaux chapitres.
+  static const String menuZoneNotificationRechercher =
+      'Rechercher les nouveaux chapitres';
+
+  /// Menu de l'icône : vraie fermeture de l'application.
+  static const String menuZoneNotificationQuitter = 'Quitter';
 
   // ------------------------------------------------------------- Formatage
 

@@ -37,7 +37,44 @@ const int nombreEssaisParPage = 2;
 /// Délai avant la suppression d'une archive décidée par les règles de
 /// conservation (décision du client du 2026-11-15) : le client a le temps de
 /// la garder ou de la supprimer tout de suite.
+///
+/// Valeur par défaut du réglage « Durée de conservation avant suppression »
+/// (`ServiceParametres.chargerDelaiSuppression`, demande du client du
+/// 2026-11-25) ; sert aussi au repli quand le réglage ne peut pas être lu.
 const Duration delaiSuppressionDifferee = Duration(hours: 24);
+
+/// Plus petit délai de suppression accepté. Pas de suppression immédiate
+/// (0 h) : une archive sortie des règles par erreur (mauvais réglage, liste
+/// retirée par mégarde, site qui renvoie une liste de chapitres incomplète)
+/// serait effacée avant que le client ait pu la voir en rouge et la garder.
+/// Une heure laisse ce temps ; « Supprimer maintenant » reste disponible.
+const Duration delaiSuppressionDiffereeMinimum = Duration(hours: 1);
+
+/// Plus grand délai de suppression accepté (demande du client).
+const Duration delaiSuppressionDiffereeMaximum = Duration(days: 30);
+
+/// Crans proposés pour la jauge « Durée de conservation avant suppression »,
+/// du plus court au plus long (bornes comprises, défaut parmi eux).
+const List<Duration> delaisSuppressionDiffereeProposes = <Duration>[
+  Duration(hours: 1),
+  Duration(hours: 6),
+  Duration(hours: 12),
+  Duration(hours: 24),
+  Duration(days: 2),
+  Duration(days: 3),
+  Duration(days: 7),
+  Duration(days: 14),
+  Duration(days: 30),
+];
+
+/// Délai dont est repoussée la suppression prévue d'un chapitre ouvert dans
+/// le lecteur (`ServiceTelechargement.protegerChapitre`). Ce n'est pas le
+/// réglage de conservation : c'est une protection pour la tâche de fond
+/// Android, qui ne voit pas les chapitres ouverts. Il reste fixe pour qu'un
+/// délai de conservation court (1 h) n'expose pas une lecture en cours, et
+/// qu'un délai long (30 j) ne reporte pas d'un mois une suppression presque
+/// échue simplement parce que le chapitre a été ouvert.
+const Duration delaiProtectionLecture = Duration(hours: 24);
 
 /// Échecs d'un même chapitre au-delà desquels les règles ne le relancent
 /// plus automatiquement (le client peut toujours le relancer à la main) :
@@ -164,6 +201,9 @@ const String extensionFichierJournalExporte = 'log';
 /// n'en garde de toute façon que 14 (`joursConservationJournaux`).
 const int joursJournalExportesMaximum = 14;
 
+/// Nombre minimal de jours copiés par « Exporter le journal » (aujourd'hui).
+const int joursJournalExportesMinimum = 1;
+
 /// Préfixe du nom d'un rapport d'erreur (`rapport_20261116_143000.txt`).
 const String prefixeFichierRapport = 'rapport_';
 
@@ -223,6 +263,43 @@ const Duration dureeNouveaute = Duration(days: 30);
 /// un ajout lent, et une vérification planifiée a rarement lieu dans
 /// l'heure qui suit un ajout.
 const Duration margeDecouverteApresAjout = Duration(hours: 1);
+
+/// Argument de ligne de commande qui lance l'application en mode
+/// désinstallation (sans fenêtre : `windows/runner/main.cpp`), avant que le
+/// programme soit retiré.
+///
+/// Lu par installateur/*.iss : ne pas renommer.
+const String argumentDesinstallation = '--desinstallation';
+
+/// Mode désinstallation : supprimer toutes les sources (toujours accompagné
+/// de [argumentSupprimerTitres], les titres dépendant de leurs sources).
+///
+/// Lu par installateur/*.iss : ne pas renommer.
+const String argumentSupprimerSources = '--supprimer-sources';
+
+/// Mode désinstallation : supprimer tous les titres (et leurs chapitres,
+/// file de téléchargement, appartenances aux listes…).
+///
+/// Lu par installateur/*.iss : ne pas renommer.
+const String argumentSupprimerTitres = '--supprimer-titres';
+
+/// Mode désinstallation : le désinstallateur efface les chapitres
+/// téléchargés ; la base doit les marquer « non téléchargés ».
+///
+/// Lu par installateur/*.iss : ne pas renommer.
+const String argumentChapitresSupprimes = '--chapitres-supprimes';
+
+/// Code de sortie du mode désinstallation quand tout a réussi (ou qu'il n'y
+/// avait rien à faire).
+///
+/// Lu par installateur/*.iss : ne pas modifier.
+const int codeSortieDesinstallationReussie = 0;
+
+/// Code de sortie du mode désinstallation en cas d'échec (arguments
+/// inconnus, base impossible à ouvrir, écriture refusée).
+///
+/// Lu par installateur/*.iss (toute valeur autre que 0 est un échec).
+const int codeSortieDesinstallationEchec = 1;
 
 /// Plus ancienne version du format JSON que l'import sait lire.
 const int versionFormatImportMinimale = 1;

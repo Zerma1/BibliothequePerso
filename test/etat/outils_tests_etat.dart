@@ -26,6 +26,7 @@ import 'package:bibliotheque_perso/etat/etat_parutions.dart';
 import 'package:bibliotheque_perso/etat/etat_rapports_erreur.dart';
 import 'package:bibliotheque_perso/etat/etat_sources.dart';
 import 'package:bibliotheque_perso/etat/etat_telechargements.dart';
+import 'package:bibliotheque_perso/etat/etat_theme.dart';
 import 'package:bibliotheque_perso/main.dart';
 import 'package:bibliotheque_perso/modeles/categorie.dart';
 import 'package:bibliotheque_perso/modeles/chapitre.dart';
@@ -1423,6 +1424,24 @@ class FauxServiceTelechargement implements ServiceTelechargement {
   }
 
   @override
+  Future<int> supprimerToutesSuppressionsPrevues() async {
+    journal.add('supprimerToutes');
+    final refus = erreurSuppression;
+    if (refus != null) throw refus;
+    // Comme le vrai service : un chapitre ouvert dans le lecteur est épargné.
+    final ids = <int>[
+      for (final chapitre in await chargerSuppressionsPrevues())
+        if (chapitre.id != null && !estProtege(chapitre.id!)) chapitre.id!,
+    ];
+    for (final id in ids) {
+      await supprimerTelechargement(id, signalerChangement: false);
+      planifierSuppressionDeTest(id, null);
+    }
+    if (ids.isNotEmpty) signaler();
+    return ids.length;
+  }
+
+  @override
   Future<void> annulerSuppression(int idChapitre) async {
     journal.add('garder:$idChapitre');
     gardes.add(idChapitre);
@@ -1676,6 +1695,43 @@ class FauxServiceParametres implements ServiceParametres {
       ServiceParametres.minimumTelechargementsSimultanes,
       ServiceParametres.maximumTelechargementsSimultanes,
     );
+  }
+
+  /// Thème « enregistré ».
+  ModeTheme modeTheme = ServiceParametres.modeThemeParDefaut;
+
+  @override
+  Future<ModeTheme> chargerModeTheme() async => modeTheme;
+
+  @override
+  Future<void> enregistrerModeTheme(ModeTheme mode) async {
+    modeTheme = mode;
+  }
+
+  /// Lancement à l'ouverture de session « enregistré ».
+  ModeDemarrage modeDemarrage = ServiceParametres.modeDemarrageParDefaut;
+
+  @override
+  Future<ModeDemarrage> chargerModeDemarrage() async => modeDemarrage;
+
+  @override
+  Future<void> enregistrerModeDemarrage(ModeDemarrage mode) async {
+    modeDemarrage = mode;
+  }
+
+  /// Durée de conservation avant suppression « enregistrée ».
+  Duration delaiSuppression = ServiceParametres.delaiSuppressionParDefaut;
+
+  @override
+  Future<Duration> chargerDelaiSuppression() async => delaiSuppression;
+
+  @override
+  Future<void> enregistrerDelaiSuppression(Duration delai) async {
+    final heures = (delai.inMinutes / Duration.minutesPerHour).round().clamp(
+      ServiceParametres.delaiSuppressionMinimum.inHours,
+      ServiceParametres.delaiSuppressionMaximum.inHours,
+    );
+    delaiSuppression = Duration(hours: heures);
   }
 
   /// Verrou de la file « enregistré ».
@@ -2377,6 +2433,31 @@ class FauxServiceDossierChapitres implements ServiceDossierChapitres {
   /// Nombre d'appels à [abandonnerDeplacementInacheve].
   int nombreAbandons = 0;
 
+  /// Dossier de l'installateur en attente (extension
+  /// `DossierInstallationEnAttente` du vrai service, injectée dans l'état
+  /// par [chargerInstallationEnAttente] et [ignorerInstallationEnAttente]).
+  String? dossierInstallationEnAttente;
+
+  /// Erreur levée par [ignorerInstallationEnAttente], si définie.
+  Object? erreurIgnorerInstallation;
+
+  /// Nombre d'appels à [ignorerInstallationEnAttente].
+  int nombreRefusInstallation = 0;
+
+  /// Remplace `chargerDossierInstallationEnAttente` (extension).
+  Future<String?> chargerInstallationEnAttente() async {
+    _lire();
+    return dossierInstallationEnAttente;
+  }
+
+  /// Remplace `ignorerDossierInstallationEnAttente` (extension).
+  Future<void> ignorerInstallationEnAttente() async {
+    nombreRefusInstallation++;
+    final panne = erreurIgnorerInstallation;
+    if (panne != null) throw panne;
+    dossierInstallationEnAttente = null;
+  }
+
   @override
   Future<AccesDossierChapitres> verifierAccesDossier() async {
     nombreVerifications++;
@@ -2470,6 +2551,9 @@ class FauxServiceDossierChapitres implements ServiceDossierChapitres {
     );
     dossierChoisi = demande.isEmpty ? null : cible;
     deplacementInacheve = null;
+    // Comme le vrai service : la réussite clôt la proposition de
+    // l'installateur.
+    dossierInstallationEnAttente = null;
     redemarrageNecessaire = true;
     estFileEnPause = true;
     signaler();
@@ -2503,6 +2587,8 @@ Widget envelopper(
   Future<List<String>> Function()? listerExports,
   bool verifierMisesAJourAuDemarrage = false,
   DateTime Function()? maintenant,
+  bool estWindows = false,
+  InscriptionDemarrage? surChangementModeDemarrage,
 }) {
   final serviceTelechargement =
       telechargement ?? FauxServiceTelechargement(bibliotheque);
@@ -2564,13 +2650,27 @@ Widget envelopper(
           serviceParametres,
           serviceTelechargement,
           serviceBibliotheque: bibliotheque,
+          // Fixé plutôt que lu sur la machine : les tests donnent le même
+          // écran sous Windows et sous Linux.
+          estWindows: estWindows,
+          surChangementModeDemarrage: surChangementModeDemarrage,
         )..charger(),
+      ),
+      // Section « Apparence » des Paramètres (thème lu dans le faux service).
+      ChangeNotifierProvider<EtatTheme>(
+        create: (_) => EtatTheme(serviceParametres)..charger(),
       ),
       // Section « Dossier des chapitres » et bandeaux seulement si un faux
       // service est fourni (comme l'application sans service).
       if (dossierChapitres != null)
         ChangeNotifierProvider<EtatDossierChapitres>(
-          create: (_) => EtatDossierChapitres(dossierChapitres)..charger(),
+          create: (_) => EtatDossierChapitres(
+            dossierChapitres,
+            chargerDossierInstallation:
+                dossierChapitres.chargerInstallationEnAttente,
+            ignorerDossierInstallation:
+                dossierChapitres.ignorerInstallationEnAttente,
+          )..charger(),
         ),
       // Section « Journal » seulement si un faux service est fourni.
       if (journal != null)

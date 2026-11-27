@@ -20,8 +20,7 @@
 ///   failure, bad SSL certificate, ...) just put 0 for bytes ».
 library;
 
-import 'package:flutter/foundation.dart';
-
+import '../modeles/journal.dart';
 import 'client_http_poli.dart';
 import 'constantes_sources.dart';
 import 'erreur_source.dart';
@@ -41,7 +40,8 @@ enum ResultatSignalement {
 /// Envoie les signalements MangaDex@Home exigés par la documentation.
 ///
 /// Un échec de signalement ne fait **jamais** échouer le téléchargement :
-/// toutes les erreurs sont avalées et journalisées avec `debugPrint`.
+/// toutes les erreurs sont avalées et journalisées (`Journal`), sans l'URL
+/// complète ni le texte de l'erreur (ils peuvent contenir le jeton).
 class SignalementMangaDex {
   /// Crée le service de signalement, qui passe par [_client] (seule classe
   /// autorisée à faire du réseau). [adresse] permet de changer le point
@@ -135,9 +135,10 @@ class SignalementMangaDex {
       // avalée : le signalement est un service rendu à MangaDex, jamais une
       // condition du téléchargement. L'URL n'est pas journalisée en entier :
       // `baseUrl` contient un jeton d'accès temporaire.
-      debugPrint(
+      Journal.actuel.avertissement(
+        CategorieJournal.reseau,
         'Signalement MangaDex@Home impossible '
-        '(${Uri.tryParse(urlImage)?.host ?? '?'}) : $erreur',
+        '(${Uri.tryParse(urlImage)?.host ?? '?'}) : ${erreur.runtimeType}',
       );
       return ResultatSignalement.echec;
     }

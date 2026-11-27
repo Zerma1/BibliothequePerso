@@ -1,6 +1,6 @@
 /// Bandeaux globaux du dossier des chapitres : dossier inaccessible (NAS
-/// éteint, lecteur réseau déconnecté) et redémarrage nécessaire après un
-/// changement de dossier.
+/// éteint, lecteur réseau déconnecté), redémarrage nécessaire après un
+/// changement de dossier, et proposition du dossier choisi à l'installation.
 library;
 
 import 'package:material_ui/material_ui.dart';
@@ -8,6 +8,8 @@ import 'package:provider/provider.dart';
 
 import '../etat/etat_dossier_chapitres.dart';
 import 'constantes_interface.dart';
+import 'messages.dart';
+import 'section_dossier_chapitres.dart' show ouvrirChangementDossier;
 import 'textes.dart';
 
 /// Zone qui affiche les bandeaux du dossier des chapitres au-dessus de
@@ -21,6 +23,49 @@ class ZoneBandeauxDossierChapitres extends StatelessWidget {
   /// Contenu affiché sous les bandeaux.
   final Widget child;
 
+  /// « Ignorer » le dossier de l'installateur : confirmation (le choix est
+  /// définitif), puis refus enregistré par l'état.
+  Future<void> _ignorerInstallation(
+    BuildContext context,
+    EtatDossierChapitres etat,
+  ) async {
+    final confirme = await showDialog<bool>(
+      context: context,
+      builder: (contexteDialogue) => AlertDialog(
+        title: const Text(Textes.ignorerDossierInstallation),
+        // Largeur bornée : le texte cite un chemin, il reste lisible sur
+        // grand écran.
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: largeurMaxFormulaire),
+          child: SingleChildScrollView(
+            child: Text(
+              Textes.confirmationIgnorerDossierInstallation(etat.dossierActuel),
+            ),
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(contexteDialogue).pop(false),
+            child: const Text(Textes.annuler),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(contexteDialogue).pop(true),
+            child: const Text(Textes.ignorer),
+          ),
+        ],
+      ),
+    );
+    if (confirme != true || !context.mounted) return;
+    final resultat = await etat.ignorerDossierInstallation();
+    if (context.mounted) {
+      afficherResultat(
+        context,
+        resultat,
+        succes: Textes.dossierInstallationIgnore,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final etat = context.watch<EtatDossierChapitres?>();
@@ -30,7 +75,9 @@ class ZoneBandeauxDossierChapitres extends StatelessWidget {
     final message = etat.accesDossier.message;
     final inaccessible = !etat.accesDossier.estAccessible;
     final redemarrage = etat.redemarrageNecessaire;
-    final visible = inaccessible || redemarrage;
+    final installation = etat.dossierInstallationEnAttente;
+    final occupe = etat.estEnChangement || etat.estEnRefusInstallation;
+    final visible = inaccessible || redemarrage || installation != null;
     // Structure identique avec ou sans bandeau (Column > Expanded >
     // MediaQuery) : le contenu garde son état (onglets, défilement) quand un
     // bandeau apparaît ou disparaît.
@@ -70,6 +117,42 @@ class ZoneBandeauxDossierChapitres extends StatelessWidget {
                     icone: Icons.restart_alt,
                     texte: Textes.bandeauRedemarrage,
                     estAlerte: false,
+                  ),
+                // Proposition et non alerte : rien n'est cassé, le client
+                // choisit quand il veut (teinte secondaire, comme le
+                // redémarrage).
+                if (installation != null)
+                  _Bandeau(
+                    icone: Icons.drive_file_move_outlined,
+                    texte: Textes.bandeauDossierInstallation(
+                      installation,
+                      etat.dossierActuel,
+                    ),
+                    estAlerte: false,
+                    // Boutons qui passent à la ligne sur un écran étroit.
+                    action: Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: espacementPetit,
+                      runSpacing: espacementPetit,
+                      children: <Widget>[
+                        TextButton(
+                          onPressed: occupe
+                              ? null
+                              : () => _ignorerInstallation(context, etat),
+                          child: const Text(Textes.ignorer),
+                        ),
+                        FilledButton.tonal(
+                          onPressed: occupe
+                              ? null
+                              : () => ouvrirChangementDossier(
+                                  context,
+                                  etat,
+                                  cheminPropose: installation,
+                                ),
+                          child: const Text(Textes.deplacerMesChapitres),
+                        ),
+                      ],
+                    ),
                   ),
               ],
             ),

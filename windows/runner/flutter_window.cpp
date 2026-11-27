@@ -3,8 +3,11 @@
 #include <flutter/method_result_functions.h>
 #include <flutter/standard_method_codec.h>
 
+#include <chrono>
+#include <cstdlib>
 #include <optional>
 #include <string>
+#include <thread>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -22,10 +25,33 @@ constexpr char kMethodeDemanderFermeture[] = "demanderFermeture";
 constexpr UINT_PTR kMinuteurFermeture = 0xB1B1;
 constexpr UINT kDelaiMaxFermetureMs = 5000;
 
+// Fermeture confirmee : delai maximal avant que le processus soit termine de
+// force s'il ne s'est pas arrete tout seul (voir FermerMaintenant).
+constexpr int kDelaiMaxFinProcessusMs = 5000;
+
+// Methodes appelees par Dart (zone de notification, lib/main.dart) :
+// cacher la fenetre (croix), l'afficher (clic sur l'icone, menu « Ouvrir ») et
+// demander la vraie fermeture (menu « Quitter », qui repasse par
+// kMethodeDemanderFermeture pour vider le journal).
+constexpr char kMethodeCacher[] = "cacher";
+constexpr char kMethodeAfficher[] = "afficher";
+constexpr char kMethodeQuitter[] = "quitter";
+
+// Fin immediate du processus avec un code de sortie (argument entier, 0 par
+// defaut). Prevu pour le mode --desinstallation : l'installateur lit ce code
+// (0 = reussi). Le processus est termine directement (TerminateProcess) : une
+// fin normale peut bloquer dans une bibliotheque native (voir main.cpp, Z6) et
+// rendrait toujours 0. A n'appeler qu'apres avoir ferme la base et vide le
+// journal.
+constexpr char kMethodeTerminer[] = "terminer";
+
 }  // namespace
 
-FlutterWindow::FlutterWindow(const flutter::DartProject& project)
-    : project_(project) {}
+FlutterWindow::FlutterWindow(const flutter::DartProject& project,
+                             bool demarrage_masque, bool jamais_afficher)
+    : demarrage_masque_(demarrage_masque || jamais_afficher),
+      jamais_afficher_(jamais_afficher),
+      project_(project) {}
 
 FlutterWindow::~FlutterWindow() {}
 
@@ -59,9 +85,20 @@ bool FlutterWindow::OnCreate() {
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
           flutter_controller_->engine()->messenger(), kNomCanalFenetre,
           &flutter::StandardMethodCodec::GetInstance());
+  canal_fenetre_->SetMethodCallHandler(
+      [this](const auto& appel, auto resultat) {
+        TraiterAppelDart(appel, std::move(resultat));
+      });
+
+  message_afficher_ = ::RegisterWindowMessage(kMessageAfficherFenetre);
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
+    // Demarrage avec Windows en mode « icone masquee » : la fenetre reste
+    // cachee, Dart installe l'icone de la zone de notification (et rappelle
+    // « afficher » s'il n'y parvient pas).
+    if (!demarrage_masque_) {
+      this->Show();
+    }
   });
 
   // Flutter can complete the first frame before the "show window" callback is
@@ -83,8 +120,10 @@ void FlutterWindow::OnDestroy() {
 
 void FlutterWindow::DemanderFermeture(HWND hwnd) {
   if (fermeture_en_cours_) {
-    // Deuxieme clic sur la croix pendant l'attente : on ferme sans attendre.
-    FermerMaintenant(hwnd);
+    // Deuxieme clic sur la croix (ou Alt+F4) pendant l'attente : ignore. Dart
+    // peut encore repondre « cancel » (cacher dans la zone de notification)
+    // ou etre en train de vider le journal ; le minuteur de securite couvre
+    // un Dart qui ne repond pas.
     return;
   }
   if (!canal_fenetre_) {
@@ -129,8 +168,79 @@ void FlutterWindow::DemanderFermeture(HWND hwnd) {
                                std::move(resultat));
 }
 
+void FlutterWindow::AfficherFenetre(HWND hwnd) {
+  if (jamais_afficher_) {
+    // Desinstallation : aucune fenetre, quelle que soit la demande.
+    return;
+  }
+  if (::IsIconic(hwnd)) {
+    ::ShowWindow(hwnd, SW_RESTORE);
+  } else {
+    ::ShowWindow(hwnd, SW_SHOW);
+  }
+  // Le clic sur l'icone de la zone de notification (ou la deuxieme instance,
+  // via AllowSetForegroundWindow) donne a ce processus le droit de passer au
+  // premier plan.
+  ::SetForegroundWindow(hwnd);
+  if (flutter_controller_) {
+    // Fenetre jamais affichee (demarrage masque) : une image est redemandee
+    // pour ne pas montrer une surface vide.
+    flutter_controller_->ForceRedraw();
+  }
+}
+
+void FlutterWindow::TraiterAppelDart(
+    const flutter::MethodCall<flutter::EncodableValue>& appel,
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> resultat) {
+  HWND hwnd = GetHandle();
+  if (!hwnd) {
+    resultat->Error("fenetre_absente", "Fenetre deja detruite");
+    return;
+  }
+  const std::string& methode = appel.method_name();
+  if (methode == kMethodeCacher) {
+    ::ShowWindow(hwnd, SW_HIDE);
+    resultat->Success();
+  } else if (methode == kMethodeAfficher) {
+    AfficherFenetre(hwnd);
+    resultat->Success();
+  } else if (methode == kMethodeQuitter) {
+    // Meme chemin que la croix : WM_CLOSE -> DemanderFermeture -> Dart
+    // (qui sait que l'on quitte vraiment et vide le journal).
+    ::PostMessage(hwnd, WM_CLOSE, 0, 0);
+    resultat->Success();
+  } else if (methode == kMethodeTerminer) {
+    UINT code = EXIT_SUCCESS;
+    if (const auto* argument = appel.arguments()) {
+      if (const auto* entier32 = std::get_if<int32_t>(argument)) {
+        code = static_cast<UINT>(*entier32);
+      } else if (const auto* entier64 = std::get_if<int64_t>(argument)) {
+        code = static_cast<UINT>(*entier64);
+      }
+    }
+    resultat->Success();
+    ::TerminateProcess(::GetCurrentProcess(), code);
+  } else {
+    resultat->NotImplemented();
+  }
+}
+
 void FlutterWindow::FermerMaintenant(HWND hwnd) {
   fermeture_en_cours_ = false;
+  if (!fermeture_confirmee_) {
+    // Filet de securite (retour 0.3.1-test, Z6 : apres « Quitter », le
+    // processus restait dans le gestionnaire des taches). La fermeture est
+    // decidee et le journal deja vide : si le processus n'a pas fini dans le
+    // delai (arret du moteur ou d'une bibliotheque native bloque, par exemple
+    // cnativeapi.dll de l'icone de la zone de notification), il est termine.
+    // Desinstallation : sans « terminer », la fin est un echec (main.cpp).
+    const UINT code = jamais_afficher_ ? EXIT_FAILURE : EXIT_SUCCESS;
+    std::thread([code]() {
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(kDelaiMaxFinProcessusMs));
+      ::TerminateProcess(::GetCurrentProcess(), code);
+    }).detach();
+  }
   fermeture_confirmee_ = true;
   ::KillTimer(hwnd, kMinuteurFermeture);
   ::PostMessage(hwnd, WM_CLOSE, 0, 0);
@@ -151,8 +261,19 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     return 0;
   }
   if (message == WM_TIMER && wparam == kMinuteurFermeture) {
-    // Pas de reponse de Dart a temps : on ferme quand meme.
-    FermerMaintenant(hwnd);
+    // Pas de reponse de Dart a temps : on ferme quand meme. KillTimer ne
+    // retire pas un WM_TIMER deja en file : si Dart a repondu « cancel »
+    // entre-temps, la fenetre doit rester.
+    ::KillTimer(hwnd, kMinuteurFermeture);
+    if (fermeture_en_cours_) {
+      FermerMaintenant(hwnd);
+    }
+    return 0;
+  }
+  if (message_afficher_ != 0 && message == message_afficher_) {
+    // Deuxieme lancement du meme executable (raccourci, menu Demarrer)
+    // pendant que l'application tourne dans la zone de notification.
+    AfficherFenetre(hwnd);
     return 0;
   }
 

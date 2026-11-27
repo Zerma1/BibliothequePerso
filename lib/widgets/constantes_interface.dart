@@ -9,7 +9,7 @@ library;
 /// `pubspec.yaml` n'est mis à jour qu'à la publication (tâche T7). Un test
 /// vérifie qu'elle est égale ou supérieure. Recopiée ici car lire la version
 /// à l'exécution demanderait un paquet supplémentaire.
-const String versionApplication = '0.2.5';
+const String versionApplication = '0.3.3';
 
 // ---------------------------------------------------------------- Chapitres
 
@@ -85,6 +85,20 @@ const double fractionHauteurDialogueListe = 0.6;
 /// Opacité du fond rouge d'un chapitre dont la suppression est prévue : une
 /// teinte légère qui attire l'œil sans gêner la lecture du texte.
 const double opaciteFondSuppressionPrevue = 0.35;
+
+/// Crans de la jauge des limites de téléchargement (0 à 500) : serrés au
+/// début, où se font la plupart des réglages (de 1 en 1 jusqu'à 10), puis de
+/// plus en plus espacés. Une jauge linéaire de 500 crans rendrait « 3 » ou
+/// « 12 » impossibles à viser ; les boutons − / + à côté de la jauge
+/// donnent ensuite la valeur exacte, de 1 en 1.
+const List<int> cransLimitesTelechargement = <int>[
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 75, //
+  100, 150, 200, 300, 400, 500,
+];
+
+/// Couleur principale du logo (indigo), source de toute la palette de
+/// l'interface en clair comme en sombre.
+const int couleurLogoIndigo = 0xFF3F51B5;
 
 /// Petit espacement entre éléments.
 const double espacementPetit = 8;

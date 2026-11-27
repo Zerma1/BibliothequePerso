@@ -192,7 +192,9 @@ class SectionDossierChapitres extends StatelessWidget {
 
 /// Ouvre le dialogue de changement de dossier. Avec [cheminImpose]
 /// (déplacement inachevé à terminer), le chemin n'est pas modifiable et le
-/// déplacement commence aussitôt.
+/// déplacement commence aussitôt. Avec [cheminPropose] (dossier choisi à
+/// l'installation), le champ est prérempli mais reste modifiable, et le
+/// client valide lui-même.
 ///
 /// Si le client ferme le dialogue alors qu'un refus « chapitre en cours » a
 /// mis la file en pause, les téléchargements reprennent.
@@ -200,14 +202,18 @@ Future<void> ouvrirChangementDossier(
   BuildContext context,
   EtatDossierChapitres etat, {
   String? cheminImpose,
+  String? cheminPropose,
 }) async {
   final resultat = await showDialog<ResultatChangementDossier>(
     context: context,
     // Un appui à côté ne ferme pas la boîte : pendant le déplacement, le
     // client perdrait la progression ; avant, il perdrait sa saisie.
     barrierDismissible: false,
-    builder: (_) =>
-        DialogueChangementDossier(etat: etat, cheminImpose: cheminImpose),
+    builder: (_) => DialogueChangementDossier(
+      etat: etat,
+      cheminImpose: cheminImpose,
+      cheminPropose: cheminPropose,
+    ),
   );
   if (resultat == null && etat.peutReprendreFile) {
     etat.reprendreFile();
@@ -230,6 +236,7 @@ class DialogueChangementDossier extends StatefulWidget {
     super.key,
     required this.etat,
     this.cheminImpose,
+    this.cheminPropose,
   });
 
   /// État du dossier des chapitres.
@@ -238,6 +245,10 @@ class DialogueChangementDossier extends StatefulWidget {
   /// Chemin imposé (déplacement inachevé à terminer), ou `null`.
   final String? cheminImpose;
 
+  /// Chemin prérempli et modifiable (dossier choisi à l'installation), ou
+  /// `null`. « Déplacer les chapitres » reste coché par défaut.
+  final String? cheminPropose;
+
   @override
   State<DialogueChangementDossier> createState() =>
       _EtatDialogueChangementDossier();
@@ -245,7 +256,7 @@ class DialogueChangementDossier extends StatefulWidget {
 
 class _EtatDialogueChangementDossier extends State<DialogueChangementDossier> {
   late final TextEditingController _chemin = TextEditingController(
-    text: widget.cheminImpose ?? '',
+    text: widget.cheminImpose ?? widget.cheminPropose ?? '',
   );
   bool _deplacer = true;
   _Etape _etape = _Etape.saisie;

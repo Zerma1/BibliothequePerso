@@ -1,6 +1,7 @@
 // Réglages du client : valeurs par défaut, nettoyage et bornes (base en
 // mémoire).
 import 'package:bibliotheque_perso/donnees/depot_parametres.dart';
+import 'package:bibliotheque_perso/modeles/journal.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/services/politique_telechargement.dart';
 import 'package:bibliotheque_perso/services/service_parametres.dart';
@@ -87,6 +88,124 @@ void main() {
         0,
       );
       expect(await parametres.chargerTelechargementsSimultanes(), 3);
+    });
+  });
+
+  group('thème', () {
+    test('suit le système tant que rien n\'est choisi', () async {
+      expect(await parametres.chargerModeTheme(), ModeTheme.systeme);
+    });
+
+    test('se relit après enregistrement', () async {
+      await parametres.enregistrerModeTheme(ModeTheme.sombre);
+      expect(await parametres.chargerModeTheme(), ModeTheme.sombre);
+      await parametres.enregistrerModeTheme(ModeTheme.clair);
+      expect(await parametres.chargerModeTheme(), ModeTheme.clair);
+    });
+
+    test('une valeur inconnue écrite en base retombe sur le système', () async {
+      await depot.enregistrerTexte(ServiceParametres.cleModeTheme, 'violet');
+      expect(await parametres.chargerModeTheme(), ModeTheme.systeme);
+    });
+  });
+
+  group('démarrage avec la session', () {
+    test('est désactivé tant que rien n\'est choisi', () async {
+      expect(await parametres.chargerModeDemarrage(), ModeDemarrage.desactive);
+    });
+
+    test('se relit après enregistrement, sous le texte attendu', () async {
+      final attendus = <ModeDemarrage, String>{
+        ModeDemarrage.pleineFenetre: 'pleine_fenetre',
+        ModeDemarrage.iconeMasquee: 'icone_masquee',
+        ModeDemarrage.desactive: 'desactive',
+      };
+      for (final MapEntry(key: mode, value: texte) in attendus.entries) {
+        await parametres.enregistrerModeDemarrage(mode);
+        expect(await parametres.chargerModeDemarrage(), mode);
+        expect(await depot.chargerTexte('mode_demarrage'), texte);
+      }
+    });
+
+    test('une valeur inconnue écrite en base retombe sur désactivé', () async {
+      for (final texte in <String>['iconeMasquee', 'oui', '']) {
+        await depot.enregistrerTexte(ServiceParametres.cleModeDemarrage, texte);
+        expect(
+          await parametres.chargerModeDemarrage(),
+          ModeDemarrage.desactive,
+        );
+      }
+    });
+
+    test('le changement est noté dans le journal', () async {
+      final journal = JournalMemoire();
+      Journal.actuel = journal;
+      addTearDown(() => Journal.actuel = const JournalSilencieux());
+      await parametres.enregistrerModeDemarrage(ModeDemarrage.iconeMasquee);
+      expect(
+        journal.entrees.map((e) => e.message),
+        contains(contains('icone_masquee')),
+      );
+    });
+  });
+
+  group('durée de conservation avant suppression', () {
+    test('vaut 24 h tant que rien n\'est choisi', () async {
+      expect(
+        await parametres.chargerDelaiSuppression(),
+        const Duration(hours: 24),
+      );
+    });
+
+    test('se relit après enregistrement, arrondie à l\'heure', () async {
+      await parametres.enregistrerDelaiSuppression(const Duration(days: 7));
+      expect(
+        await parametres.chargerDelaiSuppression(),
+        const Duration(days: 7),
+      );
+      await parametres.enregistrerDelaiSuppression(
+        const Duration(hours: 5, minutes: 40),
+      );
+      expect(
+        await parametres.chargerDelaiSuppression(),
+        const Duration(hours: 6),
+      );
+    });
+
+    test('est ramenée entre 1 h et 30 jours à l\'enregistrement', () async {
+      await parametres.enregistrerDelaiSuppression(Duration.zero);
+      expect(
+        await parametres.chargerDelaiSuppression(),
+        const Duration(hours: 1),
+      );
+      await parametres.enregistrerDelaiSuppression(const Duration(days: 90));
+      expect(
+        await parametres.chargerDelaiSuppression(),
+        const Duration(days: 30),
+      );
+    });
+
+    test('une valeur hors bornes écrite en base retombe sur 24 h', () async {
+      for (final heures in <int>[0, -5, 721]) {
+        await depot.enregistrerEntier(
+          ServiceParametres.cleHeuresAvantSuppression,
+          heures,
+        );
+        expect(
+          await parametres.chargerDelaiSuppression(),
+          const Duration(hours: 24),
+        );
+      }
+    });
+
+    test('les crans proposés sont croissants, bornes et défaut compris', () {
+      const crans = ServiceParametres.delaisSuppressionProposes;
+      for (var i = 1; i < crans.length; i++) {
+        expect(crans[i] > crans[i - 1], isTrue);
+      }
+      expect(crans.first, ServiceParametres.delaiSuppressionMinimum);
+      expect(crans.last, ServiceParametres.delaiSuppressionMaximum);
+      expect(crans, contains(ServiceParametres.delaiSuppressionParDefaut));
     });
   });
 

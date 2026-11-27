@@ -6,6 +6,62 @@
 > restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
 > chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
 
+## 0.3.3-test — version de test, Windows (2026-11-27)
+
+Contient la 0.3.2-test, plus (retours du client) :
+- **Un seul .exe** (`…-installation.exe`) : Installer / Mettre à jour / Désinstaller / Tout
+  supprimer. Plus de désinstalleur séparé.
+- **Désinstaller** : cases « Chapitres téléchargés » (cochée), « Sources », « Titres » (non
+  cochées ; cocher Sources coche aussi Titres, qui en dépendent). Mêmes choix depuis
+  « Applications installées » de Windows.
+- **Emplacements enregistrés** : à l'installation, choix du dossier des chapitres et du dossier
+  de la base ; ils sont retrouvés après une désinstallation qui garde les données.
+- **Base déplacée** dans `%APPDATA%\bibliotheque_perso` (au lieu de
+  `%APPDATA%\io.github.zerma1\bibliotheque_perso`) : déplacement automatique et vérifié au
+  premier démarrage.
+- **Import** : bouton « Parcourir… » pour choisir le fichier d'export (paquet `file_picker`).
+- Démarrage avec Windows : « Off » devient « Désactivé ».
+
+## 0.3.2-test — version de test, Windows (2026-11-25)
+
+Contient la 0.3.1-test, plus :
+- **Désinstalleur complet** (`…-desinstallation.exe`, livré à côté de l'installateur) : supprime
+  tout ce que l'application a créé (programme, base, chapitres, journaux, rapports, exports,
+  données du navigateur intégré, démarrage avec Windows). Dans les dossiers choisis par vous,
+  seuls les dossiers de l'application sont supprimés ; vos autres fichiers sont gardés.
+  Confirmation Oui/Non (Non par défaut).
+- **Désinstallation normale** : supprime aussi les chapitres d'un dossier choisi dans
+  l'application (Paramètres → Dossier des chapitres), qui n'était pas connu jusqu'ici
+  (l'application l'écrit maintenant dans `emplacements.json`, à côté de la base).
+- Corrigé (retour Z6) : après « Quitter » depuis l'icône, l'application restait dans le
+  gestionnaire des tâches.
+
+## 0.3.1-test — version de test, Windows (2026-11-25)
+
+Contient la 0.3.0-test, plus :
+- **Fermer la fenêtre la réduit dans les icônes masquées** (près de l'horloge) : surveillance et téléchargements continuent. Menu de l'icône : Ouvrir, Rechercher les nouveaux chapitres, Quitter. Une seule instance à la fois.
+- **Démarrer avec Windows** (Paramètres → Démarrage) : Off / Pleine fenêtre / Icône masquée.
+- **Téléchargements** : bouton « Supprimer tous les chapitres à supprimer ».
+- **Désinstallation** : propose de supprimer aussi les chapitres téléchargés (Oui par défaut ; vos autres fichiers et la base sont gardés) ; arrête l'application même cachée ; retire le démarrage avec Windows.
+- Corrigé : la compilation automatique sur GitHub échouait à cause d'un test réservé en fait à Windows.
+
+## 0.3.0-test — version de test, Windows (2026-11-25)
+
+La 0.2.5 est publiée sur `main` (validée par le client) : les nouveautés repartent en 0.3.
+
+Contient la 0.2.5-test, plus :
+- **Installateur** (`…-installation.exe`) : choix du dossier d'installation et du dossier de
+  la bibliothèque (chapitres ; NAS possible). À la mise à jour, rien n'est redemandé et la
+  bibliothèque n'est pas touchée. La désinstallation ne supprime jamais la base ni les chapitres.
+  Si des chapitres existent déjà ailleurs, un bandeau propose « Déplacer mes chapitres » ou
+  « Ignorer » au lieu de changer de dossier tout seul.
+- **Nouveau logo** (application et installateur).
+- **Apparence** : thème Système / Clair / Sombre (Paramètres → Apparence), appliqué dès le
+  lancement.
+- **Jauges** pour tous les réglages chiffrés (crans + boutons − / +).
+- **Durée de conservation avant suppression** réglable de 1 h à 30 jours (24 h par défaut) ;
+  comptes à rebours en jours au-delà de 48 h.
+
 ## 0.2.5-test — correctif urgent, Windows (2026-11-25)
 
 - **Corrigé : l'application ne s'ouvrait plus** (« table titres_sources already exists »). La

@@ -784,6 +784,51 @@ class DepotChapitres {
     );
   }
 
+  /// Remet **tous** les chapitres à « non téléchargé », en une seule
+  /// transaction, et renvoie le nombre de chapitres modifiés (`chapitres`)
+  /// et de lignes retirées de la file (`telechargements`).
+  ///
+  /// Sert à la désinstallation partielle (« supprimer les chapitres
+  /// téléchargés »), une fois les archives effacées par le désinstalleur.
+  /// Comme [enregistrerArchive] avec `null` : `est_telecharge` = 0,
+  /// `nom_archive` et `date_suppression_prevue` à NULL, `est_garde` = 0 (un
+  /// chapitre sans archive n'a rien à garder). L'état de lecture (`est_lu`)
+  /// et les chapitres eux-mêmes ne sont pas touchés. Seules les lignes à
+  /// changer sont réécrites (et comptées).
+  ///
+  /// [viderFile] (vrai par défaut) : la file `telechargements` est aussi
+  /// vidée, tous statuts confondus. Sinon, la reprise au démarrage
+  /// retéléchargerait les chapitres en attente, et les lignes « terminé »
+  /// désigneraient des archives effacées.
+  ///
+  /// Pas d'index sur ces colonnes (voir [chargerChapitresTelecharges]) : la
+  /// requête parcourt la table, opération rare. Lève une
+  /// [ErreurBaseDeDonnees] si l'écriture échoue (rien n'est alors modifié).
+  Future<({int chapitres, int telechargements})> marquerTousNonTelecharges({
+    bool viderFile = true,
+  }) async {
+    try {
+      return await _baseDeDonnees.transaction((txn) async {
+        final chapitres = await txn.rawUpdate(
+          'UPDATE chapitres SET est_telecharge = ?, nom_archive = NULL, '
+          'date_suppression_prevue = NULL, est_garde = ? '
+          'WHERE est_telecharge != ? OR nom_archive IS NOT NULL '
+          'OR date_suppression_prevue IS NOT NULL OR est_garde != ?',
+          <Object?>[valeurSqlFaux, valeurSqlFaux, valeurSqlFaux, valeurSqlFaux],
+        );
+        final telechargements = viderFile
+            ? await txn.delete('telechargements')
+            : 0;
+        return (chapitres: chapitres, telechargements: telechargements);
+      });
+    } on DatabaseException catch (erreur) {
+      throw ErreurBaseDeDonnees(
+        "Impossible de remettre à zéro l'état téléchargé des chapitres.",
+        cause: erreur,
+      );
+    }
+  }
+
   /// Enregistre le chemin relatif de l'archive hors-ligne d'un chapitre
   /// (`EcritureChapitre.nomArchive`) et met `est_telecharge` en cohérence.
   ///

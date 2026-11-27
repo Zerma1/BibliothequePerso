@@ -327,6 +327,22 @@ class EtatTelechargements extends EtatNotifiant {
   Future<ResultatAction<bool>> supprimerMaintenant(int idChapitre) =>
       _executer(() => _service.supprimerMaintenant(idChapitre));
 
+  /// Bouton « Supprimer tous les chapitres à supprimer » : toutes les
+  /// suppressions prévues sont faites tout de suite ; renvoie le nombre
+  /// d'archives supprimées (un chapitre ouvert dans le lecteur est épargné).
+  Future<ResultatAction<int>> supprimerToutesSuppressionsPrevues() async {
+    try {
+      final nombre = await _service.supprimerToutesSuppressionsPrevues();
+      // Relecture forcée, même pendant un téléchargement : la section rouge
+      // doit se vider tout de suite.
+      _suppressionsLues = false;
+      await _demanderRechargement();
+      return ResultatAction<int>.reussite(nombre);
+    } catch (erreur, pile) {
+      return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
+    }
+  }
+
   /// « Ne plus garder » : le chapitre suit de nouveau les règles.
   Future<ResultatAction<bool>> nePlusGarder(int idChapitre) =>
       _executer(() => _service.retirerGarde(idChapitre));

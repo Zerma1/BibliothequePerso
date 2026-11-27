@@ -1,9 +1,11 @@
 /// État de l'écran Paramètres, sections « Mes langues » (langues de lecture),
 /// « Téléchargements » (limites des règles de conservation des favoris et
-/// suivis) et « Mises à jour » (nombre de recherches par jour).
+/// suivis), « Mises à jour » (nombre de recherches par jour) et
+/// « Démarrage » (lancement avec Windows).
 library;
 
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import '../modeles/journal.dart';
 import '../services/planification_mises_a_jour.dart';
@@ -12,6 +14,12 @@ import '../services/service_bibliotheque.dart';
 import '../services/service_parametres.dart';
 import '../services/service_telechargement.dart';
 import 'description_erreur.dart';
+
+export '../services/service_parametres.dart' show ModeDemarrage;
+
+/// Inscription au démarrage du système pour [mode], faite par la plateforme
+/// (`main.dart`). Renvoie `false` si le système l'a refusée.
+typedef InscriptionDemarrage = Future<bool> Function(ModeDemarrage mode);
 
 /// Une des quatre limites réglables.
 enum LimiteTelechargement {
@@ -39,18 +47,38 @@ class EtatParametres extends EtatNotifiant {
   /// [serviceBibliotheque] sert à recalculer la liste « En attente » quand
   /// les langues changent (sans lui, elle l'est à la prochaine recherche de
   /// nouveaux chapitres).
+  ///
+  /// [surChangementModeDemarrage] inscrit (ou désinscrit) l'application au
+  /// démarrage de Windows après l'enregistrement du réglage ; sans lui, le
+  /// choix est seulement enregistré. [estWindows] (par défaut
+  /// `Platform.isWindows`, injectable pour les tests) décide si le réglage
+  /// « Démarrer avec Windows » est proposé.
   EtatParametres(
     this._serviceParametres,
     this._serviceTelechargement, {
     this._serviceBibliotheque,
-  });
+    this._surChangementModeDemarrage,
+    bool? estWindows,
+  }) : _estWindows = estWindows ?? Platform.isWindows;
 
   final ServiceParametres _serviceParametres;
   final ServiceTelechargement _serviceTelechargement;
   final ServiceBibliotheque? _serviceBibliotheque;
+  final InscriptionDemarrage? _surChangementModeDemarrage;
+  final bool _estWindows;
 
   /// Valeur maximale d'une limite (même borne que le service).
   static const int limiteMaximale = ServiceParametres.limiteMaximale;
+
+  /// Valeur minimale de [limite] (mêmes bornes que le service) : 0 pour
+  /// « favoris : lus gardés » et « suivis : au départ », 1 pour « avant » et
+  /// « après » des suivis.
+  static int minimumLimite(LimiteTelechargement limite) => switch (limite) {
+    LimiteTelechargement.favorisLusConserves ||
+    LimiteTelechargement.suivisInitial => ServiceParametres.limiteMinimale,
+    LimiteTelechargement.suivisAvant || LimiteTelechargement.suivisApres =>
+      ServiceParametres.limiteMinimaleSuivisAvantApres,
+  };
 
   ReglagesTelechargement _enregistres = const ReglagesTelechargement();
   ReglagesTelechargement _brouillon = const ReglagesTelechargement();
@@ -112,11 +140,29 @@ class EtatParametres extends EtatNotifiant {
   DateTime? _derniereVerification;
   bool _estEnEnregistrementPlanification = false;
 
-  /// Horaires des recherches de mises à jour.
-  PlanificationMisesAJour get planification => _planification;
+  /// Valeur affichée pendant le glissement de la jauge des recherches par
+  /// jour (rien n'est enregistré avant le lâcher), ou `null`.
+  int? _apercuParJour;
 
-  /// Nombre de recherches de mises à jour par jour.
-  int get verificationsParJour => _planification.verificationsParJour;
+  /// Horaires des recherches de mises à jour (ceux de la valeur affichée
+  /// par la jauge pendant son glissement : le client voit les horaires
+  /// qu'il s'apprête à choisir).
+  PlanificationMisesAJour get planification {
+    final apercu = _apercuParJour;
+    return apercu == null ? _planification : PlanificationMisesAJour(apercu);
+  }
+
+  /// Nombre de recherches de mises à jour par jour (valeur affichée).
+  int get verificationsParJour =>
+      _apercuParJour ?? _planification.verificationsParJour;
+
+  /// Affiche [nombre] pendant le glissement de la jauge, sans l'enregistrer.
+  void previsualiserVerificationsParJour(int nombre) {
+    final borne = nombre.clamp(minimumParJour, maximumParJour);
+    if (borne == _apercuParJour) return;
+    _apercuParJour = borne;
+    notifier();
+  }
 
   /// Date (UTC) de la dernière recherche de mises à jour, ou `null`.
   DateTime? get derniereVerification => _derniereVerification;
@@ -137,6 +183,9 @@ class EtatParametres extends EtatNotifiant {
       PlanificationMisesAJour.maximumParJour,
     );
     _estEnEnregistrementPlanification = true;
+    // La jauge garde la valeur lâchée pendant l'enregistrement (pas de
+    // retour visible à l'ancienne valeur).
+    _apercuParJour = borne;
     notifier();
     try {
       await _serviceParametres.enregistrerVerificationsParJour(borne);
@@ -150,6 +199,7 @@ class EtatParametres extends EtatNotifiant {
         DescriptionErreur.depuis(erreur, pile),
       );
     } finally {
+      _apercuParJour = null;
       _estEnEnregistrementPlanification = false;
       notifier();
     }
@@ -158,8 +208,28 @@ class EtatParametres extends EtatNotifiant {
   int _heuresEnAttente = 1;
   bool _estEnEnregistrementEnAttente = false;
 
-  /// Écart en heures entre deux vérifications des titres « En attente ».
-  int get heuresEnAttente => _heuresEnAttente;
+  /// Valeur affichée pendant le glissement de la jauge « En attente », ou
+  /// `null`.
+  int? _apercuHeuresEnAttente;
+
+  /// Borne basse de l'écart « En attente » (même borne que le service).
+  static const int minimumHeuresEnAttente =
+      ServiceParametres.minimumHeuresEnAttente;
+
+  /// Écart en heures entre deux vérifications des titres « En attente »
+  /// (valeur affichée), jamais au-delà de [maximumHeuresEnAttente].
+  int get heuresEnAttente => (_apercuHeuresEnAttente ?? _heuresEnAttente).clamp(
+    minimumHeuresEnAttente,
+    maximumHeuresEnAttente,
+  );
+
+  /// Affiche [heures] pendant le glissement de la jauge, sans l'enregistrer.
+  void previsualiserHeuresEnAttente(int heures) {
+    final borne = heures.clamp(minimumHeuresEnAttente, maximumHeuresEnAttente);
+    if (borne == _apercuHeuresEnAttente) return;
+    _apercuHeuresEnAttente = borne;
+    notifier();
+  }
 
   /// Écart maximal autorisé : l'intervalle des vérifications normales.
   int get maximumHeuresEnAttente =>
@@ -173,6 +243,10 @@ class EtatParametres extends EtatNotifiant {
   /// prévient ensuite `EtatMisesAJour.replanifier`.
   Future<ResultatAction<int>> modifierHeuresEnAttente(int heures) async {
     _estEnEnregistrementEnAttente = true;
+    _apercuHeuresEnAttente = heures.clamp(
+      minimumHeuresEnAttente,
+      maximumHeuresEnAttente,
+    );
     notifier();
     try {
       await _serviceParametres.enregistrerHeuresEnAttente(heures);
@@ -181,7 +255,70 @@ class EtatParametres extends EtatNotifiant {
     } catch (erreur, pile) {
       return ResultatAction<int>.echec(DescriptionErreur.depuis(erreur, pile));
     } finally {
+      _apercuHeuresEnAttente = null;
       _estEnEnregistrementEnAttente = false;
+      notifier();
+    }
+  }
+
+  // ------------------------------- Durée de conservation avant suppression
+
+  /// Durée de conservation tant que le client n'a rien choisi (24 h).
+  static const Duration delaiSuppressionParDefaut =
+      ServiceParametres.delaiSuppressionParDefaut;
+
+  /// Crans de la jauge, du plus court au plus long (1 h à 30 jours).
+  static const List<Duration> delaisSuppressionProposes =
+      ServiceParametres.delaisSuppressionProposes;
+
+  Duration _delaiSuppression = delaiSuppressionParDefaut;
+
+  /// Valeur affichée pendant le glissement de la jauge, ou `null`.
+  Duration? _apercuDelaiSuppression;
+  bool _estEnEnregistrementDelai = false;
+
+  /// Durée pendant laquelle une archive sortie des règles reste sur
+  /// l'appareil avant d'être supprimée, **telle qu'affichée par la jauge** :
+  /// pendant le glissement, c'est l'aperçu, pas encore enregistré. Pour les
+  /// textes qui décrivent le comportement réel (« supprimé dans … »), lire
+  /// [delaiSuppressionEnregistre].
+  Duration get delaiSuppression => _apercuDelaiSuppression ?? _delaiSuppression;
+
+  /// Durée de conservation enregistrée (dernière valeur lue ou enregistrée),
+  /// sans l'aperçu de la jauge : sert aux légendes et explications des
+  /// autres écrans, qui ne doivent pas annoncer une durée non enregistrée.
+  Duration get delaiSuppressionEnregistre => _delaiSuppression;
+
+  /// `true` pendant l'enregistrement de la durée de conservation.
+  bool get estEnEnregistrementDelai => _estEnEnregistrementDelai;
+
+  /// Affiche [delai] pendant le glissement de la jauge, sans l'enregistrer.
+  void previsualiserDelaiSuppression(Duration delai) {
+    if (delai == _apercuDelaiSuppression) return;
+    _apercuDelaiSuppression = delai;
+    notifier();
+  }
+
+  /// Enregistre la durée de conservation (le service l'arrondit à l'heure
+  /// et la borne). Ne relance pas les règles : seules les nouvelles
+  /// suppressions prévues utilisent la nouvelle durée.
+  Future<ResultatAction<Duration>> modifierDelaiSuppression(
+    Duration delai,
+  ) async {
+    _estEnEnregistrementDelai = true;
+    _apercuDelaiSuppression = delai;
+    notifier();
+    try {
+      await _serviceParametres.enregistrerDelaiSuppression(delai);
+      _delaiSuppression = await _serviceParametres.chargerDelaiSuppression();
+      return ResultatAction<Duration>.reussite(_delaiSuppression);
+    } catch (erreur, pile) {
+      return ResultatAction<Duration>.echec(
+        DescriptionErreur.depuis(erreur, pile),
+      );
+    } finally {
+      _apercuDelaiSuppression = null;
+      _estEnEnregistrementDelai = false;
       notifier();
     }
   }
@@ -264,8 +401,9 @@ class EtatParametres extends EtatNotifiant {
 
   /// Enregistre aussitôt (comme le nombre de recherches par jour) puis
   /// applique les règles à tous les favoris et suivis : sans risque, car
-  /// une archive dans une langue retirée n'est supprimée qu'après 24 heures
-  /// (le client peut revenir en arrière ou la garder).
+  /// une archive dans une langue retirée n'est supprimée qu'après la durée
+  /// de conservation réglée (le client peut revenir en arrière ou la
+  /// garder).
   // LIMITE : les chapitres d'une langue ajoutée n'apparaissent qu'à la
   // prochaine recherche de nouveaux chapitres ou actualisation d'un titre
   // (le site n'est pas relu pour tous les titres ici : trop de requêtes).
@@ -416,6 +554,80 @@ class EtatParametres extends EtatNotifiant {
     }
   }
 
+  // ------------------------------------------------- Démarrer avec Windows
+
+  ModeDemarrage _modeDemarrage = ServiceParametres.modeDemarrageParDefaut;
+  bool _estEnEnregistrementDemarrage = false;
+
+  /// `true` si le réglage « Démarrer avec Windows » est proposé (Windows
+  /// seulement).
+  bool get demarrageAvecWindowsDisponible => _estWindows;
+
+  /// Lancement à l'ouverture de la session choisi par le client.
+  ModeDemarrage get modeDemarrage => _modeDemarrage;
+
+  /// `true` pendant l'enregistrement et l'inscription du mode de démarrage.
+  bool get estEnEnregistrementDemarrage => _estEnEnregistrementDemarrage;
+
+  /// Enregistre [mode] puis demande l'inscription au démarrage de Windows
+  /// (`surChangementModeDemarrage`).
+  ///
+  /// Résultat réussi avec `true` : choix appliqué. Réussi avec `false` :
+  /// Windows a refusé l'inscription ; l'ancien mode est enregistré de nouveau
+  /// (le réglage affiché reste ce que Windows applique réellement). Échec :
+  /// le choix n'a pas pu être enregistré.
+  Future<ResultatAction<bool>> modifierModeDemarrage(ModeDemarrage mode) async {
+    final ancien = _modeDemarrage;
+    if (mode == ancien) return const ResultatAction<bool>.reussite(true);
+    _estEnEnregistrementDemarrage = true;
+    // Le choix est affiché aussitôt (pas d'attente visible sur le bouton).
+    _modeDemarrage = mode;
+    notifier();
+    try {
+      await _serviceParametres.enregistrerModeDemarrage(mode);
+      final accepte = await _inscrireDemarrage(mode);
+      if (!accepte) {
+        _modeDemarrage = ancien;
+        try {
+          await _serviceParametres.enregistrerModeDemarrage(ancien);
+        } catch (erreur, pile) {
+          // LIMITE : le nouveau mode reste enregistré ; il sera de nouveau
+          // proposé à Windows au prochain lancement de l'application.
+          Journal.actuel.avertissement(
+            CategorieJournal.parametres,
+            'Ancien mode de démarrage non rétabli après un refus de Windows',
+            erreur: erreur,
+            pile: pile,
+          );
+        }
+      }
+      return ResultatAction<bool>.reussite(accepte);
+    } catch (erreur, pile) {
+      _modeDemarrage = ancien;
+      return ResultatAction<bool>.echec(DescriptionErreur.depuis(erreur, pile));
+    } finally {
+      _estEnEnregistrementDemarrage = false;
+      notifier();
+    }
+  }
+
+  /// Appelle le rappel d'inscription ; une exception vaut un refus.
+  Future<bool> _inscrireDemarrage(ModeDemarrage mode) async {
+    final rappel = _surChangementModeDemarrage;
+    if (rappel == null) return true;
+    try {
+      return await rappel(mode);
+    } catch (erreur, pile) {
+      Journal.actuel.avertissement(
+        CategorieJournal.parametres,
+        'Inscription au démarrage de Windows en erreur',
+        erreur: erreur,
+        pile: pile,
+      );
+      return false;
+    }
+  }
+
   /// Lit les réglages enregistrés.
   Future<void> charger() async {
     _estEnChargement = true;
@@ -431,6 +643,8 @@ class EtatParametres extends EtatNotifiant {
           .chargerDerniereVerification();
       _telechargementsSimultanes = await _serviceParametres
           .chargerTelechargementsSimultanes();
+      _delaiSuppression = await _serviceParametres.chargerDelaiSuppression();
+      _modeDemarrage = await _serviceParametres.chargerModeDemarrage();
       _enregistres = reglages;
       _brouillon = reglages;
       _estCharge = true;
@@ -441,9 +655,10 @@ class EtatParametres extends EtatNotifiant {
     notifier();
   }
 
-  /// Change une limite du brouillon, ramenée entre 0 et [limiteMaximale].
+  /// Change une limite du brouillon, ramenée entre [minimumLimite] et
+  /// [limiteMaximale].
   void modifier(LimiteTelechargement limite, int valeur) {
-    final bornee = valeur.clamp(0, limiteMaximale);
+    final bornee = valeur.clamp(minimumLimite(limite), limiteMaximale);
     switch (limite) {
       case LimiteTelechargement.favorisLusConserves:
         _brouillon = _brouillon.copierAvec(favorisLusConserves: bornee);

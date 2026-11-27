@@ -20,13 +20,33 @@ export '../services/dossier_chapitres.dart'
 /// file).
 class EtatDossierChapitres extends EtatNotifiant {
   /// Crée l'état et s'abonne aux changements ; appeler [charger] pour lire
-  /// les réglages (dossier choisi, déplacement inachevé).
-  EtatDossierChapitres(this._service) {
+  /// les réglages (dossier choisi, déplacement inachevé, dossier de
+  /// l'installateur en attente).
+  ///
+  /// [chargerDossierInstallation] et [ignorerDossierInstallation] : remplacés
+  /// dans les tests. Par défaut, l'extension `DossierInstallationEnAttente`
+  /// du service, qui lit le dépôt privé du vrai service (elle lève
+  /// `NoSuchMethodError` sur un faux service qui l'implémente).
+  EtatDossierChapitres(
+    this._service, {
+    Future<String?> Function()? chargerDossierInstallation,
+    Future<void> Function()? ignorerDossierInstallation,
+  }) : _chargerDossierInstallation =
+           chargerDossierInstallation ??
+           _service.chargerDossierInstallationEnAttente,
+       _ignorerDossierInstallation =
+           ignorerDossierInstallation ??
+           _service.ignorerDossierInstallationEnAttente {
     _abonnement = _service.changements.listen((_) => notifier());
   }
 
   final ServiceDossierChapitres _service;
+  final Future<String?> Function() _chargerDossierInstallation;
+  final Future<void> Function() _ignorerDossierInstallation;
   StreamSubscription<void>? _abonnement;
+
+  String? _dossierInstallationEnAttente;
+  bool _estEnRefusInstallation = false;
 
   bool _estCharge = false;
   bool _estEnChargement = false;
@@ -96,6 +116,58 @@ class EtatDossierChapitres extends EtatNotifiant {
     return _dossierChoisi ?? _cheminParDefaut;
   }
 
+  // ------------------------------------------- Dossier de l'installateur
+
+  /// Dossier choisi dans l'installateur Windows mais non appliqué (des
+  /// chapitres étaient déjà téléchargés), à proposer au client ; `null` s'il
+  /// n'y a rien à proposer, ou après un changement de dossier pendant cette
+  /// session (le client a déjà choisi, il faut redémarrer).
+  String? get dossierInstallationEnAttente =>
+      redemarrageNecessaire ? null : _dossierInstallationEnAttente;
+
+  /// `true` pendant [ignorerDossierInstallation].
+  bool get estEnRefusInstallation => _estEnRefusInstallation;
+
+  /// Le client garde son dossier actuel : le dossier de l'installateur ne
+  /// lui sera plus proposé. Une erreur d'écriture devient l'erreur du
+  /// résultat (la proposition reste alors affichée).
+  Future<ResultatAction<bool>> ignorerDossierInstallation() async {
+    if (_estEnRefusInstallation) {
+      return const ResultatAction<bool>.reussite(false);
+    }
+    _estEnRefusInstallation = true;
+    notifier();
+    try {
+      await _ignorerDossierInstallation();
+      _dossierInstallationEnAttente = null;
+      return const ResultatAction<bool>.reussite(true);
+    } catch (exception, pile) {
+      return ResultatAction<bool>.echec(
+        DescriptionErreur.depuis(exception, pile),
+      );
+    } finally {
+      _estEnRefusInstallation = false;
+      notifier();
+    }
+  }
+
+  /// Lit la proposition du dossier de l'installateur. Une erreur est
+  /// seulement notée au journal : cette proposition est secondaire, elle ne
+  /// doit pas empêcher la section du dossier de s'afficher (elle reviendra
+  /// au prochain [charger]).
+  Future<String?> _lireDossierInstallation() async {
+    try {
+      return await _chargerDossierInstallation();
+    } catch (exception) {
+      Journal.actuel.avertissement(
+        CategorieJournal.stockage,
+        "Proposition du dossier choisi à l'installation illisible",
+        erreur: exception,
+      );
+      return null;
+    }
+  }
+
   // ---------------------------------------------------------- Changement
 
   /// `true` pendant un changement de dossier (déplacement compris).
@@ -123,9 +195,11 @@ class EtatDossierChapitres extends EtatNotifiant {
       final choisi = await _service.chargerDossierChoisi();
       final parDefaut = await _service.chargerCheminDossierParDefaut();
       final inacheve = await _service.chargerDeplacementInacheve();
+      final installation = await _lireDossierInstallation();
       _dossierChoisi = choisi;
       _cheminParDefaut = parDefaut;
       _deplacementInacheve = inacheve;
+      _dossierInstallationEnAttente = installation;
       _estCharge = true;
     } catch (exception, pile) {
       _erreur = DescriptionErreur.depuis(exception, pile);

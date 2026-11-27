@@ -38,11 +38,10 @@
 /// - `offset + limit > 10 000` est refusé → [plafondOffsetMangaDex].
 library;
 
-import 'package:flutter/foundation.dart';
-
 import '../modeles/chapitre.dart';
 import '../modeles/constantes.dart';
 import '../modeles/contenu_chapitre.dart';
+import '../modeles/journal.dart';
 import '../modeles/fiche_titre.dart';
 import '../modeles/source.dart';
 import '../modeles/titre.dart';
@@ -810,7 +809,7 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
   /// il disparaîtrait sans explication alors que MangaDex le déclare externe ;
   /// ainsi l'utilisateur peut au moins l'ouvrir sur mangadex.org, et le
   /// chapitre n'est jamais téléchargé ([recupererContenu] refuse les
-  /// chapitres externes). L'anomalie est journalisée avec `debugPrint`, sans
+  /// chapitres externes). L'anomalie est journalisée (`Journal`), sans
   /// la valeur reçue (elle peut contenir des jetons ou données personnelles).
   static String? _lireUrlExterne(
     Map<String, Object?> attributs,
@@ -843,8 +842,9 @@ class SourceMangaDex implements SourceSite, SourceAvecCouvertures {
     if (raison == null) {
       return valeur;
     }
-    debugPrint(
-      'SourceMangaDex : externalUrl invalide pour le chapitre $idChapitre '
+    Journal.actuel.avertissement(
+      CategorieJournal.sources,
+      'MangaDex : externalUrl invalide pour le chapitre $idChapitre '
       '($raison) ; lien remplacé par la page MangaDex du chapitre.',
     );
     return urlChapitreDepuisId(idChapitre);

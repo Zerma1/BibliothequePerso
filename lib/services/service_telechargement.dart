@@ -19,7 +19,9 @@ import '../donnees/depot_sources.dart';
 import '../donnees/depot_telechargements.dart';
 import '../donnees/depot_titres.dart';
 import '../donnees/depot_titres_sources.dart';
+import '../donnees/constantes_donnees.dart' show nomFichierEmplacements;
 import '../donnees/erreur_stockage.dart';
+import '../donnees/fichier_emplacements.dart';
 import '../donnees/journal_fichier.dart';
 import '../donnees/stockage_telechargements.dart';
 import '../modeles/chapitre.dart';
@@ -761,12 +763,15 @@ class ServiceTelechargement {
   /// La protection est en mémoire, donc propre à cet isolat : la tâche de
   /// fond Android (autre isolat) ne la voit pas. Pour qu'elle n'efface pas
   /// le chapitre ouvert, une suppression déjà prévue est aussi repoussée en
-  /// base à maintenant + [delaiSuppressionDifferee] (en arrière-plan, sans
-  /// bloquer l'ouverture du lecteur).
+  /// base à maintenant + [delaiProtectionLecture] (24 h, en arrière-plan,
+  /// sans bloquer l'ouverture du lecteur). Ce délai ne suit pas le réglage
+  /// de conservation : voir [delaiProtectionLecture].
   ///
   /// LIMITE : une lecture qui dure plus de 24 h sans rouvrir le chapitre
   /// reste exposée côté tâche de fond ; et une date posée par les règles
-  /// **après** l'ouverture vaut déjà maintenant + 24 h.
+  /// **après** l'ouverture vaut maintenant + la durée de conservation réglée
+  /// (au moins 1 h) : avec un réglage court, la tâche de fond Android peut
+  /// effacer un chapitre ouvert dont la lecture dure plus longtemps.
   void protegerChapitre(int idChapitre) {
     _chapitresProteges.update(
       idChapitre,
@@ -786,7 +791,7 @@ class ServiceTelechargement {
       // suppression jamais créée pour un chapitre qui n'en avait pas.
       if (await _depotChapitres.repousserSuppressionPrevue(
         idChapitre,
-        _maintenant().add(delaiSuppressionDifferee),
+        _maintenant().add(delaiProtectionLecture),
       )) {
         _signaler();
       }
@@ -911,8 +916,9 @@ class ServiceTelechargement {
   /// annulées).
   ///
   /// Les archives qui ne sont plus voulues ne sont pas effacées tout de
-  /// suite : leur suppression est prévue dans 24 heures
-  /// ([delaiSuppressionDifferee], `Chapitre.dateSuppressionPrevue`), et
+  /// suite : leur suppression est prévue après la durée de conservation
+  /// réglée par le client (`ServiceParametres.chargerDelaiSuppression`, 24 h
+  /// par défaut ; `Chapitre.dateSuppressionPrevue`), et
   /// annulée si le chapitre redevient voulu entre-temps. Les suppressions
   /// échues (de tous les titres) sont faites à la fin.
   Future<PlanTelechargement> appliquerRegles(int idTitre) async {
@@ -1067,16 +1073,23 @@ class ServiceTelechargement {
     // redeviennent. Une date déjà posée n'est pas repoussée : sinon chaque
     // application des règles relancerait le compte à rebours affiché.
     final aSupprimer = plan.idsASupprimer.toSet();
-    final echeance = _maintenant().add(delaiSuppressionDifferee);
+    // Durée réglée par le client (Paramètres), lue seulement si une nouvelle
+    // suppression est à prévoir : la plupart des applications des règles
+    // n'en prévoient aucune, inutile de relire le réglage pour chaque titre.
+    // Les suppressions déjà prévues gardent leur date (voir plus haut).
+    DateTime? echeance;
     for (final chapitre in chapitres) {
       final id = chapitre.id;
       if (id == null || !chapitre.estTelecharge) continue;
       // Choix « Garder » du client (`est_garde`) : jamais supprimé par les
       // règles. Un téléchargement manuel hors des règles (autre langue,
       // chapitre ancien) n'est pas exempté : le compte à rebours affiché
-      // laisse 24 h au client pour le garder.
+      // laisse au client le temps de le garder.
       final voulu = !aSupprimer.contains(id) || chapitre.estGarde;
       if (!voulu && chapitre.dateSuppressionPrevue == null) {
+        echeance ??= _maintenant().add(
+          await _serviceParametres.chargerDelaiSuppression(),
+        );
         await _depotChapitres.planifierSuppression(id, echeance);
         suppressionsPrevues++;
       } else if (voulu && chapitre.dateSuppressionPrevue != null) {
@@ -1159,7 +1172,7 @@ class ServiceTelechargement {
       if (id == null || estProtege(id)) continue;
       try {
         // Les règles sont recalculées juste avant d'effacer : depuis la pose
-        // de la date (jusqu'à 24 h plus tôt), le client a pu changer ses
+        // de la date (jusqu'à 30 jours plus tôt), le client a pu changer ses
         // réglages ou ses langues, revenir en arrière dans sa lecture, ou
         // retirer le titre de Favoris et Suivis (règle : alors rien n'est
         // supprimé). Sans ce contrôle, la tâche de fond effacerait une
@@ -1224,6 +1237,91 @@ class ServiceTelechargement {
   Future<void> supprimerMaintenant(int idChapitre) =>
       supprimerTelechargement(idChapitre);
 
+  /// Suppression groupée en cours : un double clic (ou un second écran)
+  /// attend la même au lieu d'en lancer une seconde.
+  Future<int>? _suppressionGroupeeEnCours;
+
+  /// Supprime tout de suite les archives de **toutes** les suppressions
+  /// prévues (bouton « Supprimer tous les chapitres à supprimer » de
+  /// l'onglet Téléchargements) et renvoie le nombre d'archives supprimées.
+  ///
+  /// Mêmes règles que [supprimerMaintenant] pour chaque chapitre, avec en
+  /// plus :
+  /// - un chapitre ouvert dans le lecteur ([protegerChapitre]) est épargné :
+  ///   sa suppression reste prévue et sera faite plus tard ;
+  /// - rien n'est supprimé, et une [ErreurService] au message clair est
+  ///   levée, si un déplacement des archives est en cours ou inachevé, si
+  ///   le dossier vient d'être changé (redémarrage demandé) ou si le dossier
+  ///   des chapitres est inaccessible (NAS éteint) ;
+  /// - un chapitre en erreur est journalisé et n'empêche pas les autres ;
+  ///   si aucun n'a pu être supprimé, la première erreur est levée.
+  ///
+  /// Un second appel pendant la suppression partage la même.
+  Future<int> supprimerToutesSuppressionsPrevues() =>
+      _suppressionGroupeeEnCours ??= _supprimerToutesSuppressionsPrevues()
+          .whenComplete(() => _suppressionGroupeeEnCours = null);
+
+  Future<int> _supprimerToutesSuppressionsPrevues() async {
+    // Contrôles avant toute écriture : en cas de refus, aucune archive n'est
+    // touchée (pas de suppression à moitié faite).
+    _verifierArchivesSurPlace();
+    await _verifierAucunDeplacement();
+    // NAS éteint : chaque effacement échouerait l'un après l'autre (attente
+    // réseau à chaque fois). Le bandeau du dossier est mis à jour au passage.
+    final acces = await _actualiserAcces();
+    if (!acces.estAccessible) {
+      throw ErreurService(
+        "Aucun chapitre n'a été supprimé. ${acces.message ?? ''}".trim(),
+      );
+    }
+    final prevues = await _depotChapitres.chargerSuppressionsPrevues();
+    var nombre = 0;
+    var epargnes = 0;
+    var echecs = 0;
+    Object? premiereErreur;
+    StackTrace? premierePile;
+    // Boucle bornée par la liste lue (aucune requête réseau : disque et base
+    // seulement).
+    for (final chapitre in prevues) {
+      final id = chapitre.id;
+      if (id == null) continue;
+      // Chapitre lu en ce moment : l'effacer ferait échouer les pages
+      // suivantes du lecteur. Sa date reste : il sera supprimé plus tard.
+      if (estProtege(id)) {
+        epargnes++;
+        continue;
+      }
+      try {
+        await supprimerTelechargement(id, signalerChangement: false);
+        nombre++;
+      } catch (erreur, pile) {
+        echecs++;
+        premiereErreur ??= erreur;
+        premierePile ??= pile;
+        Journal.actuel.avertissement(
+          CategorieJournal.telechargement,
+          'Suppression immédiate du chapitre n°$id impossible',
+          erreur: erreur,
+        );
+        // Dossier perdu en cours de route (NAS éteint entre deux
+        // chapitres) : inutile d'essayer les suivants un par un.
+        if (!(await _actualiserAcces()).estAccessible) break;
+      }
+    }
+    Journal.actuel.info(
+      CategorieJournal.telechargement,
+      'Suppression de toutes les suppressions prévues : $nombre archive(s) '
+      'supprimée(s), $epargnes épargnée(s) (chapitre ouvert), $echecs '
+      'échec(s) sur ${prevues.length}',
+    );
+    if (nombre > 0 || echecs > 0) _signaler();
+    final erreur = premiereErreur;
+    if (nombre == 0 && erreur != null) {
+      Error.throwWithStackTrace(erreur, premierePile ?? StackTrace.current);
+    }
+    return nombre;
+  }
+
   /// Annule la suppression prévue d'un chapitre (bouton « Garder ») : les
   /// règles ne le suppriment plus jamais automatiquement ; seul le client
   /// peut encore le supprimer. Sans effet visible si aucune suppression
@@ -1237,7 +1335,8 @@ class ServiceTelechargement {
 
   /// Retire le choix « Garder » d'un chapitre ([annulerSuppression]) puis
   /// applique les règles de son titre : s'il n'est plus voulu, sa
-  /// suppression est de nouveau prévue dans 24 heures.
+  /// suppression est de nouveau prévue, après la durée de conservation
+  /// réglée (24 h par défaut).
   Future<void> retirerGarde(int idChapitre) async {
     await _depotChapitres.marquerGarde(idChapitre, estGarde: false);
     final idTitre = (await _depotChapitres.chargerChapitre(idChapitre))

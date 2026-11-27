@@ -675,7 +675,9 @@ class _EtatDialogueLanguesTitre extends State<_DialogueLanguesTitre> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              const Text(Textes.explicationLanguesTitre),
+              Text(
+                Textes.explicationLanguesTitre(delaiSuppressionRegle(context)),
+              ),
               const SizedBox(height: espacementMoyen),
               RadioGroup<bool>(
                 groupValue: _personnalisees,
