@@ -6,9 +6,11 @@ import 'package:bibliotheque_perso/ecrans/ecran_parametres.dart';
 import 'package:bibliotheque_perso/etat/etat_export.dart';
 import 'package:bibliotheque_perso/services/erreur_service.dart';
 import 'package:bibliotheque_perso/services/service_import.dart';
+import 'package:bibliotheque_perso/widgets/selecteur_fichier_export.dart';
 import 'package:bibliotheque_perso/widgets/textes.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:provider/provider.dart';
 
 import '../etat/outils_tests_etat.dart';
 import '../widgets/outils_sections_pliables.dart';
@@ -31,17 +33,27 @@ void main() {
     WidgetTester tester, {
     bool avecImport = true,
     List<String> exports = const <String>[cheminRecent, cheminAncien],
+    ChoisirFichierExport? choisir,
   }) async {
     tester.view.physicalSize = const Size(900, 4000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
+    // Faux explorateur de fichiers : aucun vrai dialogue n'est ouvert. Sans
+    // [choisir], un appui sur « Parcourir… » fait échouer le test.
     await tester.pumpWidget(
-      envelopper(
-        const EcranParametres(),
-        bibliotheque: bibliotheque,
-        export: export,
-        importation: avecImport ? importation : null,
-        listerExports: () async => exports,
+      Provider<SelecteurFichierExport>.value(
+        value: SelecteurFichierExport(
+          choisir ??
+              ({String? dossierInitial}) =>
+                  fail('explorateur ouvert sans être attendu'),
+        ),
+        child: envelopper(
+          const EcranParametres(),
+          bibliotheque: bibliotheque,
+          export: export,
+          importation: avecImport ? importation : null,
+          listerExports: () async => exports,
+        ),
       ),
     );
     await tester.pump();
@@ -163,6 +175,106 @@ void main() {
     retenue.complete();
     await tester.pumpAndSettle();
     expect(find.text(Textes.importTermine), findsOneWidget);
+  });
+
+  group('bouton « Parcourir… »', () {
+    Finder boutonParcourir() =>
+        find.widgetWithText(OutlinedButton, Textes.parcourir);
+    String champ(WidgetTester tester) =>
+        tester.widget<TextField>(find.byType(TextField)).controller!.text;
+
+    testWidgets('le fichier choisi remplit le champ, ouvert sur le dossier '
+        'des exports, puis « Importer » importe ce fichier', (tester) async {
+      final dossiers = <String?>[];
+      await afficher(
+        tester,
+        choisir: ({String? dossierInitial}) async {
+          dossiers.add(dossierInitial);
+          return r'E:\Sauvegardes\mon_export.json';
+        },
+      );
+      await ouvrirDialogue(tester);
+      expect(boutonParcourir(), findsOneWidget);
+
+      await tester.tap(boutonParcourir());
+      await tester.pumpAndSettle();
+
+      expect(dossiers, <String?>['C:/exports']);
+      expect(champ(tester), r'E:\Sauvegardes\mon_export.json');
+      // Rien n'est importé avant la confirmation.
+      expect(importation.chemins, isEmpty);
+
+      await tester.tap(boutonImporter());
+      await tester.pumpAndSettle();
+      expect(importation.chemins, <String>[r'E:\Sauvegardes\mon_export.json']);
+      expect(find.text(Textes.importTermine), findsOneWidget);
+    });
+
+    testWidgets('annuler l\'explorateur ne change rien', (tester) async {
+      var appels = 0;
+      await afficher(
+        tester,
+        choisir: ({String? dossierInitial}) async {
+          appels++;
+          return null;
+        },
+      );
+      await ouvrirDialogue(tester);
+      await tester.tap(find.text('bibliotheque_2026-11-17.json'));
+      await tester.pump();
+
+      await tester.tap(boutonParcourir());
+      await tester.pumpAndSettle();
+
+      expect(appels, 1);
+      expect(champ(tester), cheminRecent);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(importation.chemins, isEmpty);
+    });
+
+    testWidgets('explorateur impossible à ouvrir : message, le champ reste '
+        'utilisable', (tester) async {
+      await afficher(
+        tester,
+        choisir: ({String? dossierInitial}) async =>
+            throw StateError('pas de portail'),
+      );
+      await ouvrirDialogue(tester);
+      await tester.tap(boutonParcourir());
+      await tester.pumpAndSettle();
+
+      expect(find.text(Textes.explorateurIndisponible), findsOneWidget);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'D:/autre.json');
+      await tester.pump();
+      expect(
+        tester.widget<FilledButton>(boutonImporter()).onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('pendant le choix, « Parcourir… » est inactif', (tester) async {
+      final choix = Completer<String?>();
+      await afficher(
+        tester,
+        choisir: ({String? dossierInitial}) => choix.future,
+      );
+      await ouvrirDialogue(tester);
+      await tester.tap(boutonParcourir());
+      await tester.pump();
+      expect(
+        tester.widget<OutlinedButton>(boutonParcourir()).onPressed,
+        isNull,
+      );
+
+      choix.complete('D:/choisi.json');
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<OutlinedButton>(boutonParcourir()).onPressed,
+        isNotNull,
+      );
+      expect(champ(tester), 'D:/choisi.json');
+    });
   });
 
   group('EtatExport : import', () {

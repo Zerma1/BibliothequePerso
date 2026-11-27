@@ -1,6 +1,7 @@
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
+#include <shellapi.h>
 
 #include <algorithm>
 #include <cwctype>
@@ -96,17 +97,37 @@ bool AutreInstanceActive(bool demarrage_masque) {
   return true;
 }
 
+// Vrai si |argument| figure exactement (et non comme partie d'un autre
+// argument) sur la ligne de commande.
+bool ArgumentPresent(const wchar_t* argument) {
+  int nombre = 0;
+  wchar_t** arguments = ::CommandLineToArgvW(::GetCommandLineW(), &nombre);
+  if (arguments == nullptr) {
+    return false;
+  }
+  bool present = false;
+  for (int i = 1; i < nombre && !present; ++i) {
+    present = std::wstring(arguments[i]) == argument;
+  }
+  ::LocalFree(arguments);
+  return present;
+}
+
 }  // namespace
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
   // Demarrage avec Windows en mode « icone masquee » (cle Run ecrite par
   // lib/main.dart, appliquerDemarrageAvecWindows).
-  const bool demarrage_masque =
-      command_line != nullptr &&
-      std::wstring(command_line).find(kArgumentDemarrageMasque) !=
-          std::wstring::npos;
-  if (AutreInstanceActive(demarrage_masque)) {
+  // Arguments compares en entier (CommandLineToArgvW), jamais comme
+  // sous-chaine.
+  const bool demarrage_masque = ArgumentPresent(kArgumentDemarrageMasque);
+  // Desinstallation (lancee par l'installateur, application deja arretee) :
+  // jamais de fenetre, et pas de controle d'instance unique (ni verrou pris,
+  // ni message « affiche-toi » envoye) : une instance restante ne doit ni
+  // empecher la modification de la base, ni etre affichee.
+  const bool desinstallation = ArgumentPresent(kArgumentDesinstallation);
+  if (!desinstallation && AutreInstanceActive(demarrage_masque)) {
     return EXIT_SUCCESS;
   }
 
@@ -127,7 +148,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
-  FlutterWindow window(project, demarrage_masque);
+  FlutterWindow window(project, demarrage_masque, desinstallation);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
   // Titre de la fenetre. Le fichier est en UTF-8 et compile avec /utf-8
@@ -151,6 +172,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // par la liberation des bibliotheques (DllMain, destructeurs statiques), ou
   // une bibliotheque native (cnativeapi.dll, icone de la zone de notification)
   // peut bloquer indefiniment.
-  ::TerminateProcess(::GetCurrentProcess(), EXIT_SUCCESS);
-  return EXIT_SUCCESS;
+  // Desinstallation : la reussite n'est signalee que par la methode
+  // « terminer » (code de Dart, voir flutter_window.cpp), qui met fin au
+  // processus avant d'arriver ici. Une fin par la boucle de messages est donc
+  // un echec pour l'installateur.
+  const UINT code = desinstallation ? EXIT_FAILURE : EXIT_SUCCESS;
+  ::TerminateProcess(::GetCurrentProcess(), code);
+  return static_cast<int>(code);
 }

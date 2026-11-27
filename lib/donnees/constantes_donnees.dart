@@ -124,3 +124,68 @@ const String cleDossierChapitresEmplacements = 'dossierChapitres';
 /// Suffixe du fichier temporaire écrit avant d'être renommé en
 /// [nomFichierEmplacements] (`emplacements.json.tmp`).
 const String suffixeFichierTemporaireEmplacements = '.tmp';
+
+/// Nom du dossier de la base de données sous Windows, directement dans
+/// `%APPDATA%` (`%APPDATA%\bibliotheque_perso`), depuis la version 0.3.3.
+const String nomDossierBaseWindows = 'bibliotheque_perso';
+
+/// Dossier de l'éditeur dans `%APPDATA%` utilisé jusqu'à la version 0.3.2
+/// (`getApplicationSupportDirectory()` : nom de société de
+/// `windows/runner/Runner.rc`).
+///
+/// NE PAS MODIFIER : sert seulement à retrouver la base des anciennes
+/// versions (`%APPDATA%\io.github.zerma1\bibliotheque_perso`), même si le nom
+/// de société change un jour.
+const String nomAncienDossierEditeurWindows = 'io.github.zerma1';
+
+/// Dossier de la base dans [nomAncienDossierEditeurWindows] jusqu'à la
+/// version 0.3.2. NE PAS MODIFIER (même raison).
+const String nomAncienDossierBaseWindows = 'bibliotheque_perso';
+
+/// Fichier écrit par l'installateur Windows à côté de l'exécutable
+/// (`installation.json`), lu ici pour la clé [cleDossierBaseInstallation].
+///
+/// NE PAS RENOMMER : écrit tel quel par `installateur/*.iss` (et lu aussi
+/// par `lib/main.dart` pour le dossier des chapitres).
+const String nomFichierInstallationWindows = 'installation.json';
+
+/// Clé du dossier de la base de données choisi dans l'installateur Windows,
+/// dans [nomFichierInstallationWindows] : `{"dossierBase": "<chemin>"}`.
+///
+/// NE PAS RENOMMER : écrite telle quelle par `installateur/*.iss`.
+const String cleDossierBaseInstallation = 'dossierBase';
+
+/// Suffixe de la copie d'un fichier pendant le déplacement de l'ancien
+/// dossier de la base (`bibliotheque_perso.db.migration`).
+///
+/// La copie n'est renommée sous son vrai nom qu'une fois vérifiée : une
+/// copie interrompue n'est donc jamais prise pour la base.
+const String suffixeCopieMigrationBase = '.migration';
+
+/// Suffixe sous lequel l'ancienne base est brièvement renommée pour vérifier
+/// qu'aucun autre processus ne l'a ouverte (`….db.verification`), puis
+/// remise sous son nom.
+const String suffixeVerificationBaseLibre = '.verification';
+
+/// Nombre d'essais pour rendre son nom à la base après le test
+/// d'occupation ([suffixeVerificationBaseLibre]) ; un antivirus ou
+/// l'indexeur de Windows peut bloquer brièvement le fichier.
+const int nombreEssaisRestaurationBase = 5;
+
+/// Attente entre deux essais de [nombreEssaisRestaurationBase].
+const Duration delaiEntreEssaisRestaurationBase = Duration(milliseconds: 100);
+
+/// Fichiers annexes de SQLite, accolés au nom de la base
+/// (`bibliotheque_perso.db-wal`…).
+///
+/// Ceux qui traînent dans le dossier cible sans correspondre à la base
+/// déplacée sont supprimés avant de la mettre en place : SQLite pourrait
+/// sinon tenter de les rejouer sur une autre base.
+const List<String> suffixesFichiersAnnexesSqlite = <String>[
+  '-wal',
+  '-shm',
+  '-journal',
+];
+
+/// Taille des blocs lus pour comparer une copie à l'original (1 Mio).
+const int tailleBlocComparaisonFichiers = 1024 * 1024;

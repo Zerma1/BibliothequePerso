@@ -10,19 +10,26 @@ import '../etat/etat_export.dart';
 import '../etat/etat_parametres.dart';
 import '../etat/etat_parutions.dart';
 import '../etat/etat_sources.dart';
+import '../etat/journal_interface.dart';
 import 'constantes_interface.dart';
+import 'selecteur_fichier_export.dart';
 import 'textes.dart';
 
 /// Ouvre le dialogue d'import ; après un import réussi, affiche le bilan
 /// (résumé et lignes non importées) et relit la bibliothèque, les sites,
 /// les mises à jour et les réglages (langues reprises du fichier).
+///
+/// L'explorateur de fichiers est celui du système, sauf si un
+/// `Provider<SelecteurFichierExport>` en fournit un autre (tests).
 Future<void> ouvrirImport(BuildContext context, EtatExport etat) async {
+  final selecteur =
+      context.read<SelecteurFichierExport?>() ?? SelecteurFichierExport.systeme;
   final resultat = await showDialog<ResultatImport>(
     context: context,
     // Pendant l'import, un appui à côté ne doit pas fermer la boîte : le
     // client perdrait le bilan.
     barrierDismissible: false,
-    builder: (_) => DialogueImport(etat: etat),
+    builder: (_) => DialogueImport(etat: etat, selecteur: selecteur),
   );
   if (resultat == null || !context.mounted) return;
   _relireEcrans(context);
@@ -55,7 +62,9 @@ void _relireEcrans(BuildContext context) {
 }
 
 /// Dialogue « Importer un export » : liste des exports trouvés (un appui
-/// remplit le champ) et champ pour coller le chemin d'un autre fichier.
+/// remplit le champ), champ pour coller le chemin d'un autre fichier et
+/// bouton « Parcourir… » qui ouvre l'explorateur de fichiers (le fichier
+/// choisi remplit le champ ; annuler ne change rien).
 /// Renvoie le [ResultatImport] d'un import réussi, ou `null` si le client
 /// annule. Un fichier refusé laisse la boîte ouverte avec le message.
 ///
@@ -63,10 +72,17 @@ void _relireEcrans(BuildContext context) {
 /// de la route courante.
 class DialogueImport extends StatefulWidget {
   /// Crée le dialogue pour [etat].
-  const DialogueImport({super.key, required this.etat});
+  const DialogueImport({
+    super.key,
+    required this.etat,
+    this.selecteur = SelecteurFichierExport.systeme,
+  });
 
   /// État de l'export et de l'import.
   final EtatExport etat;
+
+  /// Explorateur de fichiers du bouton « Parcourir… ».
+  final SelecteurFichierExport selecteur;
 
   @override
   State<DialogueImport> createState() => _EtatDialogueImport();
@@ -77,6 +93,7 @@ class _EtatDialogueImport extends State<DialogueImport> {
   late final Future<List<String>> _exports = widget.etat
       .chargerExportsDisponibles();
   bool _enCours = false;
+  bool _choixEnCours = false;
   String? _erreur;
 
   @override
@@ -108,6 +125,38 @@ class _EtatDialogueImport extends State<DialogueImport> {
     setState(() {
       _enCours = false;
       _erreur = erreur == null ? null : Textes.messageErreur(erreur);
+    });
+  }
+
+  /// Ouvre l'explorateur de fichiers, sur le dossier des exports. Le
+  /// fichier choisi remplit le champ (le client confirme avec « Importer ») ;
+  /// une annulation ne change rien.
+  Future<void> _parcourir() async {
+    setState(() => _choixEnCours = true);
+    String? chemin;
+    String? erreur;
+    try {
+      chemin = await widget.selecteur.choisir(
+        dossierInitial: widget.etat.dossierExports,
+      );
+    } catch (exception) {
+      // Explorateur absent (Linux sans portail de bureau, par exemple) : le
+      // champ du chemin reste utilisable.
+      noterProblemeInterface(
+        "Explorateur de fichiers impossible à ouvrir pour l'import",
+        erreur: exception,
+      );
+      erreur = Textes.explorateurIndisponible;
+    }
+    if (!mounted) return;
+    setState(() {
+      _choixEnCours = false;
+      if (erreur != null) {
+        _erreur = erreur;
+      } else if (chemin != null && chemin.isNotEmpty) {
+        _chemin.text = chemin;
+        _erreur = null;
+      }
     });
   }
 
@@ -185,6 +234,18 @@ class _EtatDialogueImport extends State<DialogueImport> {
                   border: OutlineInputBorder(),
                 ),
                 onSubmitted: peutImporter ? (_) => _importer() : null,
+              ),
+              const SizedBox(height: espacementPetit),
+              // Sous le champ qu'il remplit, aligné à gauche : sur un
+              // téléphone, un bouton à côté du champ lui volerait la place
+              // nécessaire pour lire le chemin.
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: OutlinedButton.icon(
+                  onPressed: _enCours || _choixEnCours ? null : _parcourir,
+                  icon: const Icon(Icons.folder_open_outlined),
+                  label: const Text(Textes.parcourir),
+                ),
               ),
               if (_enCours) ...<Widget>[
                 const SizedBox(height: espacementPetit),

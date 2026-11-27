@@ -5,13 +5,13 @@ library;
 import 'dart:io' show Platform;
 
 import 'package:path/path.dart' as chemins;
-import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart'
     show databaseFactoryFfi, sqfliteFfiInit;
 
 import '../modeles/constantes.dart';
 import '../modeles/erreur_base_de_donnees.dart';
+import 'dossier_base_de_donnees.dart';
 import 'migrations.dart';
 import 'reparation_schema.dart';
 
@@ -118,18 +118,20 @@ Future<void> migrerAvecReparation(
   await appliquerMigrations(executeur, depart, nouvelle);
 }
 
-/// Chemin par défaut du fichier SQLite.
+/// Chemin par défaut du fichier SQLite, dans le dossier donné par
+/// [preparerDossierBaseDeDonnees] (créé au besoin) :
 ///
 /// - Android : dossier standard des bases (`getDatabasesPath()` de sqflite).
-/// - Windows et Linux : dossier de support de l'application
+/// - Linux : dossier de support de l'application
 ///   (`getApplicationSupportDirectory()`), car le dossier par défaut de
 ///   `sqflite_common_ffi` dépend du dossier courant du processus.
+/// - Windows : dossier choisi à l'installation (`dossierBase` de
+///   `installation.json`), sinon `%APPDATA%\bibliotheque_perso` ; l'ancien
+///   dossier `%APPDATA%\io.github.zerma1\bibliotheque_perso` est déplacé au
+///   premier appel ([migrerAncienDossierBase]).
 Future<String> cheminParDefautBaseDeDonnees() async {
-  if (Platform.isAndroid) {
-    return chemins.join(await getDatabasesPath(), nomFichierBaseDeDonnees);
-  }
-  final dossier = await getApplicationSupportDirectory();
-  // SQLite crée le fichier mais pas les dossiers parents.
-  await dossier.create(recursive: true);
-  return chemins.join(dossier.path, nomFichierBaseDeDonnees);
+  return chemins.join(
+    await preparerDossierBaseDeDonnees(),
+    nomFichierBaseDeDonnees,
+  );
 }

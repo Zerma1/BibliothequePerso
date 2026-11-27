@@ -6,6 +6,22 @@
 > restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
 > chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
 
+## 0.3.3-test — version de test, Windows (2026-11-27)
+
+Contient la 0.3.2-test, plus (retours du client) :
+- **Un seul .exe** (`…-installation.exe`) : Installer / Mettre à jour / Désinstaller / Tout
+  supprimer. Plus de désinstalleur séparé.
+- **Désinstaller** : cases « Chapitres téléchargés » (cochée), « Sources », « Titres » (non
+  cochées ; cocher Sources coche aussi Titres, qui en dépendent). Mêmes choix depuis
+  « Applications installées » de Windows.
+- **Emplacements enregistrés** : à l'installation, choix du dossier des chapitres et du dossier
+  de la base ; ils sont retrouvés après une désinstallation qui garde les données.
+- **Base déplacée** dans `%APPDATA%\bibliotheque_perso` (au lieu de
+  `%APPDATA%\io.github.zerma1\bibliotheque_perso`) : déplacement automatique et vérifié au
+  premier démarrage.
+- **Import** : bouton « Parcourir… » pour choisir le fichier d'export (paquet `file_picker`).
+- Démarrage avec Windows : « Off » devient « Désactivé ».
+
 ## 0.3.2-test — version de test, Windows (2026-11-25)
 
 Contient la 0.3.1-test, plus :

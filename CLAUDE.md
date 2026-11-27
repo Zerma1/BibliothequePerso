@@ -74,8 +74,8 @@ limité à son scope :
 ## État actuel (2026-11-17)
 
 - `main` : version **0.2.5** (validée par le client, 2026-11-25).
-- `test` : **0.3.2-test** (0.3.1 + désinstalleur complet, emplacements.json, correction de « Quitter »),
-  en attente des retours du client. Prochaine : 0.3.3-test.
+- `test` : **0.3.3-test** (un seul .exe 4 choix, base dans %APPDATA%\bibliotheque_perso, Parcourir…),
+  en attente des retours du client. Prochaine : 0.3.4-test.
 - Plateformes : Windows d'abord ; Android puis Linux seulement après validation.
 - Suivi des tâches dans `docs/TACHES_EN_COURS.md`.
 

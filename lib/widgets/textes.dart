@@ -957,8 +957,19 @@ abstract final class Textes {
 
   /// Aucun export trouvé dans le dossier des exports.
   static const String aucunExportTrouve =
-      "Aucun export trouvé dans le dossier des exports. Collez le chemin "
-      "d'un fichier ci-dessous.";
+      "Aucun export trouvé dans le dossier des exports. Choisissez un "
+      "fichier avec « Parcourir… » ou collez son chemin ci-dessous.";
+
+  /// Bouton qui ouvre l'explorateur de fichiers pour choisir l'export.
+  static const String parcourir = 'Parcourir…';
+
+  /// Titre de la fenêtre de l'explorateur de fichiers (ordinateur).
+  static const String titreChoixFichierImport = 'Choisir un export à importer';
+
+  /// L'explorateur de fichiers n'a pas pu s'ouvrir.
+  static const String explorateurIndisponible =
+      "L'explorateur de fichiers n'a pas pu s'ouvrir. Collez le chemin du "
+      'fichier dans le champ.';
 
   /// Champ du chemin d'un fichier à importer.
   static const String champCheminImport = 'Chemin du fichier JSON';
@@ -2552,7 +2563,7 @@ abstract final class Textes {
 
   /// Nom d'un mode de démarrage (bouton et résumé de la section).
   static String nomModeDemarrage(ModeDemarrage mode) => switch (mode) {
-    ModeDemarrage.desactive => 'Off',
+    ModeDemarrage.desactive => 'Désactivé',
     ModeDemarrage.pleineFenetre => 'Pleine fenêtre',
     ModeDemarrage.iconeMasquee => 'Icône masquée',
   };

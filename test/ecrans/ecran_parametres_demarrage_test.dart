@@ -163,6 +163,9 @@ void main() {
       for (final mode in ModeDemarrage.values) {
         expect(find.text(Textes.nomModeDemarrage(mode)), findsOneWidget);
       }
+      // Retour du client (0.3.2-test) : « Off » devient « Désactivé ».
+      expect(find.text('Désactivé'), findsOneWidget);
+      expect(find.text('Off'), findsNothing);
       expect(
         find.text(Textes.explicationModeDemarrage(ModeDemarrage.desactive)),
         findsOneWidget,

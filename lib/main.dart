@@ -9,7 +9,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert' show jsonDecode;
-import 'dart:io' show File, Platform;
+import 'dart:io' show File, Platform, exit;
 import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/foundation.dart' show kDebugMode;
@@ -55,10 +55,13 @@ import 'etat/etat_rapports_erreur.dart';
 import 'etat/etat_sources.dart';
 import 'etat/etat_telechargements.dart';
 import 'modeles/journal.dart';
-import 'services/constantes_services.dart' show nomDossierRapports;
+import 'services/constantes_services.dart'
+    show nomDossierRapports, codeSortieDesinstallationEchec;
 import 'services/service_ajout_site.dart';
 import 'services/service_bibliotheque.dart';
+import 'donnees/constantes_donnees.dart' show nomFichierInstallationWindows;
 import 'services/service_categories.dart';
+import 'services/service_desinstallation.dart';
 import 'services/service_export.dart';
 import 'services/service_import.dart';
 import 'services/service_journal.dart';
@@ -98,8 +101,10 @@ Duration frequenceTacheAndroid(PlanificationMisesAJour planification) {
 }
 
 /// Fichier écrit par l'installateur Windows (`installateur/bibliotheque_perso.iss`)
-/// à côté de l'exécutable : `{"dossierBibliotheque": "<chemin choisi>"}`.
-const String nomFichierInstallation = 'installation.json';
+/// à côté de l'exécutable, avec les clés `dossierBibliotheque` (chapitres) et
+/// `dossierBase` (base de données ; lue par
+/// `lib/donnees/dossier_base_de_donnees.dart`).
+const String nomFichierInstallation = nomFichierInstallationWindows;
 
 /// Clé du dossier de la bibliothèque (chapitres téléchargés) dans
 /// [nomFichierInstallation].
@@ -597,6 +602,12 @@ Future<void> main(List<String> arguments) async {
   // Exigé par path_provider (chemin de la base) et par les plugins appelés
   // avant runApp (workmanager).
   WidgetsFlutterBinding.ensureInitialized();
+  // Mode désinstallation (lancé sans fenêtre par l'installateur) : modifie la
+  // base puis termine le processus, sans démarrer l'application.
+  if (estModeDesinstallation(arguments)) {
+    await terminerModeDesinstallation(arguments);
+    return;
+  }
   _demarrageMasque =
       Platform.isWindows && arguments.contains(argumentDemarrageMasque);
   // workmanager n'est utilisé que sur Android (planifié dans [demarrer], une
@@ -604,6 +615,40 @@ Future<void> main(List<String> arguments) async {
   // un minuteur de EtatMisesAJour, actif tant que l'application est ouverte
   // (PLAYBOOK.md section 7).
   await demarrer();
+}
+
+/// Mode désinstallation (lancé par l'installateur, sans fenêtre) : modifie la
+/// base puis termine le processus avec le code de sortie (0 = réussi).
+Future<void> terminerModeDesinstallation(List<String> arguments) async {
+  // Journal seul : ni captures d'erreurs de l'interface, ni zone de
+  // notification.
+  // Le processus finit TOUJOURS par « terminer » puis exit : sinon il resterait
+  // caché jusqu'au délai de l'installateur, qui annoncerait un échec à tort.
+  var code = codeSortieDesinstallationEchec;
+  try {
+    final journal = await JournalFichier.installer();
+    try {
+      Journal.actuel.info(
+        CategorieJournal.demarrage,
+        'Mode désinstallation : version $versionApplication',
+      );
+      code = await executerModeDesinstallation(arguments);
+    } finally {
+      await journal?.fermer();
+    }
+  } catch (_) {
+    // executerModeDesinstallation ne lève pas ; une erreur du journal ne
+    // change pas le résultat déjà obtenu.
+  }
+  if (Platform.isWindows) {
+    try {
+      // TerminateProcess côté natif : un exit() normal peut bloquer (Z6).
+      await canalFenetre.invokeMethod<void>(methodeTerminer, code);
+    } catch (_) {
+      // Canal indisponible : exit() en secours.
+    }
+  }
+  exit(code);
 }
 
 /// `true` une fois `Workmanager().initialize` appelé dans cet isolat.
@@ -724,6 +769,10 @@ const String methodeAfficher = 'afficher';
 /// [methodeDemanderFermeture] (vraie fermeture si [quitterApplication] l'a
 /// demandée).
 const String methodeQuitter = 'quitter';
+
+/// Méthode native du [canalFenetre] : termine le processus avec le code de
+/// sortie donné (mode désinstallation, `windows/runner/flutter_window.cpp`).
+const String methodeTerminer = 'terminer';
 
 /// Argument de ligne de commande du démarrage avec Windows en mode « icône
 /// masquée » : le programme natif n'affiche pas la fenêtre
@@ -981,7 +1030,7 @@ void _retirerZoneNotification() {
 /// Inscrit ([actif]) ou désinscrit l'application du démarrage avec Windows.
 ///
 /// À appeler quand le réglage « Démarrage avec Windows » change, et à chaque
-/// démarrage si le réglage n'est pas « Off » (l'entrée garde ainsi le chemin
+/// démarrage si le réglage n'est pas « Désactivé » (l'entrée garde ainsi le chemin
 /// de l'exécutable à jour après une réinstallation ailleurs). [masque] :
 /// lancement en mode « icône masquée » ([argumentDemarrageMasque]) ; ignoré
 /// si [actif] vaut `false`.
