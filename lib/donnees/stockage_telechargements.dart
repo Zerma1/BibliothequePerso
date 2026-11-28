@@ -6,6 +6,8 @@
 ///     img1.jpg, img2.jpg, img3.webp, …   (chapitre en images)
 ///     contenu.html                        (chapitre texte)
 /// <dossier racine>/<type>/<nom du titre>/couverture.<ext>
+/// <dossier racine>/<type>/<nom du titre>/import[.<n>].<cbz|pdf|epub>
+///     (fichier importé par le client, copié tel quel : migration 15)
 /// ```
 ///
 /// API du paquet `archive` 4.7.1 utilisées (vérifiées dans le code et la
@@ -31,6 +33,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../modeles/chapitre.dart';
 import '../modeles/constantes.dart';
+import '../modeles/fichier_importe.dart';
 import '../modeles/titre.dart';
 import 'constantes_donnees.dart';
 import 'erreur_stockage.dart';
@@ -186,11 +189,28 @@ class StockageTelechargements {
     '${RegExp.escape(suffixeArchivePartielle)}\$',
   );
 
+  // Fichier importé (migration 15) : `import.<ext>` ou `import.<n>.<ext>`
+  // (n ≥ 2), ext parmi les formats de FormatFichierLocal. Sans ancres, pour
+  // être réutilisé dans les motifs ci-dessous.
+  static final String _motifFichierImporte =
+      '$prefixeFichierImporte(?:\\.(?:[2-9]|[1-9][0-9]+))?\\.'
+      '(?:${FormatFichierLocal.values.map((f) => f.extension).join('|')})';
+
+  // Nom complet d'un fichier importé.
+  static final RegExp _nomFichierImporte = RegExp('^$_motifFichierImporte\$');
+
+  // Fichier importé en cours de copie : `import.<ext>.part`.
+  static final RegExp _nomFichierImportePartiel = RegExp(
+    '^$_motifFichierImporte${RegExp.escape(suffixeArchivePartielle)}\$',
+  );
+
   // Copie temporaire laissée par un déplacement interrompu :
-  // `ch….zip.deplacement` ou `couverture.<ext>.deplacement`.
+  // `ch….zip.deplacement`, `couverture.<ext>.deplacement` ou
+  // `import.<ext>.deplacement`.
   static final RegExp _nomResiduDeplacement = RegExp(
     '^(?:.+${RegExp.escape(extensionArchiveChapitre)}|'
-    '$nomFichierCouverture\\.[a-z0-9]{1,$longueurMaxExtensionPage})'
+    '$nomFichierCouverture\\.[a-z0-9]{1,$longueurMaxExtensionPage}|'
+    '$_motifFichierImporte)'
     '${RegExp.escape(suffixeCopieDeplacement)}\$',
   );
 
@@ -367,7 +387,8 @@ class StockageTelechargements {
   }
 
   /// `true` si [nomArchive] est un chemin relatif d'archive acceptable :
-  /// exactement trois éléments `<type>/<dossier>/<fichier>.zip` séparés par
+  /// exactement trois éléments `<type>/<dossier>/<fichier>.zip` (ou un
+  /// fichier importé `import[.<n>].<cbz|pdf|epub>`, migration 15) séparés par
   /// [separateurNomArchive], aucun élément vide, `.` ou `..`, aucun caractère
   /// interdit (dont `\` et `:`, donc ni lecteur ni chemin absolu), ni point
   /// ou espace final.
@@ -387,8 +408,9 @@ class StockageTelechargements {
       }
     }
     final fichier = elements.last;
-    return fichier.endsWith(extensionArchiveChapitre) &&
-        fichier.length > extensionArchiveChapitre.length;
+    return (fichier.endsWith(extensionArchiveChapitre) &&
+            fichier.length > extensionArchiveChapitre.length) ||
+        _nomFichierImporte.hasMatch(fichier);
   }
 
   /// Chemin complet (du système) d'une archive à partir de son chemin
@@ -712,7 +734,9 @@ class StockageTelechargements {
             final estArchive =
                 nom.endsWith(extensionArchiveChapitre) &&
                 nom.length > extensionArchiveChapitre.length;
-            if (estArchive || _nomCouverture.hasMatch(nom)) {
+            if (estArchive ||
+                _nomCouverture.hasMatch(nom) ||
+                _nomFichierImporte.hasMatch(nom)) {
               resultat.add(<String>[
                 type.name,
                 chemins.basename(titre.path),
@@ -1472,6 +1496,319 @@ class StockageTelechargements {
   }
 
   // ---------------------------------------------------------------------
+  // Fichiers importés (CBZ, PDF, EPUB : migration 15)
+  // ---------------------------------------------------------------------
+
+  /// Nom du fichier importé : `import.<ext>` pour [numeroHomonyme] 1, puis
+  /// `import.2.<ext>`, `import.3.<ext>`…
+  ///
+  /// Lève une [ArgumentError] si [numeroHomonyme] est inférieur à 1.
+  static String nomFichierImporte(
+    FormatFichierLocal format, [
+    int numeroHomonyme = 1,
+  ]) {
+    if (numeroHomonyme < 1) {
+      throw ArgumentError.value(
+        numeroHomonyme,
+        'numeroHomonyme',
+        'doit être ≥ 1',
+      );
+    }
+    return numeroHomonyme == 1
+        ? '$prefixeFichierImporte.${format.extension}'
+        : '$prefixeFichierImporte.$numeroHomonyme.${format.extension}';
+  }
+
+  /// `true` si [nomArchive] (chemin relatif enregistré, ou simple nom de
+  /// fichier) désigne un fichier importé et non une archive téléchargée.
+  ///
+  /// Sert à la couche services pour ne jamais traiter un fichier importé
+  /// comme un téléchargement (règles de conservation, retéléchargement).
+  static bool estFichierImporte(String nomArchive) =>
+      _nomFichierImporte.hasMatch(nomArchive.split(separateurNomArchive).last);
+
+  /// Format du fichier importé [nomArchive], ou `null` si ce n'est pas un
+  /// fichier importé ([estFichierImporte]).
+  static FormatFichierLocal? formatFichierImporte(String nomArchive) =>
+      estFichierImporte(nomArchive)
+      ? FormatFichierLocal.depuisNomFichier(nomArchive)
+      : null;
+
+  /// Copie le fichier [cheminSource] (choisi par le client, glisser-déposer
+  /// ou explorateur) dans la bibliothèque, sous
+  /// `<type>/<nom du titre>/import.<ext>` (ou `import.2.<ext>`… si le nom
+  /// est pris), et renvoie son chemin relatif (à enregistrer dans
+  /// `chapitres.nom_archive` par `DepotFichiersImportes.enregistrerImport`).
+  ///
+  /// Copie dans un `.part` réservé par création exclusive, vérification de
+  /// la taille, puis renommage : un fichier interrompu n'est jamais pris
+  /// pour un import complet (il est retiré par [nettoyerFichiersPartiels]).
+  /// Le fichier d'origine n'est jamais modifié. Un dossier choisi par le
+  /// client doit être joignable et porter son repère
+  /// ([nomFichierMarqueurRacine]) : sinon rien n'est créé.
+  ///
+  /// Lève une [ErreurStockage] si la source est absente ou n'est pas un
+  /// fichier, si le dossier racine est inaccessible, si aucun nom n'est
+  /// libre ou si la copie échoue (disque plein, accès refusé…).
+  Future<String> importerFichier(
+    String cheminSource, {
+    required TypeTitre typeTitre,
+    required String nomTitre,
+    required FormatFichierLocal format,
+  }) async {
+    final source = File(cheminSource);
+    if (!await source.exists()) {
+      throw ErreurStockage(
+        'Le fichier à importer est introuvable.',
+        chemin: cheminSource,
+        nature: NatureErreurStockage.cheminInvalide,
+      );
+    }
+    await verifierDossierRacine();
+    final nomDossier = nomDossierTitre(nomTitre);
+    final dossier = chemins.join(dossierRacine, typeTitre.name, nomDossier);
+    String? cle;
+    String? cheminPartiel;
+    try {
+      await Directory(dossier).create(recursive: true);
+      for (var numero = 1; numero <= nombreMaxArchivesHomonymes; numero++) {
+        final fichier = nomFichierImporte(format, numero);
+        final cheminFinal = chemins.join(dossier, fichier);
+        final partiel = '$cheminFinal$suffixeArchivePartielle';
+        final candidat = chemins.normalize(partiel);
+        if (_ecrituresOuvertes.contains(candidat) ||
+            await File(cheminFinal).exists()) {
+          continue;
+        }
+        try {
+          // Création exclusive : réservation atomique du nom sur le disque.
+          await File(partiel).create(exclusive: true);
+        } on FileSystemException {
+          if (await File(partiel).exists()) continue;
+          rethrow;
+        }
+        _ecrituresOuvertes.add(candidat);
+        cle = candidat;
+        cheminPartiel = partiel;
+        final taille = await source.length();
+        await source.copy(partiel);
+        final copiee = await File(partiel).length();
+        if (copiee != taille) {
+          throw ErreurStockage(
+            'La copie du fichier importé est incomplète ($copiee octets sur '
+            '$taille).',
+            chemin: cheminFinal,
+          );
+        }
+        if (await File(cheminFinal).exists()) {
+          // Nom pris pendant la copie (autre appareil sur le même NAS) : on
+          // abandonne cette copie et on essaie le nom suivant.
+          await _supprimerSansErreur(File(partiel));
+          _ecrituresOuvertes.remove(candidat);
+          cle = null;
+          cheminPartiel = null;
+          continue;
+        }
+        await File(partiel).rename(cheminFinal);
+        _ecrituresOuvertes.remove(candidat);
+        cle = null;
+        cheminPartiel = null;
+        return <String>[
+          typeTitre.name,
+          nomDossier,
+          fichier,
+        ].join(separateurNomArchive);
+      }
+      throw ErreurStockage(
+        "Aucun nom libre pour le fichier importé.",
+        chemin: dossier,
+      );
+    } on FileSystemException catch (erreur) {
+      throw erreurDisque('Impossible de copier le fichier importé', erreur);
+    } finally {
+      if (cheminPartiel != null) {
+        await _supprimerSansErreur(File(cheminPartiel));
+      }
+      if (cle != null) _ecrituresOuvertes.remove(cle);
+    }
+  }
+
+  /// Vérifie que [nomArchive] désigne un fichier importé et renvoie son
+  /// chemin complet ; lève une [ErreurStockage] sinon.
+  String _cheminImporte(String nomArchive) {
+    if (!estFichierImporte(nomArchive)) {
+      throw ErreurStockage(
+        "Ce chemin ne désigne pas un fichier importé.",
+        chemin: nomArchive,
+      );
+    }
+    return cheminDepuisNomArchive(nomArchive);
+  }
+
+  /// Chemin complet (du système) du fichier importé [nomArchive], pour un
+  /// lecteur qui ouvre lui-même le fichier (PDF).
+  ///
+  /// LIMITE : un futur stockage distant (NAS en WebDAV) n'aura pas de chemin
+  /// local ; préférer [lireFichierImporte] quand la taille le permet. Lève
+  /// une [ErreurStockage] si [nomArchive] n'est pas un fichier importé.
+  String cheminFichierImporte(String nomArchive) => _cheminImporte(nomArchive);
+
+  /// Contenu complet du fichier importé [nomArchive] (PDF ouvert depuis la
+  /// mémoire, par exemple).
+  ///
+  /// Lève une [ErreurStockage] si le fichier est absent, illisible, ou si le
+  /// dossier racine est inaccessible.
+  Future<Uint8List> lireFichierImporte(String nomArchive) async {
+    final chemin = _cheminImporte(nomArchive);
+    final fichier = File(chemin);
+    if (!await fichier.exists()) {
+      await verifierDossierRacine();
+      throw ErreurStockage(
+        "Le fichier importé est introuvable.",
+        chemin: chemin,
+      );
+    }
+    try {
+      return await fichier.readAsBytes();
+    } on FileSystemException catch (erreur) {
+      throw erreurDisque('Impossible de lire le fichier importé', erreur);
+    }
+  }
+
+  /// Noms des entrées (fichiers seulement) d'un fichier importé au format
+  /// zip (CBZ, EPUB), dans l'ordre de l'archive : sert à lire un EPUB
+  /// (`META-INF/container.xml`, OPF, sections) sans l'extraire.
+  ///
+  /// Lève une [ErreurStockage] si le fichier est absent ou n'est pas une
+  /// archive zip valide (un PDF, par exemple).
+  Future<List<String>> listerEntreesFichierImporte(String nomArchive) {
+    return _lireArchive(_cheminImporte(nomArchive), (archive) {
+      return <String>[
+        for (final entree in archive)
+          if (entree.isFile) entree.name,
+      ];
+    });
+  }
+
+  /// Contenu de l'entrée [nomEntree] (chemin exact dans l'archive) d'un
+  /// fichier importé au format zip (CBZ, EPUB), ou `null` si elle n'existe
+  /// pas. Rien n'est extrait sur le disque.
+  Future<Uint8List?> lireEntreeFichierImporte(
+    String nomArchive,
+    String nomEntree,
+  ) {
+    final chemin = _cheminImporte(nomArchive);
+    return _lireArchive(chemin, (archive) {
+      final entree = archive.find(nomEntree);
+      if (entree == null || !entree.isFile) return null;
+      return _lireEntree(entree, chemin);
+    });
+  }
+
+  /// Nombre de pages (images) d'un CBZ importé.
+  ///
+  /// Lève une [ErreurStockage] si le fichier est absent ou abîmé.
+  Future<int> compterPagesCbz(String nomArchive) {
+    return _lireArchive(
+      _cheminImporte(nomArchive),
+      (archive) => _pagesCbzTriees(archive).length,
+    );
+  }
+
+  /// Image de la page d'index [index] (à partir de 0) d'un CBZ importé.
+  ///
+  /// Pages = images (`jpg`, `jpeg`, `png`, `webp`, `gif`, `avif`, `bmp`),
+  /// triées par chemin dans l'ordre « naturel » (`2.jpg` avant `10.jpg`,
+  /// sans tenir compte de la casse) ; les dossiers `__MACOSX` et fichiers
+  /// cachés (`.…`) sont ignorés. Lève une [ErreurStockage] si l'index est
+  /// hors limites ou si le fichier est absent ou abîmé.
+  Future<Uint8List> lirePageCbz(String nomArchive, int index) {
+    final chemin = _cheminImporte(nomArchive);
+    return _lireArchive(chemin, (archive) {
+      final pages = _pagesCbzTriees(archive);
+      if (index < 0 || index >= pages.length) {
+        throw ErreurStockage(
+          'La page ${index + 1} n\'existe pas (${pages.length} pages).',
+          chemin: chemin,
+        );
+      }
+      return _lireEntree(pages[index], chemin);
+    });
+  }
+
+  /// Extensions reconnues comme pages d'un CBZ.
+  static const Set<String> _extensionsImagesCbz = <String>{
+    'jpg',
+    'jpeg',
+    'png',
+    'webp',
+    'gif',
+    'avif',
+    'bmp',
+  };
+
+  // Suite de chiffres ou de non-chiffres, pour le tri naturel.
+  static final RegExp _morceauxTriNaturel = RegExp(r'\d+|\D+');
+
+  /// Images d'un CBZ, dans l'ordre de lecture (voir [lirePageCbz]).
+  static List<ArchiveFile> _pagesCbzTriees(Archive archive) {
+    final pages = <ArchiveFile>[
+      for (final entree in archive)
+        if (entree.isFile && _estPageCbz(entree.name)) entree,
+    ];
+    pages.sort((a, b) => _comparerNaturel(a.name, b.name));
+    return pages;
+  }
+
+  static bool _estPageCbz(String nom) {
+    final elements = nom.split('/');
+    if (elements.any((e) => e.startsWith('.') || e == '__MACOSX')) {
+      return false;
+    }
+    final point = nom.lastIndexOf('.');
+    return point > 0 &&
+        _extensionsImagesCbz.contains(nom.substring(point + 1).toLowerCase());
+  }
+
+  /// Compare deux chemins dans l'ordre naturel (nombres comparés par
+  /// valeur), sans tenir compte de la casse ; à égalité, ordre binaire.
+  static int _comparerNaturel(String a, String b) {
+    final morceauxA = _morceauxTriNaturel
+        .allMatches(a.toLowerCase())
+        .map((m) => m[0]!)
+        .toList();
+    final morceauxB = _morceauxTriNaturel
+        .allMatches(b.toLowerCase())
+        .map((m) => m[0]!)
+        .toList();
+    for (var i = 0; i < morceauxA.length && i < morceauxB.length; i++) {
+      final x = morceauxA[i];
+      final y = morceauxB[i];
+      final nx = int.tryParse(x);
+      final ny = int.tryParse(y);
+      final comparaison = nx != null && ny != null
+          ? (nx != ny ? nx.compareTo(ny) : x.length.compareTo(y.length))
+          : x.compareTo(y);
+      if (comparaison != 0) return comparaison;
+    }
+    final longueurs = morceauxA.length.compareTo(morceauxB.length);
+    return longueurs != 0 ? longueurs : a.compareTo(b);
+  }
+
+  /// Supprime le fichier importé [nomArchive] (et un `.part` qui n'est pas
+  /// en cours de copie), puis le dossier du titre s'il est devenu vide.
+  /// Renvoie `true` si un fichier a été supprimé.
+  ///
+  /// À n'appeler que sur demande explicite du client (suppression du
+  /// titre) : jamais depuis les règles de conservation. Lève une
+  /// [ErreurStockage] si [nomArchive] n'est pas un fichier importé, si le
+  /// dossier racine est inaccessible ou si le disque refuse la suppression.
+  Future<bool> supprimerFichierImporte(String nomArchive) {
+    _cheminImporte(nomArchive);
+    return supprimerArchive(nomArchive);
+  }
+
+  // ---------------------------------------------------------------------
   // Couvertures
   // ---------------------------------------------------------------------
 
@@ -1783,6 +2120,7 @@ class StockageTelechargements {
         if (entite is! File ||
             !(entite.path.endsWith(suffixe) ||
                 _nomCouverturePartielle.hasMatch(nom) ||
+                _nomFichierImportePartiel.hasMatch(nom) ||
                 _nomResiduDeplacement.hasMatch(nom)) ||
             _ecrituresOuvertes.contains(normalise) ||
             _copiesDeplacementEnCours.contains(normalise)) {

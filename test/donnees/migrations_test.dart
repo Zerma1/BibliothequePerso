@@ -20,8 +20,8 @@ void main() {
     await base.close();
   });
 
-  test('la version du schéma est 14 et correspond à la base ouverte', () async {
-    expect(versionSchema, 14);
+  test('la version du schéma est 15 et correspond à la base ouverte', () async {
+    expect(versionSchema, 15);
     expect(await base.getVersion(), versionSchema);
   });
 

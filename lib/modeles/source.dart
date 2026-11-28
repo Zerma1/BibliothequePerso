@@ -1,6 +1,7 @@
 /// Modèle `Source` : un site configuré dans l'application.
 library;
 
+import 'constantes.dart';
 import 'outils_modeles.dart';
 
 /// Famille technique d'un site, qui détermine l'adaptateur utilisé pour le lire
@@ -70,6 +71,14 @@ class Source {
 
   /// `false` si le client a désactivé la vérification de ce site.
   final bool estActive;
+
+  /// `true` pour la source système « Fichiers locaux » (migration 15) : elle
+  /// porte les titres importés depuis un fichier et n'est **jamais** un site.
+  ///
+  /// Aucun adaptateur ne doit être créé pour elle, ni aucune requête réseau
+  /// faite en son nom. En base, elle est toujours inactive (`est_active = 0`,
+  /// garanti par un déclencheur), non supprimable et non modifiable.
+  bool get estFichiersLocaux => urlBase == urlBaseFichiersLocaux;
 
   /// Convertit la source en ligne SQLite (colonnes en `snake_case`).
   ///

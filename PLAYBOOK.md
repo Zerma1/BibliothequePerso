@@ -71,6 +71,9 @@ deux scopes. Les autres agents la lisent sans la modifier.
 | Gestion d'état | ChangeNotifier | `provider` |
 | Tâche de fond Android | planification périodique | `workmanager` (Android uniquement) |
 | Ouvrir le site dans le navigateur | lien externe | `url_launcher` |
+| Liseuse PDF | rendu PDFium (native assets) | `pdfrx` (version exacte) |
+| Glisser-déposer de fichiers | dépôt dans la fenêtre (Windows, Linux) | `desktop_drop` |
+| Liseuse EPUB | rendu HTML des chapitres en widgets | `flutter_widget_from_html_core` |
 
 **Règle anti-hallucination** : n'utiliser que des API réellement documentées sur pub.dev ou
 api.flutter.dev. En cas de doute, écrire une implémentation explicite ou signaler la limite

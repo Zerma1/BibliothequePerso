@@ -49,6 +49,16 @@ const String separateurNumeroArchiveSansLangue = '_';
 /// en pratique, deux ou trois homonymes au plus.
 const int nombreMaxArchivesHomonymes = 1000;
 
+/// Nom (sans extension) d'un fichier importé par le client, copié dans le
+/// dossier de son titre : `<type>/<nom du titre>/import.<cbz|pdf|epub>`,
+/// puis `import.2.pdf`, `import.3.pdf`… si le nom est déjà pris
+/// (migration 15).
+///
+/// NE PAS RENOMMER : ce motif est reconnu par le désinstalleur Windows
+/// (`installateur/*.iss`) et par les fichiers déjà importés. Il ne peut pas
+/// être confondu avec une archive (`ch….zip`) ni une couverture.
+const String prefixeFichierImporte = 'import';
+
 /// Préfixe des images dans une archive (`img1.jpg`, `img2.webp`…).
 const String prefixePageArchive = 'img';
 

@@ -24,6 +24,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/journal.dart';
+import 'migrations.dart' show objetsMigration15;
 
 /// Message de l'erreur levée quand la base vient d'une version plus récente
 /// de l'application que celle qui l'ouvre ([niveau] : schéma de la base).
@@ -35,13 +36,14 @@ String messageBasePlusRecente(int niveau) =>
 /// migration, du plus récent au plus ancien. 0 si la base est vide.
 ///
 /// Marqueurs (un élément créé par la migration et par aucune autre) :
-/// 14 table `tickets`, 13 `chapitres.origine`, 12 `titres.description_perso`, 11 liste système
+/// 15 table `fichiers_importes`, 14 table `tickets`, 13 `chapitres.origine`, 12 `titres.description_perso`, 11 liste système
 /// « Terminés », 10 `titres.champs_manuels`, 9 table
 /// `categories_equivalences`, 8 `titres_sources.lien_seul`, 7 table
 /// `titres_sources`, 6 `chapitres.url_externe`, 5 `chapitres.est_garde`,
 /// 4 `chapitres.nom_archive`, 3 table `parametres`, 2 table
 /// `telechargements`, 1 une des tables `sources`, `titres` ou `listes`.
 Future<int> detecterNiveauSchema(DatabaseExecutor executeur) async {
+  if (await _tableExiste(executeur, 'fichiers_importes')) return 15;
   if (await _tableExiste(executeur, 'tickets')) return 14;
   if (await _colonneExiste(executeur, 'chapitres', 'origine')) return 13;
   if (await _colonneExiste(executeur, 'titres', 'description_perso')) {
@@ -668,5 +670,10 @@ List<List<_Element>> _elementsParMigration() => <List<_Element>>[
         date_consultation INTEGER
       )
       '''),
+  ],
+  // Migration 15 : mêmes instructions que la migration (liste partagée,
+  // écrite en même temps que cette réparation).
+  <_Element>[
+    for (final (type, nom, sql) in objetsMigration15) _objet(type, nom, sql),
   ],
 ];

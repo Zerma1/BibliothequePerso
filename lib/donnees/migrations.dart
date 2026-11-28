@@ -33,6 +33,7 @@ const List<Migration> migrations = <Migration>[
   _migration12,
   _migration13,
   _migration14,
+  _migration15,
 ];
 
 /// Version actuelle du schéma (nombre de migrations).
@@ -944,3 +945,144 @@ Future<void> _migration14(DatabaseExecutor executeur) async {
     )
     ''');
 }
+
+/// Migration 15 (formats de liseuse, 0.4.0) : fichiers importés (CBZ, PDF,
+/// EPUB) et position de lecture des chapitres.
+///
+/// - Chaque fichier importé devient un titre de la source système
+///   « Fichiers locaux » (`url_base = 'local://fichiers-locaux'`,
+///   `est_active = 0`), avec un seul chapitre dont `nom_archive` désigne le
+///   fichier copié : `titres` et `chapitres` sont réutilisées telles quelles
+///   (listes, catégories, état lu, recherche fonctionnent sans changement).
+///   La source n'est **pas** créée ici mais au premier import
+///   (`DepotFichiersImportes`) : une bibliothèque sans fichier importé ne
+///   montre ni n'exporte aucune source de plus. Les déclencheurs ci-dessous
+///   la protègent dès qu'elle existe.
+/// - Table `fichiers_importes` : ce qui est propre à l'import (format,
+///   empreinte SHA-256, taille, nom d'origine).
+/// - Table `positions_lecture` : page (zip, CBZ, PDF) ou section EPUB et
+///   fraction de défilement, une ligne par chapitre.
+///
+/// Les instructions sont dans [objetsMigration15], partagée avec
+/// `reparation_schema.dart`. L'adresse `'local://fichiers-locaux'` est
+/// écrite en dur (même raison que les listes système de la migration 1) :
+/// `urlBaseFichiersLocaux` doit rester égale (vérifié par migrations_test).
+///
+/// NE PLUS MODIFIER après livraison (ni [objetsMigration15]).
+Future<void> _migration15(DatabaseExecutor executeur) async {
+  for (final (_, _, instruction) in objetsMigration15) {
+    await executeur.execute(instruction);
+  }
+}
+
+/// Objets créés par la migration 15 : `(type, nom, instruction)`, dans
+/// l'ordre de création. NE PLUS MODIFIER après livraison.
+const List<(String, String, String)> objetsMigration15 =
+    <(String, String, String)>[
+      // id_chapitre UNIQUE (et non clé primaire INTEGER, qui deviendrait un
+      // alias du rowid : même raison que la migration 9) : un fichier par
+      // chapitre ; son index sert à savoir si un chapitre est importé.
+      // ON DELETE CASCADE : supprimer le titre (donc son chapitre) efface la
+      // ligne ; le fichier sur le disque est supprimé par la couche services.
+      // empreinte_sha256 UNIQUE : un même contenu ne peut être importé deux
+      // fois (même renommé) ; l'index sert à la détection du doublon avant
+      // la copie. CHECK sur la longueur : 64 chiffres hexadécimaux.
+      // format sans CHECK : un format ajouté plus tard (CBR, MOBI) ne doit
+      // pas demander de reconstruire la table (une contrainte CHECK ne peut
+      // pas être modifiée par ALTER TABLE) ; le modèle refuse une valeur
+      // inconnue à la lecture et le dépôt est le seul à écrire.
+      // Dates en millisecondes UTC, comme le reste du schéma.
+      (
+        'table',
+        'fichiers_importes',
+        '''
+    CREATE TABLE fichiers_importes (
+      id_chapitre INTEGER NOT NULL UNIQUE
+        REFERENCES chapitres (id) ON DELETE CASCADE,
+      format TEXT NOT NULL,
+      empreinte_sha256 TEXT NOT NULL UNIQUE
+        CHECK (length(empreinte_sha256) = 64),
+      taille INTEGER NOT NULL CHECK (taille >= 0),
+      nom_origine TEXT NOT NULL,
+      date_import INTEGER NOT NULL
+    )
+    ''',
+      ),
+      // Une ligne par chapitre (id_chapitre UNIQUE, dont l'index sert à la
+      // lecture et à l'écriture INSERT OR REPLACE) ; CASCADE : la position
+      // disparaît avec le chapitre. Table à part plutôt que des colonnes de
+      // `chapitres` : l'actualisation des chapitres depuis les sites ne peut
+      // ainsi jamais l'écraser, et seuls les chapitres ouverts ont une ligne.
+      // CHECK : index ≥ 0, fraction entre 0 et 1, au moins une page ou une
+      // section (une position vide n'a pas de sens : on supprime la ligne).
+      (
+        'table',
+        'positions_lecture',
+        '''
+    CREATE TABLE positions_lecture (
+      id_chapitre INTEGER NOT NULL UNIQUE
+        REFERENCES chapitres (id) ON DELETE CASCADE,
+      page INTEGER CHECK (page IS NULL OR page >= 0),
+      nombre_pages INTEGER CHECK (nombre_pages IS NULL OR nombre_pages > 0),
+      section INTEGER CHECK (section IS NULL OR section >= 0),
+      fraction REAL
+        CHECK (fraction IS NULL OR (fraction >= 0 AND fraction <= 1)),
+      date_maj INTEGER NOT NULL,
+      CHECK (page IS NOT NULL OR section IS NOT NULL)
+    )
+    ''',
+      ),
+      // La source « Fichiers locaux » n'est jamais supprimée (elle porte les
+      // titres importés ; RESTRICT protège déjà ceux qui existent, ceci la
+      // garde aussi quand il n'y en a aucun).
+      (
+        'trigger',
+        'declencheur_sources_fichiers_locaux_suppression',
+        '''
+    CREATE TRIGGER declencheur_sources_fichiers_locaux_suppression
+    BEFORE DELETE ON sources
+    WHEN OLD.url_base = 'local://fichiers-locaux'
+    BEGIN
+      SELECT RAISE(ABORT, 'source fichiers locaux non supprimable');
+    END
+    ''',
+      ),
+      // Ni changement d'adresse ou de type, ni activation : inactive, elle
+      // est écartée par la recherche de mises à jour, qui ne vérifie que les
+      // sites actifs ; elle ne peut donc jamais être consultée par le réseau
+      // en tâche de fond. Le nom et la langue restent modifiables.
+      (
+        'trigger',
+        'declencheur_sources_fichiers_locaux_modification',
+        '''
+    CREATE TRIGGER declencheur_sources_fichiers_locaux_modification
+    BEFORE UPDATE OF url_base, type_source, est_active ON sources
+    WHEN OLD.url_base = 'local://fichiers-locaux'
+      AND (NEW.url_base IS NOT OLD.url_base
+        OR NEW.type_source IS NOT OLD.type_source
+        OR NEW.est_active <> 0)
+    BEGIN
+      SELECT RAISE(ABORT, 'source fichiers locaux non modifiable');
+    END
+    ''',
+      ),
+      // Les règles de conservation ne suppriment jamais un fichier importé :
+      // toute date de suppression prévue posée sur son chapitre est ignorée
+      // (RAISE(IGNORE) abandonne la modification de cette ligne sans erreur,
+      // la requête renvoie 0 ligne modifiée). L'annulation (NULL) reste
+      // permise. Recherche servie par l'index UNIQUE de id_chapitre.
+      (
+        'trigger',
+        'declencheur_chapitres_importes_suppression_prevue',
+        '''
+    CREATE TRIGGER declencheur_chapitres_importes_suppression_prevue
+    BEFORE UPDATE OF date_suppression_prevue ON chapitres
+    WHEN NEW.date_suppression_prevue IS NOT NULL
+      AND EXISTS (SELECT 1 FROM fichiers_importes f
+                  WHERE f.id_chapitre = NEW.id)
+    BEGIN
+      SELECT RAISE(IGNORE);
+    END
+    ''',
+      ),
+    ];
