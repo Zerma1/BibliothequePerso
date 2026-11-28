@@ -638,6 +638,10 @@ class ServiceBibliotheque {
           );
         }
         if (!lien.estPrincipale && !source.estActive) continue;
+        // Fichier importé (source « Fichiers locaux ») : aucun site à
+        // interroger, et aucun adaptateur (SourceGenerique) ne doit être
+        // créé pour une adresse local:// (PLAYBOOK.md section 10).
+        if (source.estFichiersLocaux) continue;
         final resultat = await _actualiserLien(
           titre,
           lien,
@@ -696,6 +700,9 @@ class ServiceBibliotheque {
     if (source == null) {
       throw ErreurService('Le site de « ${titre.nom} » n\'existe plus.');
     }
+    // Fichier importé : rien à relire, jamais de requête (voir
+    // actualiserTitre).
+    if (source.estFichiersLocaux) return ResultatAjoutTitre(titre, 0);
     return _actualiserLien(titre, lien, source);
   }
 
@@ -1590,6 +1597,13 @@ class ServiceBibliotheque {
   /// `Source.langueParDefaut` : on lui passe une copie. Lève une
   /// `ErreurSource` si le type du site n'a pas encore d'adaptateur.
   Future<SourceSite> _creerAdaptateur(Source source, {Titre? titre}) async {
+    // Garde-fou : la source « Fichiers locaux » n'a pas de site ; la
+    // fabrique créerait sinon une SourceGenerique sur une adresse local://.
+    if (source.estFichiersLocaux) {
+      throw const ErreurService(
+        "Un fichier importé n'a pas de site à interroger.",
+      );
+    }
     final general = await chargerLanguesGenerales();
     final langues = <String>{
       ...languesPreferees(source, general: general, titre: titre),
@@ -2546,6 +2560,8 @@ class ServiceBibliotheque {
   /// si le titre ou son site n'existe plus.
   Future<List<CouvertureSite>> recupererCouverturesDuSite(Titre titre) async {
     final source = await _exigerSource(titre);
+    // Fichier importé : pas de site, donc pas de couverture à proposer.
+    if (source.estFichiersLocaux) return const <CouvertureSite>[];
     final adaptateur = _fabriqueSources.creer(source);
     if (adaptateur is! SourceAvecCouvertures) {
       return const <CouvertureSite>[];

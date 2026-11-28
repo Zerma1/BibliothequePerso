@@ -6,6 +6,20 @@
 > restent telles quelles ; la prochaine version de test est la **0.2.0-test** (règle du client :
 > chaque version de test a son propre numéro `X.Y.Z-test`, Z+1 à chaque nouvelle itération).
 
+## 0.4.1-test — version de test, Windows (2026-11-28)
+
+Première version de test de la 0.4 (demandée par le client avec ce qui est prêt). Contient la
+0.3.3, plus :
+- **Tickets** : Paramètres → Aide et retours → « Mes tickets » : créer un ticket (bug,
+  suggestion, question) sur la page GitHub pré-remplie, puis suivre son état et ses
+  commentaires dans l'application.
+- **Mise à jour automatique** : vérification une fois par jour de la dernière version publiée ;
+  bandeau « Mettre à jour » (téléchargement vérifié, installation, relance). Réglage dans
+  Paramètres.
+- Compilation automatique GitHub corrigée (les releases n'étaient jamais créées).
+- Pas encore visible : import et lecture des livres CBZ, PDF, EPUB (prévu dans une prochaine
+  version de test).
+
 ## 0.3.3-test — version de test, Windows (2026-11-27)
 
 Contient la 0.3.2-test, plus (retours du client) :

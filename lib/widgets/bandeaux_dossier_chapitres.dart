@@ -93,7 +93,7 @@ class ZoneBandeauxDossierChapitres extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
                 if (inaccessible)
-                  _Bandeau(
+                  BandeauGlobal(
                     icone: Icons.folder_off_outlined,
                     texte: message ?? '',
                     estAlerte: true,
@@ -113,7 +113,7 @@ class ZoneBandeauxDossierChapitres extends StatelessWidget {
                     ),
                   ),
                 if (redemarrage)
-                  const _Bandeau(
+                  const BandeauGlobal(
                     icone: Icons.restart_alt,
                     texte: Textes.bandeauRedemarrage,
                     estAlerte: false,
@@ -122,7 +122,7 @@ class ZoneBandeauxDossierChapitres extends StatelessWidget {
                 // choisit quand il veut (teinte secondaire, comme le
                 // redémarrage).
                 if (installation != null)
-                  _Bandeau(
+                  BandeauGlobal(
                     icone: Icons.drive_file_move_outlined,
                     texte: Textes.bandeauDossierInstallation(
                       installation,
@@ -170,17 +170,27 @@ class ZoneBandeauxDossierChapitres extends StatelessWidget {
 }
 
 /// Un bandeau : icône, texte et action facultative, sur toute la largeur.
-class _Bandeau extends StatelessWidget {
-  const _Bandeau({
+/// Partagé avec le bandeau de mise à jour de l'application.
+class BandeauGlobal extends StatelessWidget {
+  /// Crée le bandeau.
+  const BandeauGlobal({
+    super.key,
     required this.icone,
     required this.texte,
     required this.estAlerte,
     this.action,
   });
 
+  /// Icône à gauche du texte.
   final IconData icone;
+
+  /// Message du bandeau.
   final String texte;
+
+  /// `true` : couleurs d'erreur ; sinon teinte secondaire.
   final bool estAlerte;
+
+  /// Boutons (ou autre contenu) sous le texte, à droite.
   final Widget? action;
 
   @override

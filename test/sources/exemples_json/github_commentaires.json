@@ -1,0 +1,20 @@
+[
+  {
+    "id": 4000000001,
+    "html_url": "https://github.com/Zerma1/BibliothequePerso/issues/5#issuecomment-4000000001",
+    "user": {"login": "Zerma1", "id": 1, "type": "User"},
+    "created_at": "2026-11-24T12:00:00Z",
+    "updated_at": "2026-11-24T12:00:00Z",
+    "author_association": "OWNER",
+    "body": "Merci, je regarde.\n\n**Corrigé** dans la 0.4.1."
+  },
+  {
+    "id": 4000000002,
+    "html_url": "https://github.com/Zerma1/BibliothequePerso/issues/5#issuecomment-4000000002",
+    "user": null,
+    "created_at": "2026-11-25T18:45:00Z",
+    "updated_at": "2026-11-25T18:45:00Z",
+    "author_association": "NONE",
+    "body": "Compte supprimé depuis."
+  }
+]

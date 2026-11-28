@@ -18,37 +18,37 @@ Notez **OK**, **KO** (avec ce qui s'est passé) ou **non testé**. Joignez le jo
 
 | # | Test | Attendu | Résultat |
 |---|------|---------|----------|
-| I1 | Lancer `bibliotheque_perso-0.3.3-test-installation.exe` (application non installée) | Première page « Que voulez-vous faire ? » : Installer / Tout supprimer | |
-| I2 | Installer : choisir le dossier du programme | Un dossier non vide ou le dossier du projet est refusé avec un message clair | |
-| I3 | Pages suivantes | Dossier des chapitres, puis **Dossier de la base** (proposé : `%APPDATA%\bibliotheque_perso`, ou le dossier où une base existe déjà, avec un texte qui le dit) | |
-| I4 | Page « Prêt » | Récapitule programme, base, chapitres | |
-| I5 | Premier démarrage | Vos sources, titres et listes sont là ; la base est dans le dossier choisi ; l'ancien dossier `io.github.zerma1` a disparu | |
+| I1 | Lancer `bibliotheque_perso-0.3.3-test-installation.exe` (application non installée) | Première page « Que voulez-vous faire ? » : Installer / Tout supprimer | ok|
+| I2 | Installer : choisir le dossier du programme | Un dossier non vide ou le dossier du projet est refusé avec un message clair | ok|
+| I3 | Pages suivantes | Dossier des chapitres, puis **Dossier de la base** (proposé : `%APPDATA%\bibliotheque_perso`, ou le dossier où une base existe déjà, avec un texte qui le dit) | ok|
+| I4 | Page « Prêt » | Récapitule programme, base, chapitres | ok|
+| I5 | Premier démarrage | Vos sources, titres et listes sont là ; la base est dans le dossier choisi ; l'ancien dossier `io.github.zerma1` a disparu | ok|
 
 ## M. Mettre à jour
 
 | # | Test | Attendu | Résultat |
 |---|------|---------|----------|
-| M1 | Relancer le même .exe (application installée, même ouverte) | Choix : Réinstaller / Désinstaller / Tout supprimer ; une page récapitule les 3 emplacements ; rien n'est redemandé | |
+| M1 | Relancer le même .exe (application installée, même ouverte) | Choix : Réinstaller / Désinstaller / Tout supprimer ; une page récapitule les 3 emplacements ; rien n'est redemandé | ok|
 
 ## P. Import : bouton « Parcourir… »
 
 | # | Test | Attendu | Résultat |
 |---|------|---------|----------|
-| P1 | Paramètres → Exporter la bibliothèque | Un fichier .json est créé | |
-| P2 | Paramètres → Importer → « Parcourir… » | L'explorateur s'ouvre (dossier des exports), seuls les .json sont proposés | |
-| P3 | Choisir le fichier, puis « Importer » | Import fait ; « Annuler » dans l'explorateur ne change rien | |
-| P4 | Paramètres → Démarrage | Premier choix : « Désactivé » | |
+| P1 | Paramètres → Exporter la bibliothèque | Un fichier .json est créé | ok|
+| P2 | Paramètres → Importer → « Parcourir… » | L'explorateur s'ouvre (dossier des exports), seuls les .json sont proposés | ok|
+| P3 | Choisir le fichier, puis « Importer » | Import fait ; « Annuler » dans l'explorateur ne change rien | ok|
+| P4 | Paramètres → Démarrage | Premier choix : « Désactivé » | ok|
 
 ## D. Désinstaller (en fin de tests)
 
 | # | Test | Attendu | Résultat |
 |---|------|---------|----------|
-| D1 | .exe → Désinstaller | Trois cases : Chapitres téléchargés (cochée), Sources, Titres (non cochées) | |
-| D2 | Cocher Sources | Titres se coche et se grise ; décocher Sources le libère | |
-| D3 | Désinstaller avec les valeurs par défaut | Programme et chapitres supprimés ; sources et titres gardés | |
-| D4 | Réinstaller | Les emplacements précédents sont proposés ; vos sources et titres sont retrouvés ; les chapitres apparaissent « non téléchargés » | |
-| D5 | (facultatif) Désinstaller depuis « Applications installées » de Windows | Mêmes trois cases | |
-| D6 | (facultatif, en tout dernier) Tout supprimer | Tout ce qui vient de l'application est supprimé, vos autres fichiers gardés | |
+| D1 | .exe → Désinstaller | Trois cases : Chapitres téléchargés (cochée), Sources, Titres (non cochées) | ok|
+| D2 | Cocher Sources | Titres se coche et se grise ; décocher Sources le libère | ok|
+| D3 | Désinstaller avec les valeurs par défaut | Programme et chapitres supprimés ; sources et titres gardés | ok|
+| D4 | Réinstaller | Les emplacements précédents sont proposés ; vos sources et titres sont retrouvés ; les chapitres apparaissent « non téléchargés » | ok|
+| D5 | (facultatif) Désinstaller depuis « Applications installées » de Windows | Mêmes trois cases | ok|
+| D6 | (facultatif, en tout dernier) Tout supprimer | Tout ce qui vient de l'application est supprimé, vos autres fichiers gardés | ok|
 
 ## Remarques libres
 

@@ -24,6 +24,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/journal.dart';
+import 'migrations.dart' show objetsMigration15;
 
 /// Message de l'erreur levée quand la base vient d'une version plus récente
 /// de l'application que celle qui l'ouvre ([niveau] : schéma de la base).
@@ -35,13 +36,15 @@ String messageBasePlusRecente(int niveau) =>
 /// migration, du plus récent au plus ancien. 0 si la base est vide.
 ///
 /// Marqueurs (un élément créé par la migration et par aucune autre) :
-/// 13 `chapitres.origine`, 12 `titres.description_perso`, 11 liste système
+/// 15 table `fichiers_importes`, 14 table `tickets`, 13 `chapitres.origine`, 12 `titres.description_perso`, 11 liste système
 /// « Terminés », 10 `titres.champs_manuels`, 9 table
 /// `categories_equivalences`, 8 `titres_sources.lien_seul`, 7 table
 /// `titres_sources`, 6 `chapitres.url_externe`, 5 `chapitres.est_garde`,
 /// 4 `chapitres.nom_archive`, 3 table `parametres`, 2 table
 /// `telechargements`, 1 une des tables `sources`, `titres` ou `listes`.
 Future<int> detecterNiveauSchema(DatabaseExecutor executeur) async {
+  if (await _tableExiste(executeur, 'fichiers_importes')) return 15;
+  if (await _tableExiste(executeur, 'tickets')) return 14;
   if (await _colonneExiste(executeur, 'chapitres', 'origine')) return 13;
   if (await _colonneExiste(executeur, 'titres', 'description_perso')) {
     return 12;
@@ -644,5 +647,33 @@ List<List<_Element>> _elementsParMigration() => <List<_Element>>[
         SELECT RAISE(ABORT, 'chapitre du site refuse sur un lien seul');
       END
       '''),
+  ],
+  // Migration 14.
+  <_Element>[
+    _table('tickets', '''
+      CREATE TABLE tickets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repere TEXT NOT NULL UNIQUE,
+        titre TEXT NOT NULL,
+        type_ticket TEXT NOT NULL
+          CHECK (type_ticket IN ('bug', 'suggestion', 'question')),
+        date_creation INTEGER NOT NULL,
+        numero INTEGER UNIQUE CHECK (numero IS NULL OR numero > 0),
+        etat TEXT CHECK (etat IS NULL OR etat IN ('ouvert', 'ferme')),
+        raison_fermeture TEXT CHECK (raison_fermeture IS NULL
+          OR raison_fermeture IN ('termine', 'non_retenu')),
+        etiquettes TEXT NOT NULL DEFAULT '[]',
+        nombre_commentaires INTEGER
+          CHECK (nombre_commentaires IS NULL OR nombre_commentaires >= 0),
+        date_maj_github INTEGER,
+        date_dernier_releve INTEGER,
+        date_consultation INTEGER
+      )
+      '''),
+  ],
+  // Migration 15 : mêmes instructions que la migration (liste partagée,
+  // écrite en même temps que cette réparation).
+  <_Element>[
+    for (final (type, nom, sql) in objetsMigration15) _objet(type, nom, sql),
   ],
 ];

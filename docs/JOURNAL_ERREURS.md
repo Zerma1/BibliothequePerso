@@ -197,3 +197,26 @@ erreur qui semble déjà vue.
 - **Prévention** : `dart format` uniquement sur les fichiers que l'agent a modifiés
   (`dart format <fichier1> <fichier2>`), jamais sur un dossier entier.
 - **Statut** : contourné.
+
+### E13 — CI : « Analyse et tests » échoue sur chaque étiquette (native assets de cnativeapi)
+
+**Symptôme** : depuis v0.3.0-test, chaque exécution du workflow Compilation déclenchée par
+une étiquette `v*` échoue à l'étape « Tests » (ubuntu) : `pkg-config --cflags gtk+-3.0 x11 xi
+failed`, hook de `cnativeapi` terminé avec le code 255. Windows, Linux, Android et la release
+sont ignorés : aucune release GitHub créée. Les exécutions de la branche `test` sont vertes.
+
+**Cause** : `tray_manager` → `nativeapi` → `cnativeapi` a un hook de build (native assets) qui,
+sous Linux, appelle `pkg-config` sur gtk+-3.0, x11 et xi puis compile du C++. `flutter test`
+compile ces native assets pour l'hôte ; le job d'analyse n'installait aucun paquet système.
+Les exécutions de branche paraissaient réussir parce que le job « Préparation » met
+`construire=false` quand le commit porte déjà une étiquette `v*` (cas de `--follow-tags`) :
+rien n'y était compilé.
+
+**Solution** : installer `clang cmake ninja-build pkg-config libgtk-3-dev libx11-dev libxi-dev`
+dans les jobs « Analyse et tests » et « Linux » (listes identiques), et vérifier tôt avec
+`pkg-config --exists --print-errors gtk+-3.0 x11 xi`. Liste à revoir si `cnativeapi` change
+(`hook/build.dart`, `_linuxPackages`).
+
+**Leçon** : une exécution verte dont les jobs sont « skipped » ne prouve rien ; vérifier
+l'exécution de l'étiquette (ou lancer le workflow à la main) après tout ajout de dépendance
+à code natif. Diagnostic obtenu avec Copilot CLI (lecture des exécutions GitHub Actions).

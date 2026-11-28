@@ -9,6 +9,52 @@ coche les cases.
 Rappels : lire `CLAUDE.md` et `docs/JOURNAL_ERREURS.md` avant de commencer ; écrire les fichiers
 au fur et à mesure ; ne pas commiter ; `flutter analyze` à 0 sur son périmètre avant le rapport.
 
+## Version 0.4.0 — suggestions d'utilisateurs (2026-11-27)
+
+### E1. Tickets GitHub (en cours)
+Décisions du client : création par la page « New issue » pré-remplie du dépôt public
+Zerma1/BibliothequePerso (aucun jeton dans l'application) ; suivi dans l'application
+(écran « Mes tickets » : état, étiquettes, commentaires) par lecture publique de l'API,
+grâce à un repère unique `BP-…` dans le texte du ticket.
+- [x] Données : modèle `Ticket`, migration 14, `DepotTickets` (developpeur-donnees)
+- [x] Réseau : lecture des issues et commentaires, URL de création (developpeur-sources)
+- [x] Service tickets (developpeur-services)
+- [x] Écran « Mes tickets » + création + assemblage (developpeur-interface, orchestrateur)
+- [ ] À faire valider par le client : section « Aide et retours » entre Démarrage et Journal ;
+  point sur l'onglet Paramètres ; bouton « Continuer sur GitHub » ; type par défaut Bug ;
+  commentaires en texte brut (Markdown non mis en forme)
+
+### E3. Mise à jour automatique (demande du client, 2026-11-27)
+Une fois par jour, l'application consulte la dernière release GitHub publiée depuis `main`
+(non *pre-release*, API publique sans jeton) ; si la version est plus récente, un bandeau
+propose « Mettre à jour » : téléchargement de l'installateur, vérification d'une somme SHA-256
+publiée avec la release, puis lancement de la mise à jour (`/ACTION=METTREAJOUR`).
+- [x] CI : construire l'installateur Inno Setup et sa somme SHA-256 dans la release (integrateur ;
+  noms figés dans docs/DEPLOIEMENT.md ; jamais exécuté sur GitHub à ce stade)
+- [x] Réseau : dernière release + téléchargement (developpeur-sources)
+- [x] Service : vérification quotidienne, réglage activé par défaut (developpeur-services) ; relance après mise à jour (/RELANCER)
+- [x] Interface : bandeau, progression, notes de version (developpeur-interface), assemblé dans main.dart
+- [ ] Vérifier la CI corrigée (E13) à la prochaine étiquette : sans release, la mise à jour automatique ne trouve rien
+
+### E2. Lecture des formats de liseuse (à faire après E1)
+Décisions du client : **CBZ, PDF, EPUB d'abord** (CBR, MOBI/AZW3 ensuite si une bibliothèque
+sûre existe ; KFX non prévu) ; fichiers **sans DRM** seulement (aucun contournement) ; import
+par **glisser-déposer** ou **explorateur de fichiers** ; le fichier est copié dans la
+bibliothèque (titre de la source « Fichiers locaux », progression de lecture) ; paquets
+choisis par l'orchestrateur (annoncés dans le rapport).
+- [x] Choix des paquets (2026-11-27, laissé à l'orchestrateur par le client) : PDF `pdfrx` 3.2.0
+  (MIT ; PDFium embarqué à la compilation, à épingler après un essai de build Windows) ;
+  glisser-déposer `desktop_drop` 0.9.2 (Apache-2.0 ; Windows/Linux, file_picker sur Android) ;
+  EPUB : lecture maison (archive + xml + html déjà présents : container.xml → .opf → spine)
+  et rendu `flutter_widget_from_html_core` 0.17.4 (MIT, fonctionne aussi sous Linux) ;
+  CBZ : lecteur .zip existant. Plus tard : CBR (aucune bibliothèque Windows/Linux fiable),
+  MOBI/AZW3 (`kindle_unpack`, licence GPL-3.0 : accord du client nécessaire).
+- [x] Données : migration 15 (fichiers_importes, positions_lecture), source « Fichiers locaux » protégée, copie par StockageTelechargements (nom import.<ext>)
+- [x] Service : ServiceFichiersImportes (contrôle du contenu, refus DRM, doublons, lecture EPUB/PDF/CBZ, positions) ; exclusions téléchargement/export/import
+- [x] Installateur : « Désinstaller » garde les livres importés (et le repère), « Tout supprimer » les retire
+- [ ] **Reste à faire (quota hebdomadaire épuisé le 2026-11-28)** : developpeur-interface — lecteurs PDF (pdfrx 3.2.0), EPUB (sections HTML via flutter_widget_from_html_core), CBZ (pages), zone de glisser-déposer (desktop_drop **0.8.4**, API 0.8) + bouton Parcourir (file_picker), affichage des résultats d'import, masquer la source « Fichiers locaux » dans l'écran des sites, pas de « Supprimer le téléchargement »/« Garder » sur un livre importé ; puis assemblage main.dart : ServiceFichiersImportes(depotFichiersImportes: DepotFichiersImportes(base), depotPositions: DepotPositionsLecture(base), depotTitres: DepotTitres(base), depotChapitres: DepotChapitres(base), stockage: <même instance que ServiceTelechargement>) ; relecture globale 0.4.0 ; version 0.4.0-test.
+
+
 ## Étape 5 — corrections de la relecture et décisions du client (2026-11-15)
 
 ### developpeur-donnees (`lib/modeles/`, `lib/donnees/`)

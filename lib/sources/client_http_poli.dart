@@ -65,6 +65,31 @@ class ReponseOctets {
   final int codeStatut;
 }
 
+/// Réponse réussie (2xx) dont le corps reste à lire en flux (voir
+/// [ClientHttpPoli.recupererFlux]).
+class ReponseFlux {
+  /// Crée la réponse ouverte.
+  const ReponseFlux({
+    required this.codeStatut,
+    required this.enTetes,
+    required this.tailleAnnoncee,
+    required this.flux,
+  });
+
+  /// Code de statut HTTP (2xx) de la réponse finale (après redirections).
+  final int codeStatut;
+
+  /// En-têtes de la réponse finale, noms en minuscules.
+  final Map<String, String> enTetes;
+
+  /// Taille annoncée par `Content-Length`, ou `null` si inconnue.
+  final int? tailleAnnoncee;
+
+  /// Corps de la réponse, morceau par morceau ; erreurs : [ErreurSource].
+  /// À écouter une seule fois.
+  final Stream<List<int>> flux;
+}
+
 /// Client HTTP qui respecte la charge des sites lus.
 ///
 /// Il applique les règles de PLAYBOOK.md section 6 :
@@ -138,7 +163,7 @@ class ClientHttpPoli {
     Map<String, String> enTetes = const <String, String>{},
     LimiteRequetes? limite,
   }) async {
-    final (reponse, _) = await _executer(
+    final (reponse, _, _) = await _executer(
       uri,
       referer: referer,
       userAgent: userAgent,
@@ -235,7 +260,7 @@ class ClientHttpPoli {
     int? nouvellesTentatives,
     bool exigerImage = false,
   }) async {
-    final (reponse, duree) = await _executer(
+    final (reponse, duree, _) = await _executer(
       uri,
       referer: referer,
       userAgent: userAgent,
@@ -300,7 +325,7 @@ class ClientHttpPoli {
         cause: erreur,
       );
     }
-    final (reponse, _) = await _executer(
+    final (reponse, _, _) = await _executer(
       uri,
       referer: null,
       userAgent: userAgent,
@@ -358,7 +383,7 @@ class ClientHttpPoli {
     final corps = champs.isEmpty
         ? const <int>[]
         : utf8.encode(Uri(queryParameters: champs).query);
-    final (reponse, _) = await _executer(
+    final (reponse, _, _) = await _executer(
       uri,
       referer: referer,
       userAgent: userAgent,
@@ -381,6 +406,84 @@ class ClientHttpPoli {
         codeStatut: reponse.statusCode,
       );
     }
+  }
+
+  /// Ouvre un téléchargement en flux de [uri] (GET) : le corps n'est **pas**
+  /// chargé en mémoire, il est lu morceau par morceau dans
+  /// [ReponseFlux.flux] (gros fichiers : installateur de mise à jour).
+  ///
+  /// Mêmes règles que les autres requêtes pour l'**ouverture** (User-Agent,
+  /// créneau de [delaiParDomaine] pour l'hôte de [uri], délai d'expiration
+  /// jusqu'à la réception des en-têtes, nouvelles tentatives sur erreur
+  /// réseau, 5xx ou 429, [ErreurSource] sur 4xx). Les redirections sont
+  /// suivies par `package:http` (5 au plus).
+  ///
+  /// LIMITE : le créneau « 1 s par domaine » n'est réservé que pour l'hôte de
+  /// [uri] ; l'hôte d'arrivée d'une redirection (suivie à l'intérieur de
+  /// `package:http`) n'est pas compté. Une seule requête par téléchargement
+  /// vers cet hôte : sans effet sur sa charge.
+  ///
+  /// Pendant la lecture du flux : si aucun morceau n'arrive pendant
+  /// [delaiExpiration], le flux se termine par une [ErreurSource] « délai
+  /// dépassé » ; toute erreur réseau est elle aussi transformée en
+  /// [ErreurSource]. Aucune nouvelle tentative une fois la lecture commencée
+  /// (l'appelant recommence le téléchargement). Annuler l'écoute du flux
+  /// ferme la connexion.
+  Future<ReponseFlux> recupererFlux(
+    Uri uri, {
+    String? userAgent,
+    Map<String, String> enTetes = const <String, String>{},
+    int? nouvellesTentatives,
+  }) async {
+    final (reponse, _, recue) = await _executer(
+      uri,
+      referer: null,
+      userAgent: userAgent,
+      enTetes: enTetes,
+      limite: null,
+      nouvellesTentatives: _plafonnerTentatives(nouvellesTentatives),
+      enFlux: true,
+    );
+    final url = uri.toString();
+    final flux = recue!.stream
+        .timeout(
+          delaiExpiration,
+          onTimeout: (sortie) {
+            sortie.addError(
+              ErreurSource(
+                url,
+                'Délai dépassé pendant le téléchargement '
+                '(${delaiExpiration.inSeconds} s sans données)',
+              ),
+            );
+            sortie.close();
+          },
+        )
+        .transform(
+          StreamTransformer<List<int>, List<int>>.fromHandlers(
+            handleError: (erreur, trace, sortie) {
+              sortie.addError(
+                erreur is ErreurSource
+                    ? erreur
+                    : ErreurSource(
+                        url,
+                        'Erreur réseau pendant le téléchargement',
+                        cause: erreur,
+                      ),
+                trace,
+              );
+            },
+          ),
+        );
+    return ReponseFlux(
+      codeStatut: reponse.statusCode,
+      enTetes: Map<String, String>.unmodifiable(<String, String>{
+        for (final entree in reponse.headers.entries)
+          entree.key.toLowerCase(): entree.value,
+      }),
+      tailleAnnoncee: recue.contentLength,
+      flux: flux,
+    );
   }
 
   /// Ferme le client HTTP sous-jacent (à appeler à la fermeture de l'app).
@@ -406,7 +509,10 @@ class ClientHttpPoli {
   /// signalements MangaDex@Home), qui sinon noieraient les rapports d'erreur
   /// (200 dernières lignes) et rempliraient le fichier de journal. Les
   /// échecs, nouveaux essais, 429 et pages anti-robot gardent leur niveau.
-  Future<(http.Response, Duration)> _executer(
+  ///
+  /// [enFlux] : GET dont le corps d'une réponse 2xx n'est pas lu ; il est
+  /// renvoyé en troisième position (`null` sinon).
+  Future<(http.Response, Duration, http.StreamedResponse?)> _executer(
     Uri uri, {
     required String? referer,
     required String? userAgent,
@@ -415,6 +521,7 @@ class ClientHttpPoli {
     required int nouvellesTentatives,
     List<int>? corpsPost,
     NiveauJournal niveauSucces = NiveauJournal.info,
+    bool enFlux = false,
   }) async {
     final url = uri.toString();
     final methode = corpsPost == null ? 'GET' : 'POST';
@@ -463,12 +570,46 @@ class ClientHttpPoli {
       // `http.post` ne rendent la main qu'une fois le corps entier reçu.
       final chrono = Stopwatch()..start();
       try {
-        final envoi = corpsPost == null
-            ? _client.get(uri, headers: entetesRequete)
-            : _client.post(uri, headers: entetesRequete, body: corpsPost);
-        final reponse = await envoi.timeout(delaiExpiration);
+        final http.Response reponse;
+        http.StreamedResponse? flux;
+        if (enFlux) {
+          // `http.Request` suit les redirections (`followRedirects` vaut
+          // `true` par défaut, 5 au plus) : un fichier de release GitHub
+          // répond 302 vers `release-assets.githubusercontent.com`.
+          final requete = http.Request('GET', uri)
+            ..headers.addAll(entetesRequete);
+          final recue = await _client.send(requete).timeout(delaiExpiration);
+          if (recue.statusCode >= 200 && recue.statusCode < 300) {
+            // Corps laissé dans le flux : l'appelant le lit morceau par
+            // morceau, sans tout garder en mémoire.
+            flux = recue;
+            reponse = http.Response.bytes(
+              const <int>[],
+              recue.statusCode,
+              headers: recue.headers,
+            );
+          } else {
+            // Réponse d'erreur (petite) : lue en entier pour le diagnostic.
+            reponse = await http.Response.fromStream(recue)
+                .timeout(delaiExpiration);
+          }
+        } else {
+          final envoi = corpsPost == null
+              ? _client.get(uri, headers: entetesRequete)
+              : _client.post(uri, headers: entetesRequete, body: corpsPost);
+          reponse = await envoi.timeout(delaiExpiration);
+        }
         chrono.stop();
         final code = reponse.statusCode;
+        if (flux != null) {
+          Journal.actuel.info(
+            CategorieJournal.reseau,
+            '$methode $urlJournal : téléchargement en flux, '
+            '${_resume(code, flux.contentLength, chrono.elapsed, essais)} '
+            '(taille annoncée)',
+          );
+          return (reponse, chrono.elapsed, flux);
+        }
         if (code >= 200 && code < 300) {
           // Une ligne par requête réussie : jamais le corps, seulement sa
           // taille (une page peut contenir des données personnelles).
@@ -482,7 +623,7 @@ class ClientHttpPoli {
               '${_resume(code, reponse.bodyBytes.length, chrono.elapsed, essais)}',
             );
           }
-          return (reponse, chrono.elapsed);
+          return (reponse, chrono.elapsed, null);
         }
         // Extrait nettoyé des données personnelles (une page d'erreur peut
         // afficher l'adresse IP ou un jeton) : il est cité dans le message
@@ -517,6 +658,13 @@ class ClientHttpPoli {
           octetsRecus: reponse.bodyBytes.length,
           duree: chrono.elapsed,
           extraitReponse: extrait,
+          // Noms en minuscules (même raison que dans
+          // [recupererOctetsAvecDetails]) : l'appelant peut lire les
+          // en-têtes de limite (`x-ratelimit-reset` de GitHub).
+          enTetesReponse: Map<String, String>.unmodifiable(<String, String>{
+            for (final entree in reponse.headers.entries)
+              entree.key.toLowerCase(): entree.value,
+          }),
         );
         if (code == codeHttpTropDeRequetes) {
           // Le serveur dit combien de temps patienter : on lui obéit, sauf si
@@ -699,6 +847,24 @@ class ClientHttpPoli {
       );
       final attente = fin.difference(_maintenant().toUtc());
       return attente.isNegative ? Duration.zero : attente;
+    }
+    // API GitHub (docs.github.com, « Rate limits for the REST API »,
+    // « Exceeding the rate limit ») : « If the x-ratelimit-remaining header
+    // is 0, you should not retry your request until after the time, in UTC
+    // epoch seconds, specified by the x-ratelimit-reset header ». Sans cette
+    // lecture, un 429 serait réessayé après 2 s, en pure perte.
+    if (reponse.headers['x-ratelimit-remaining'] == '0') {
+      final reinitialisation = int.tryParse(
+        reponse.headers['x-ratelimit-reset'] ?? '',
+      );
+      if (reinitialisation != null) {
+        final fin = DateTime.fromMillisecondsSinceEpoch(
+          reinitialisation * 1000,
+          isUtc: true,
+        );
+        final attente = fin.difference(_maintenant().toUtc());
+        return attente.isNegative ? Duration.zero : attente;
+      }
     }
     return null;
   }

@@ -5,7 +5,7 @@ publish_to: 'none'
 
 # Format X.Y.Z+N (voir PLAYBOOK.md section 12) : N est le numéro de build, qui doit
 # augmenter à chaque version publiée sur Android (versionCode).
-version: 0.3.3+14
+version: 0.4.1+15
 
 environment:
   sdk: ^3.14.0
@@ -57,6 +57,13 @@ dependencies:
   # Démarrage avec Windows (clé HKCU\...\Run), appelé sous Windows seulement.
   launch_at_startup: ^0.5.1
   file_picker: ^11.0.3
+  # Liseuse PDF (PDFium fourni par pdfium_flutter via les native assets). Version exacte.
+  pdfrx: 3.2.0
+  # Glisser-déposer de fichiers dans la fenêtre (Windows et Linux). 0.8.x : la 0.9 exige
+  # cross_file ^0.4, incompatible avec file_picker (cross_file ^0.3, même en 13.4.1).
+  desktop_drop: ^0.8.4
+  # Rendu HTML des chapitres EPUB (sans WebView).
+  flutter_widget_from_html_core: ^0.17.4
 
 # Pas de navigateur intégré sous Linux (choix du client) : la partie Linux de
 # flutter_inappwebview exigerait WPE WebKit à la compilation et sur le poste. Ce paquet

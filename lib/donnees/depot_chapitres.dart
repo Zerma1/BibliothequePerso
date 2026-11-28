@@ -804,16 +804,26 @@ class DepotChapitres {
   /// Pas d'index sur ces colonnes (voir [chargerChapitresTelecharges]) : la
   /// requête parcourt la table, opération rare. Lève une
   /// [ErreurBaseDeDonnees] si l'écriture échoue (rien n'est alors modifié).
+  ///
+  /// Fichiers importés (migration 15, table `fichiers_importes`) : leurs
+  /// chapitres ne sont touchés que si [inclureFichiersImportes] vaut `true`
+  /// (le désinstalleur a aussi effacé les fichiers importés). Par défaut ils
+  /// restent intacts : un fichier importé n'est pas un téléchargement. Le
+  /// filtre `NOT EXISTS` passe par l'index UNIQUE de
+  /// `fichiers_importes.id_chapitre`.
   Future<({int chapitres, int telechargements})> marquerTousNonTelecharges({
     bool viderFile = true,
+    bool inclureFichiersImportes = false,
   }) async {
     try {
       return await _baseDeDonnees.transaction((txn) async {
         final chapitres = await txn.rawUpdate(
           'UPDATE chapitres SET est_telecharge = ?, nom_archive = NULL, '
           'date_suppression_prevue = NULL, est_garde = ? '
-          'WHERE est_telecharge != ? OR nom_archive IS NOT NULL '
-          'OR date_suppression_prevue IS NOT NULL OR est_garde != ?',
+          'WHERE (est_telecharge != ? OR nom_archive IS NOT NULL '
+          'OR date_suppression_prevue IS NOT NULL OR est_garde != ?)'
+          '${inclureFichiersImportes ? '' : ' AND NOT EXISTS (SELECT 1 FROM '
+                    'fichiers_importes f WHERE f.id_chapitre = chapitres.id)'}',
           <Object?>[valeurSqlFaux, valeurSqlFaux, valeurSqlFaux, valeurSqlFaux],
         );
         final telechargements = viderFile

@@ -20,8 +20,8 @@ void main() {
     await base.close();
   });
 
-  test('la version du schéma est 13 et correspond à la base ouverte', () async {
-    expect(versionSchema, 13);
+  test('la version du schéma est 15 et correspond à la base ouverte', () async {
+    expect(versionSchema, 15);
     expect(await base.getVersion(), versionSchema);
   });
 
@@ -2135,6 +2135,91 @@ void main() {
       await dossier.delete(recursive: true);
     }
   });
+
+  test(
+    'la migration 13 → 14 ne perd rien et crée la table tickets vide',
+    () async {
+      final dossier = await Directory.systemTemp.createTemp(
+        'migration14_test_',
+      );
+      final chemin = p.join(dossier.path, 'version13.db');
+      try {
+        final version13 = await databaseFactoryFfi.openDatabase(
+          chemin,
+          options: OpenDatabaseOptions(
+            version: 13,
+            onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+            onCreate: (db, version) => appliquerMigrations(db, 0, 13),
+          ),
+        );
+        final idSource = await version13.insert('sources', <String, Object?>{
+          'nom': 'MangaDex',
+          'url_base': 'https://mangadex.org',
+          'type_source': 'mangaDex',
+        });
+        await version13.insert('titres', <String, Object?>{
+          'id_source': idSource,
+          'url_titre': 'https://mangadex.org/title/abc',
+          'nom': 'Titre',
+          'type_titre': 'manga',
+        });
+        const tables = <String>[
+          'sources',
+          'titres',
+          'titres_sources',
+          'listes',
+        ];
+        final avant = <String, List<Map<String, Object?>>>{
+          for (final table in tables)
+            table: await version13.query(table, orderBy: 'rowid'),
+        };
+        await version13.close();
+
+        final version14 = await ouvrirBaseDeDonnees(
+          chemin: chemin,
+          fabrique: databaseFactoryFfi,
+        );
+        try {
+          expect(await version14.getVersion(), versionSchema);
+          for (final table in tables) {
+            expect(
+              await version14.query(table, orderBy: 'rowid'),
+              avant[table],
+              reason: 'table $table',
+            );
+          }
+          expect(await version14.query('tickets'), isEmpty);
+          final colonnes = (await version14.rawQuery(
+            'PRAGMA table_info(tickets)',
+          )).map((colonne) => colonne['name']);
+          expect(
+            colonnes,
+            containsAll(<String>[
+              'repere',
+              'type_ticket',
+              'numero',
+              'etat',
+              'raison_fermeture',
+              'etiquettes',
+              'date_consultation',
+            ]),
+          );
+          // Valeur par défaut des étiquettes : tableau JSON vide.
+          await version14.insert('tickets', <String, Object?>{
+            'repere': 'BP-000000000001',
+            'titre': 'Essai',
+            'type_ticket': 'bug',
+            'date_creation': 0,
+          });
+          expect((await version14.query('tickets')).single['etiquettes'], '[]');
+        } finally {
+          await version14.close();
+        }
+      } finally {
+        await dossier.delete(recursive: true);
+      }
+    },
+  );
 }
 
 /// Annule, dans les [lignes] de [table] lues après toutes les migrations,

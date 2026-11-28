@@ -3,6 +3,7 @@ library;
 
 import 'package:sqflite/sqflite.dart';
 
+import '../modeles/constantes.dart';
 import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/source.dart';
 
@@ -46,6 +47,16 @@ class DepotSources {
       if (erreur.isUniqueConstraintError()) {
         throw ErreurBaseDeDonnees(
           'Une source avec l\'URL « ${source.urlBase} » existe déjà.',
+          cause: erreur,
+        );
+      }
+      // Déclencheur de la migration 15 : la source « Fichiers locaux » ne
+      // change ni d'adresse, ni de type, et n'est jamais activée.
+      if (erreur.toString().contains('source fichiers locaux')) {
+        throw ErreurBaseDeDonnees(
+          'La source « $nomSourceFichiersLocaux » est une source système : '
+          "seuls son nom et sa langue peuvent changer, elle n'est jamais "
+          'activée.',
           cause: erreur,
         );
       }
@@ -107,6 +118,21 @@ class DepotSources {
     // le message d'erreur est clair, et la contrainte RESTRICT reste en
     // filet de sécurité.
     await _baseDeDonnees.transaction((txn) async {
+      // Source système « Fichiers locaux » (migration 15) : refus explicite,
+      // le déclencheur de la migration reste en filet de sécurité.
+      final systeme = await txn.query(
+        'sources',
+        columns: <String>['id'],
+        where: 'id = ? AND url_base = ?',
+        whereArgs: <Object?>[id, urlBaseFichiersLocaux],
+        limit: 1,
+      );
+      if (systeme.isNotEmpty) {
+        throw const ErreurBaseDeDonnees(
+          'La source « $nomSourceFichiersLocaux » est une source système : '
+          'elle ne peut pas être supprimée.',
+        );
+      }
       // titres_sources contient aussi le site principal de chaque titre
       // (migration 7) : un seul comptage couvre les deux cas. Servi par
       // l'index index_titres_sources_id_source.
@@ -155,7 +181,9 @@ class DepotSources {
   /// chapitre en vient (`chapitres.id_source`) : ces trois clés sont en `ON
   /// DELETE RESTRICT` et `titres.id_source` est `NOT NULL`, un titre ne peut
   /// donc pas rester sans source. Pour tout supprimer, appeler d'abord
-  /// `DepotTitres.supprimerTousLesTitres` : après lui, `gardees` vaut 0.
+  /// `DepotTitres.supprimerTousLesTitres` : après lui, `gardees` vaut 0, ou 1
+  /// si la source système « Fichiers locaux » existe (créée au premier
+  /// import, migration 15 : jamais supprimée).
   ///
   /// Les titres ne sont jamais touchés. Les sous-requêtes `NOT EXISTS` sont
   /// servies par `index_titres_id_source` et `index_titres_sources_id_source`
@@ -168,13 +196,16 @@ class DepotSources {
     try {
       return await _baseDeDonnees.transaction((txn) async {
         // Aucune valeur extérieure : la requête ne compare que des colonnes.
+        // La source système « Fichiers locaux » (migration 15) n'est jamais
+        // supprimée : son déclencheur ferait échouer toute la requête.
         final supprimees = await txn.rawDelete(
-          'DELETE FROM sources WHERE '
-          'NOT EXISTS (SELECT 1 FROM titres t WHERE t.id_source = sources.id) '
+          'DELETE FROM sources WHERE url_base != ? '
+          'AND NOT EXISTS (SELECT 1 FROM titres t WHERE t.id_source = sources.id) '
           'AND NOT EXISTS (SELECT 1 FROM titres_sources ts '
           'WHERE ts.id_source = sources.id) '
           'AND NOT EXISTS (SELECT 1 FROM chapitres c '
           'WHERE c.id_source = sources.id)',
+          <Object?>[urlBaseFichiersLocaux],
         );
         final gardees =
             Sqflite.firstIntValue(

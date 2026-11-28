@@ -119,3 +119,15 @@ const int valeurSqlFaux = 0;
 /// Les anciennes versions de SQLite (encore présentes sur certains Android)
 /// limitent une requête à 999 paramètres : on découpe donc les listes longues.
 const int tailleMaxLotParametresSql = 500;
+
+/// Adresse réservée de la source système « Fichiers locaux » (migration 15),
+/// qui porte les titres importés depuis un fichier (CBZ, PDF, EPUB).
+///
+/// Ce n'est pas une adresse web : le schéma `local:` ne peut être saisi pour
+/// aucun site, et l'unicité de `sources.url_base` garantit une seule ligne.
+/// NE PAS MODIFIER : la migration 15 l'écrit en dur et ses déclencheurs la
+/// reconnaissent à cette valeur (vérifié par migrations_test).
+const String urlBaseFichiersLocaux = 'local://fichiers-locaux';
+
+/// Nom affiché de la source système « Fichiers locaux ».
+const String nomSourceFichiersLocaux = 'Fichiers locaux';

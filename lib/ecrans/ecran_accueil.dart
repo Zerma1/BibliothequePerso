@@ -9,9 +9,11 @@ import '../etat/etat_dossier_chapitres.dart';
 import '../etat/etat_mises_a_jour.dart';
 import '../etat/etat_parutions.dart';
 import '../etat/etat_telechargements.dart';
+import '../etat/etat_tickets.dart';
 import '../etat/journal_interface.dart';
 import '../widgets/bandeaux_dossier_chapitres.dart';
 import '../widgets/constantes_interface.dart';
+import '../widgets/mise_a_jour_application.dart';
 import '../widgets/textes.dart';
 import 'ecran_bibliotheque.dart';
 import 'ecran_mises_a_jour.dart';
@@ -43,6 +45,9 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
 
   /// Index de l'onglet Téléchargements (badge du nombre en cours).
   static const int _indexTelechargements = 3;
+
+  /// Index de l'onglet Paramètres (point si un ticket a du nouveau).
+  static const int _indexParametres = 4;
 
   static const List<_Onglet> _onglets = <_Onglet>[
     _Onglet(
@@ -115,7 +120,13 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
   /// Icône d'un onglet ; celle des mises à jour porte le nombre de titres
   /// avec un chapitre non lu, celle des téléchargements le nombre de
   /// chapitres en attente ou en cours.
-  Widget _icone(int index, IconData icone, int nombreActifs, int nouveautes) {
+  Widget _icone(
+    int index,
+    IconData icone,
+    int nombreActifs,
+    int nouveautes,
+    int ticketsNouveaux,
+  ) {
     if (index == _indexTelechargements && nombreActifs > 0) {
       return Semantics(
         label: Textes.telechargementsActifs(nombreActifs),
@@ -128,6 +139,14 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
         child: Badge.count(count: nouveautes, child: Icon(icone)),
       );
     }
+    if (index == _indexParametres && ticketsNouveaux > 0) {
+      // Simple point : le nombre est donné dans la section « Aide et
+      // retours » ; ici, il suffit de signaler qu'il y a du nouveau.
+      return Semantics(
+        label: Textes.ticketsAvecNouveautes(ticketsNouveaux),
+        child: Badge(child: Icon(icone)),
+      );
+    }
     return Icon(icone);
   }
 
@@ -138,6 +157,10 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
     );
     final nouveautes = context.select<EtatParutions, int>(
       (etat) => etat.nombreNouveautes,
+    );
+    // Tickets GitHub avec du nouveau : absent dans les tests sans service.
+    final ticketsNouveaux = context.select<EtatTickets?, int>(
+      (etat) => etat?.nombreNouveautes ?? 0,
     );
     final theme = Theme.of(context);
     final version = Text(
@@ -158,58 +181,64 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
           // nécessaire) en haut, sur toute la largeur : visibles quel que
           // soit l'onglet.
           body: ZoneBandeauxDossierChapitres(
-            child: Row(
-              children: <Widget>[
-                if (estLarge) ...<Widget>[
-                  NavigationRail(
-                    selectedIndex: _indexOnglet,
-                    onDestinationSelected: _choisirOnglet,
-                    labelType: NavigationRailLabelType.all,
-                    // Version épinglée en bas de la colonne (retour du client
-                    // sur la 0.2.0-test) : elle ne se confond plus avec les
-                    // onglets. Les onglets défilent si la fenêtre est très
-                    // basse, la version reste visible.
-                    trailingAtBottom: true,
-                    scrollable: true,
-                    trailing: Padding(
-                      padding: const EdgeInsets.only(bottom: espacementMoyen),
-                      child: version,
+            // Proposition de mise à jour sous les alertes du dossier : un
+            // NAS inaccessible reste le premier message lu.
+            child: ZoneBandeauMiseAJour(
+              child: Row(
+                children: <Widget>[
+                  if (estLarge) ...<Widget>[
+                    NavigationRail(
+                      selectedIndex: _indexOnglet,
+                      onDestinationSelected: _choisirOnglet,
+                      labelType: NavigationRailLabelType.all,
+                      // Version épinglée en bas de la colonne (retour du client
+                      // sur la 0.2.0-test) : elle ne se confond plus avec les
+                      // onglets. Les onglets défilent si la fenêtre est très
+                      // basse, la version reste visible.
+                      trailingAtBottom: true,
+                      scrollable: true,
+                      trailing: Padding(
+                        padding: const EdgeInsets.only(bottom: espacementMoyen),
+                        child: version,
+                      ),
+                      destinations: <NavigationRailDestination>[
+                        for (var i = 0; i < _onglets.length; i++)
+                          NavigationRailDestination(
+                            icon: _icone(
+                              i,
+                              _onglets[i].icone,
+                              nombreActifs,
+                              nouveautes,
+                              ticketsNouveaux,
+                            ),
+                            selectedIcon: _icone(
+                              i,
+                              _onglets[i].iconeChoisie,
+                              nombreActifs,
+                              nouveautes,
+                              ticketsNouveaux,
+                            ),
+                            label: Text(_onglets[i].libelle),
+                          ),
+                      ],
                     ),
-                    destinations: <NavigationRailDestination>[
-                      for (var i = 0; i < _onglets.length; i++)
-                        NavigationRailDestination(
-                          icon: _icone(
-                            i,
-                            _onglets[i].icone,
-                            nombreActifs,
-                            nouveautes,
-                          ),
-                          selectedIcon: _icone(
-                            i,
-                            _onglets[i].iconeChoisie,
-                            nombreActifs,
-                            nouveautes,
-                          ),
-                          label: Text(_onglets[i].libelle),
-                        ),
-                    ],
+                    const VerticalDivider(width: 1, thickness: 1),
+                  ],
+                  Expanded(
+                    child: IndexedStack(
+                      key: _cleContenu,
+                      index: _indexOnglet,
+                      children: const <Widget>[
+                        EcranBibliotheque(),
+                        EcranMisesAJour(),
+                        EcranSources(),
+                        EcranTelechargements(),
+                        EcranParametres(),
+                      ],
+                    ),
                   ),
-                  const VerticalDivider(width: 1, thickness: 1),
                 ],
-                Expanded(
-                  child: IndexedStack(
-                    key: _cleContenu,
-                    index: _indexOnglet,
-                    children: const <Widget>[
-                      EcranBibliotheque(),
-                      EcranMisesAJour(),
-                      EcranSources(),
-                      EcranTelechargements(),
-                      EcranParametres(),
-                    ],
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
           bottomNavigationBar: estLarge
@@ -237,12 +266,14 @@ class _EtatEcranAccueil extends State<EcranAccueil> {
                               _onglets[i].icone,
                               nombreActifs,
                               nouveautes,
+                              ticketsNouveaux,
                             ),
                             selectedIcon: _icone(
                               i,
                               _onglets[i].iconeChoisie,
                               nombreActifs,
                               nouveautes,
+                              ticketsNouveaux,
                             ),
                             label: _onglets[i].libelle,
                           ),

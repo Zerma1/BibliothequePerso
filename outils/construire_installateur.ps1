@@ -20,13 +20,19 @@
 .PARAMETER DossierSortie
   Dossier du .exe (par défaut livraisons\<X.Y.Z>) ; utile pour les essais.
 
+.PARAMETER CheminIscc
+  Chemin complet de ISCC.exe (par défaut : installation d'Inno Setup 6 pour
+  l'utilisateur courant, %LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe).
+  Utilisé par la compilation automatique (.github\workflows\compilation.yml).
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File outils\construire_installateur.ps1
 #>
 [CmdletBinding()]
 param(
     [switch]$SansCompilation,
-    [string]$DossierSortie
+    [string]$DossierSortie,
+    [string]$CheminIscc
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,7 +41,12 @@ $racine = Split-Path -Parent $PSScriptRoot
 $pubspec = Join-Path $racine 'pubspec.yaml'
 $script = Join-Path $racine 'installateur\bibliotheque_perso.iss'
 $release = Join-Path $racine 'build\windows\x64\runner\Release'
-$iscc = Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'
+if ($CheminIscc) {
+    $iscc = $CheminIscc
+}
+else {
+    $iscc = Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'
+}
 
 # nuget.exe (navigateur intégré) et flutter doivent être dans le PATH.
 $env:Path = (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links') + ';D:\dev\flutter\bin;' + $env:Path

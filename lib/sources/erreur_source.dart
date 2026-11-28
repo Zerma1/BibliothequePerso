@@ -25,6 +25,7 @@ class ErreurSource implements Exception {
     this.typeDetecte,
     this.extraitReponse,
     this.protectionAntiRobot = false,
+    this.enTetesReponse,
   });
 
   /// URL dont la lecture a échoué (ou URL saisie invalide).
@@ -70,6 +71,12 @@ class ErreurSource implements Exception {
   /// Voir `protection_anti_robot.dart` pour la reconnaissance du défi.
   final bool protectionAntiRobot;
 
+  /// En-têtes de la réponse HTTP en échec (noms en minuscules), si une
+  /// réponse a été reçue. Sert par exemple à lire `x-ratelimit-reset` de
+  /// l'API GitHub après un 403 ou un 429 (`ClientTicketsGithub`). Jamais
+  /// affichés ni exportés : ils peuvent contenir des identifiants de requête.
+  final Map<String, String>? enTetesReponse;
+
   /// Renvoie une copie complétée par [typeDetecte] et [extraitReponse].
   ///
   /// Une valeur déjà présente n'est jamais remplacée : l'information la plus
@@ -85,6 +92,7 @@ class ErreurSource implements Exception {
       typeDetecte: this.typeDetecte ?? typeDetecte,
       extraitReponse: this.extraitReponse ?? extraitReponse,
       protectionAntiRobot: protectionAntiRobot,
+      enTetesReponse: enTetesReponse,
     );
   }
 

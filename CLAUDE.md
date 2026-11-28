@@ -73,9 +73,9 @@ limité à son scope :
 
 ## État actuel (2026-11-17)
 
-- `main` : version **0.2.5** (validée par le client, 2026-11-25).
-- `test` : **0.3.3-test** (un seul .exe 4 choix, base dans %APPDATA%\bibliotheque_perso, Parcourir…),
-  en attente des retours du client. Prochaine : 0.3.4-test.
+- `main` : version **0.3.3** (validée par le client, 2026-11-27 ; étiquette v0.3.3).
+- `test` : **0.3.3-test**, publiée sur `main` en 0.3.3. Prochaine version de test : 0.4.0-test
+  (nouvelle fonctionnalité) ou 0.3.4-test (corrections).
 - Plateformes : Windows d'abord ; Android puis Linux seulement après validation.
 - Suivi des tâches dans `docs/TACHES_EN_COURS.md`.
 
