@@ -49,8 +49,11 @@ choisis par l'orchestrateur (annoncés dans le rapport).
   et rendu `flutter_widget_from_html_core` 0.17.4 (MIT, fonctionne aussi sous Linux) ;
   CBZ : lecteur .zip existant. Plus tard : CBR (aucune bibliothèque Windows/Linux fiable),
   MOBI/AZW3 (`kindle_unpack`, licence GPL-3.0 : accord du client nécessaire).
-- [ ] Conception (données : titres « Fichiers locaux », progression par format)
-- [ ] Données, services, interface, tests
+- [x] Données : migration 15 (fichiers_importes, positions_lecture), source « Fichiers locaux » protégée, copie par StockageTelechargements (nom import.<ext>)
+- [x] Service : ServiceFichiersImportes (contrôle du contenu, refus DRM, doublons, lecture EPUB/PDF/CBZ, positions) ; exclusions téléchargement/export/import
+- [x] Installateur : « Désinstaller » garde les livres importés (et le repère), « Tout supprimer » les retire
+- [ ] **Reste à faire (quota hebdomadaire épuisé le 2026-11-28)** : developpeur-interface — lecteurs PDF (pdfrx 3.2.0), EPUB (sections HTML via flutter_widget_from_html_core), CBZ (pages), zone de glisser-déposer (desktop_drop **0.8.4**, API 0.8) + bouton Parcourir (file_picker), affichage des résultats d'import, masquer la source « Fichiers locaux » dans l'écran des sites, pas de « Supprimer le téléchargement »/« Garder » sur un livre importé ; puis assemblage main.dart : ServiceFichiersImportes(depotFichiersImportes: DepotFichiersImportes(base), depotPositions: DepotPositionsLecture(base), depotTitres: DepotTitres(base), depotChapitres: DepotChapitres(base), stockage: <même instance que ServiceTelechargement>) ; relecture globale 0.4.0 ; version 0.4.0-test.
+
 
 ## Étape 5 — corrections de la relecture et décisions du client (2026-11-15)
 

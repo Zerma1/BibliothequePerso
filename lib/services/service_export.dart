@@ -416,17 +416,28 @@ class ServiceExport {
   /// chapitres : suffisant pour une bibliothèque personnelle de quelques
   /// centaines de titres.
   Future<ContenuExport> chargerContenu({DateTime? date}) async {
-    final sources = await _depotSources.chargerSources();
+    // Source système « Fichiers locaux » et titres importés écartés : un
+    // fichier importé n'existe que sur cet appareil (adresse local://), il
+    // ne se recrée pas depuis un JSON sur un autre appareil.
+    final toutes = await _depotSources.chargerSources();
+    final sources = <Source>[
+      for (final source in toutes)
+        if (!source.estFichiersLocaux) source,
+    ];
     final sourcesParId = <int, Source>{
       for (final source in sources)
         if (source.id != null) source.id!: source,
     };
+    final idsSourcesLocales = <int>{
+      for (final source in toutes)
+        if (source.estFichiersLocaux && source.id != null) source.id!,
+    };
     final titres = <TitreExporte>[];
-    // Aucun filtre : l'export contient toute la bibliothèque, y compris les
-    // titres masqués par le filtre de niveau de contenu.
+    // Pas d'autre filtre : l'export contient toute la bibliothèque, y compris
+    // les titres masqués par le filtre de niveau de contenu.
     for (final titre in await _depotTitres.chargerTitres()) {
       final id = titre.id;
-      if (id == null) continue;
+      if (id == null || idsSourcesLocales.contains(titre.idSource)) continue;
       final chapitres = await _depotChapitres.chargerChapitres(id);
       titres.add(
         TitreExporte(

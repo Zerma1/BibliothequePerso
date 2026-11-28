@@ -414,3 +414,22 @@ const Set<String> segmentsGeneriquesAdresseTitre = <String>{
 const Set<String> domainesImagesProtegees = <String>{
   'mangaplus.shueisha.co.jp',
 };
+
+/// Import de fichiers (CBZ, PDF, EPUB) : taille maximale acceptée, en
+/// octets (2 Gio). Au-delà, la copie, l'empreinte et la lecture dans
+/// l'application deviendraient trop lentes ; un tel fichier est refusé avec
+/// un message clair.
+const int tailleMaxFichierImporte = 2 * 1024 * 1024 * 1024;
+
+/// Import de fichiers : nombre maximal de fichiers traités par appel (un
+/// glisser-déposer d'un dossier entier reste borné).
+const int nombreMaxFichiersParImport = 500;
+
+/// Lecture d'un PDF importé : nombre d'octets lus au début et à la fin du
+/// fichier pour chercher le dictionnaire `/Encrypt` (trailer, dictionnaire
+/// de la table des références, version linéarisée en tête de fichier).
+const int octetsRecherchePdfChiffre = 1024 * 1024;
+
+/// Lecture d'une section EPUB : nombre maximal d'images intégrées (en
+/// adresse `data:`) dans une même section.
+const int nombreMaxImagesSectionEpub = 1000;

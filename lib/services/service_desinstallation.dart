@@ -273,6 +273,10 @@ class ServiceDesinstallation {
       var chapitresTouches = false;
       if (options.doitMarquerChapitres) {
         etape = EtapeDesinstallation.chapitres;
+        // Comportement par défaut voulu (inclureFichiersImportes = false) :
+        // la case « Chapitres téléchargés » n'efface pas les fichiers
+        // importés (livres du client) ; « Tout supprimer » est fait par
+        // l'installateur lui-même.
         final comptes = await _chapitres.marquerTousNonTelecharges();
         chapitresTouches = true;
         resultat = _avec(

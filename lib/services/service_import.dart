@@ -27,6 +27,7 @@ import '../donnees/depot_titres.dart';
 import '../donnees/depot_titres_sources.dart';
 import '../donnees/gestionnaire_transactions.dart';
 import '../modeles/categorie.dart';
+import '../modeles/constantes.dart' show urlBaseFichiersLocaux;
 import '../modeles/erreur_base_de_donnees.dart';
 import '../modeles/journal.dart';
 import '../modeles/lien_titre_source.dart';
@@ -696,6 +697,9 @@ class ServiceImport {
     final sources = <SourceImportee>[];
     final sourcesBrutes = _liste(donnees, 'sources');
     for (var i = 0; i < sourcesBrutes.length; i++) {
+      // Source « Fichiers locaux » (export d'une version qui l'aurait
+      // gardée) : ignorée sans erreur, elle n'a pas de sens ailleurs.
+      if (estLigneFichiersLocaux(sourcesBrutes[i])) continue;
       final ligne = _lireSource(sourcesBrutes[i], i + 1);
       switch (ligne) {
         case final SourceImportee source:
@@ -717,6 +721,9 @@ class ServiceImport {
 
     final titres = <TitreImporte>[];
     for (var i = 0; i < titresBruts.length; i++) {
+      // Titre importé depuis un fichier : le fichier n'est pas dans le JSON,
+      // le titre ne peut pas être recréé (ignoré sans erreur).
+      if (estLigneFichiersLocaux(titresBruts[i])) continue;
       final ligne = _lireTitre(titresBruts[i], i + 1);
       switch (ligne) {
         case final TitreImporte titre:
@@ -807,6 +814,33 @@ class ServiceImport {
       categorie: categorie,
       reference: reference,
     );
+  }
+
+  /// `true` si la ligne [brut] (site ou titre d'un export) désigne la source
+  /// « Fichiers locaux » ou un titre importé depuis un fichier : une de ses
+  /// adresses (`urlBase`, `url`, `urlSource`, ou celles de `sites`)
+  /// commence par `local://fichiers-locaux`. Fonction pure.
+  static bool estLigneFichiersLocaux(Object? brut) {
+    if (brut is! Map<String, Object?>) return false;
+    bool estLocale(Map<String, Object?> carte) {
+      for (final cle in const <String>['urlBase', 'url', 'urlSource']) {
+        final valeur = carte[cle];
+        if (valeur is String &&
+            valeur.trim().toLowerCase().startsWith(urlBaseFichiersLocaux)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    if (estLocale(brut)) return true;
+    final sites = brut['sites'];
+    if (sites is List<Object?>) {
+      for (final site in sites) {
+        if (site is Map<String, Object?> && estLocale(site)) return true;
+      }
+    }
+    return false;
   }
 
   /// Site lu dans [brut], ou l'erreur qui l'écarte.

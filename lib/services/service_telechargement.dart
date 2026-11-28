@@ -370,6 +370,9 @@ class ServiceTelechargement {
     for (final chapitre in telecharges) {
       final id = chapitre.id;
       if (id == null) continue;
+      // Fichier importé (livre du client) : il ne se retélécharge pas ; le
+      // marquer manquant le ferait passer pour un téléchargement à refaire.
+      if (_estChapitreImporte(chapitre)) continue;
       try {
         final contexte = await _chargerContexte(id);
         if (contexte == null) continue;
@@ -820,6 +823,16 @@ class ServiceTelechargement {
   /// [protegerChapitre]).
   bool estProtege(int idChapitre) => _chapitresProteges.containsKey(idChapitre);
 
+  /// `true` si [chapitre] est un fichier importé (CBZ, PDF, EPUB du client),
+  /// reconnu au nom de son fichier : à exclure de toute règle de
+  /// conservation, de tout retéléchargement et de toute suppression
+  /// automatique.
+  static bool _estChapitreImporte(Chapitre chapitre) {
+    final nomArchive = chapitre.nomArchive;
+    return nomArchive != null &&
+        StockageTelechargements.estFichierImporte(nomArchive);
+  }
+
   // ------------------------------------------------- Règles de conservation
 
   /// Applique les règles à tous les titres favoris et suivis (à **tous** les
@@ -989,7 +1002,12 @@ class ServiceTelechargement {
       // invalider entre les isolats.
       archiveComplete: await _serviceParametres.chargerArchiveComplete(),
     );
-    final chapitres = await _depotChapitres.chargerChapitres(idTitre);
+    // Fichiers importés (livres du client) : hors de toute règle de
+    // conservation, jamais mis en file ni supprimés automatiquement.
+    final chapitres = <Chapitre>[
+      for (final chapitre in await _depotChapitres.chargerChapitres(idTitre))
+        if (!_estChapitreImporte(chapitre)) chapitre,
+    ];
     final plan = politique.calculer(
       chapitres,
       estFavori: noms.contains(nomListeFavoris),
@@ -1169,7 +1187,11 @@ class ServiceTelechargement {
       final id = chapitre.id;
       // Chapitre lu en ce moment : supprimé au prochain passage, une fois le
       // lecteur fermé (effacer l'archive ferait échouer les pages suivantes).
-      if (id == null || estProtege(id)) continue;
+      // Un fichier importé n'est jamais supprimé automatiquement (le
+      // déclencheur de la migration 15 l'empêche déjà d'avoir une date).
+      if (id == null || estProtege(id) || _estChapitreImporte(chapitre)) {
+        continue;
+      }
       try {
         // Les règles sont recalculées juste avant d'effacer : depuis la pose
         // de la date (jusqu'à 30 jours plus tôt), le client a pu changer ses
@@ -1284,7 +1306,8 @@ class ServiceTelechargement {
     // seulement).
     for (final chapitre in prevues) {
       final id = chapitre.id;
-      if (id == null) continue;
+      // Fichier importé : jamais concerné par une suppression prévue.
+      if (id == null || _estChapitreImporte(chapitre)) continue;
       // Chapitre lu en ce moment : l'effacer ferait échouer les pages
       // suivantes du lecteur. Sa date reste : il sera supprimé plus tard.
       if (estProtege(id)) {
@@ -1337,10 +1360,14 @@ class ServiceTelechargement {
   /// applique les règles de son titre : s'il n'est plus voulu, sa
   /// suppression est de nouveau prévue, après la durée de conservation
   /// réglée (24 h par défaut).
+  ///
+  /// Sans effet sur un fichier importé : c'est un livre du client, toujours
+  /// gardé (il ne peut pas être retéléchargé).
   Future<void> retirerGarde(int idChapitre) async {
+    final chapitre = await _depotChapitres.chargerChapitre(idChapitre);
+    if (chapitre != null && _estChapitreImporte(chapitre)) return;
     await _depotChapitres.marquerGarde(idChapitre, estGarde: false);
-    final idTitre = (await _depotChapitres.chargerChapitre(idChapitre))
-        ?.idTitre;
+    final idTitre = chapitre?.idTitre;
     if (idTitre != null) {
       await appliquerRegles(idTitre);
     } else {
@@ -1370,7 +1397,10 @@ class ServiceTelechargement {
     // Chapitre hébergé ailleurs (R4) : jamais téléchargeable. La politique
     // l'écarte déjà ; contrôle redit ici car il a pu devenir externe depuis
     // le calcul du plan.
-    if (chapitre == null || chapitre.estTelecharge || chapitre.estExterne) {
+    if (chapitre == null ||
+        chapitre.estTelecharge ||
+        chapitre.estExterne ||
+        _estChapitreImporte(chapitre)) {
       return false;
     }
     final existant = await _depotTelechargements.chargerParChapitre(idChapitre);
@@ -1424,6 +1454,12 @@ class ServiceTelechargement {
         'téléchargé.',
       );
     }
+    // Fichier importé : aucun site d'où le télécharger.
+    if (chapitre != null && _estChapitreImporte(chapitre)) {
+      throw const ErreurService(
+        'Ce livre a été importé depuis un fichier : il ne se télécharge pas.',
+      );
+    }
     _demandesManuelles.add(idChapitre);
     _echecs.remove(idChapitre);
     final existant = await _depotTelechargements.chargerParChapitre(idChapitre);
@@ -1468,7 +1504,13 @@ class ServiceTelechargement {
     var archives = 0;
     for (final chapitre in chapitres) {
       final id = chapitre.id;
-      if (id != null && chapitre.estTelecharge) {
+      final nomArchive = chapitre.nomArchive;
+      if (id != null && nomArchive != null && _estChapitreImporte(chapitre)) {
+        // Fichier importé : suppression du titre demandée explicitement par
+        // le client, seul cas où son fichier est effacé.
+        await _stockage.supprimerFichierImporte(nomArchive);
+        archives++;
+      } else if (id != null && chapitre.estTelecharge) {
         await supprimerTelechargement(id, signalerChangement: false);
         archives++;
       }
@@ -1504,6 +1546,14 @@ class ServiceTelechargement {
   }) async {
     _verifierArchivesSurPlace();
     final avant = await _depotChapitres.chargerChapitre(idChapitre);
+    // Fichier importé : ce n'est pas un téléchargement ; il ne disparaît
+    // qu'avec son titre (ServiceFichiersImportes.supprimerImport).
+    if (avant != null && _estChapitreImporte(avant)) {
+      throw const ErreurService(
+        "Ce livre a été importé depuis un fichier : supprimez le titre pour "
+        "l'enlever de la bibliothèque.",
+      );
+    }
     if (avant != null && (avant.estTelecharge || avant.nomArchive != null)) {
       await _verifierAucunDeplacement();
     }

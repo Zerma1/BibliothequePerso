@@ -57,7 +57,8 @@
 ;   Chapitres : seuls les fichiers créés par l'application, selon les règles
 ;   de suppression_commune.iss (repère obligatoire hors du dossier par défaut,
 ;   dossiers protégés, chemins suspects refusés, liens non suivis). Journaux,
-;   rapports et exports sont gardés (seul « Tout supprimer » les retire).
+;   rapports, exports et livres importés (import[.<n>].<cbz|pdf|epub>) sont
+;   gardés (seul « Tout supprimer » les retire).
 ; Tout supprimer : liste des chemins, confirmation (Non par défaut), page
 ;   « Résultat » : programme, base (dossier de installation.json, défaut et
 ;   ancien dossier), chapitres (mêmes règles), démarrage avec Windows.
@@ -1897,7 +1898,7 @@ begin
   if ChoixChapitres then
     Noter('Chapitres téléchargés : seuls les chapitres et couvertures ' +
       'enregistrés par l''application ont été supprimés (vos autres fichiers, ' +
-      'journaux, rapports et exports sont gardés).')
+      'livres importés, journaux, rapports et exports sont gardés).')
   else
     Noter('Conservé : chapitres téléchargés.');
   if DirExists(DossierApplication) then
@@ -2163,7 +2164,8 @@ begin
     'Que faut-il supprimer avec le programme ?',
     'Cochez ce qui doit être supprimé :' + #13#10 +
     '- Chapitres téléchargés : seuls les chapitres et couvertures enregistrés ' +
-    'par l''application ; vos autres fichiers sont gardés.' + #13#10 +
+    'par l''application ; vos autres fichiers et les livres importés sont ' +
+    'gardés (« Tout supprimer » retire les livres importés).' + #13#10 +
     '- Sources : les sites de lecture ajoutés sont retirés de la base.' + #13#10 +
     '- Titres : les titres suivis sont retirés de la base (cochés avec les ' +
     'sources : les titres dépendent de leurs sources).' + #13#10#13#10 +
@@ -2689,7 +2691,7 @@ var
   BoutonOk, BoutonAnnuler: TNewButton;
   Marge, Largeur, Haut: Integer;
 begin
-  Formulaire := CreateCustomForm(ScaleX(460), ScaleY(300), False, False);
+  Formulaire := CreateCustomForm(ScaleX(460), ScaleY(320), False, False);
   try
     Formulaire.Caption := 'Désinstallation de {#NomApplication}';
     Marge := ScaleX(16);
@@ -2744,9 +2746,10 @@ begin
     Note.Width := Largeur;
     Note.AutoSize := False;
     Note.WordWrap := True;
-    Note.Height := ScaleY(110);
+    Note.Height := ScaleY(130);
     Note.Caption := 'Chapitres téléchargés : seuls les chapitres et couvertures ' +
-      'enregistrés par l''application ; vos autres fichiers sont gardés.' + #13#10 +
+      'enregistrés par l''application ; vos autres fichiers et les livres ' +
+      'importés sont gardés (« Tout supprimer » les retire).' + #13#10 +
       'Sources : les sites de lecture ajoutés sont retirés de la base.' + #13#10 +
       'Titres : les titres suivis sont retirés de la base (toujours ' +
       'avec les sources : les titres dépendent de leurs sources).' + #13#10 +

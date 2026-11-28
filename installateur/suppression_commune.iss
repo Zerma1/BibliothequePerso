@@ -18,8 +18,10 @@
 // 4. Dans les dossiers de type (<racine>\<type>\<titre>\…), seuls les fichiers
 //    créés par l'application sont supprimés : archives ch….zip, couvertures
 //    couverture.<ext>, et leurs fichiers temporaires .part et .deplacement
-//    (motifs de stockage_telechargements.dart). Puis les dossiers devenus
-//    vides. Jamais DelTree d'un dossier de type.
+//    (motifs de stockage_telechargements.dart). Livres importés
+//    (import[.<n>].<cbz|pdf|epub>) : seulement avec « Tout supprimer »,
+//    jamais avec « Désinstaller ». Puis les dossiers devenus vides. Jamais
+//    DelTree d'un dossier de type.
 // Liens (jonctions, liens symboliques : attribut « reparse point ») : jamais
 // suivis ni supprimés par ce parcours ; un dossier des chapitres qui est
 // lui-même un lien est refusé (rien n'y est supprimé).
@@ -258,10 +260,93 @@ begin
   Result := True;
 end;
 
+// Livre importé par le client et copié par l'application (0.4.0,
+// prefixeFichierImporte de constantes_donnees.dart) :
+// ^import(\.([2-9]|[1-9][0-9]+))?\.(cbz|pdf|epub)$, éventuellement suivi de
+// .part ou .deplacement. « importer.pdf », « mon.import.pdf », « import.1.pdf »
+// et « import.02.pdf » n'en sont pas.
+function EstFichierImporte(const Nom: String): Boolean;
+var
+  N, Milieu: String;
+  I: Integer;
+begin
+  Result := False;
+  N := Nom;
+  if FinitPar(N, '.part') then
+    N := Copy(N, 1, Length(N) - Length('.part'))
+  else if FinitPar(N, '.deplacement') then
+    N := Copy(N, 1, Length(N) - Length('.deplacement'));
+  if FinitPar(N, '.cbz') or FinitPar(N, '.pdf') then
+    N := Copy(N, 1, Length(N) - 4)
+  else if FinitPar(N, '.epub') then
+    N := Copy(N, 1, Length(N) - 5)
+  else
+    Exit;
+  if N = 'import' then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if Copy(N, 1, 7) <> 'import.' then
+    Exit;
+  Milieu := Copy(N, 8, Length(N));
+  if (Milieu = '') or (Milieu[1] = '0') or (Milieu = '1') then
+    Exit;
+  for I := 1 to Length(Milieu) do
+    if not EstChiffre(Milieu[I]) then
+      Exit;
+  Result := True;
+end;
+
+// Vrai si un dossier de titre de Dossier (<Dossier>\<type>\<titre>\)
+// contient un livre importé (liens non suivis).
+function ContientLivresImportes(const Dossier: String): Boolean;
+var
+  Noms: TArrayOfString;
+  I: Integer;
+  DossierType: String;
+  TrouveTitre, TrouveFichier: TFindRec;
+begin
+  Result := False;
+  RemplirDossiersChapitres(Noms);
+  for I := 0 to GetArrayLength(Noms) - 1 do
+  begin
+    DossierType := AddBackslash(Dossier) + Noms[I];
+    if DirExists(DossierType) and not EstPointDAnalyse(DossierType) then
+      if FindFirst(AddBackslash(DossierType) + '*', TrouveTitre) then
+      try
+        repeat
+          if (TrouveTitre.Name <> '.') and (TrouveTitre.Name <> '..') and
+            ((TrouveTitre.Attributes and AttributDossier) <> 0) and
+            ((TrouveTitre.Attributes and AttributPointAnalyse) = 0) then
+            if FindFirst(AddBackslash(DossierType) + TrouveTitre.Name + '\import*',
+              TrouveFichier) then
+            try
+              repeat
+                if ((TrouveFichier.Attributes and
+                  (AttributDossier or AttributPointAnalyse)) = 0) and
+                  EstFichierImporte(TrouveFichier.Name) then
+                  Result := True;
+              until Result or not FindNext(TrouveFichier);
+            finally
+              FindClose(TrouveFichier);
+            end;
+        until Result or not FindNext(TrouveTitre);
+      finally
+        FindClose(TrouveTitre);
+      end;
+    if Result then
+      Exit;
+  end;
+end;
+
 // Vide un dossier de type : dans chaque dossier de titre, seulement les
-// fichiers de l'application ; puis les dossiers devenus vides. Tout le reste
-// (fichiers du client, sous-dossiers, liens) est gardé et compté dans Restes.
-procedure ViderDossierType(const DossierType: String; var Supprimes, Restes: Integer);
+// fichiers de l'application (et les livres importés si AvecImportes, « Tout
+// supprimer » ; ImportesGardes compte ceux gardés sinon) ; puis les dossiers
+// devenus vides. Tout le reste (fichiers du client, sous-dossiers, liens) est
+// gardé et compté dans Restes.
+procedure ViderDossierType(const DossierType: String; const AvecImportes: Boolean;
+  var Supprimes, Restes, ImportesGardes: Integer);
 var
   TrouveTitre, TrouveFichier: TFindRec;
   Titre, Fichier: String;
@@ -296,7 +381,8 @@ begin
                 Fichier := AddBackslash(Titre) + TrouveFichier.Name;
                 if ((TrouveFichier.Attributes and
                   (AttributDossier or AttributPointAnalyse)) = 0) and
-                  EstFichierChapitre(TrouveFichier.Name) then
+                  (EstFichierChapitre(TrouveFichier.Name) or
+                  (AvecImportes and EstFichierImporte(TrouveFichier.Name))) then
                 begin
                   if DeleteFile(Fichier) then
                     Supprimes := Supprimes + 1
@@ -308,7 +394,15 @@ begin
                 end
                 else
                 begin
-                  Log('Gardé (pas un fichier de l''application) : ' + Fichier);
+                  if ((TrouveFichier.Attributes and
+                    (AttributDossier or AttributPointAnalyse)) = 0) and
+                    EstFichierImporte(TrouveFichier.Name) then
+                  begin
+                    Log('Gardé (livre importé) : ' + Fichier);
+                    ImportesGardes := ImportesGardes + 1;
+                  end
+                  else
+                    Log('Gardé (pas un fichier de l''application) : ' + Fichier);
                   Restes := Restes + 1;
                 end;
               end;
@@ -359,6 +453,12 @@ begin
       Result := Result + ', ';
     Result := Result + Donnees;
   end;
+  if ContientLivresImportes(Dossier) then
+  begin
+    if Result <> '' then
+      Result := Result + ', ';
+    Result := Result + 'livres importés';
+  end;
   if FileExists(AddBackslash(Dossier) + NomFichierRepere) then
   begin
     if Result <> '' then
@@ -392,22 +492,26 @@ begin
 end;
 
 // Supprime le contenu de l'application dans Dossier (déjà accepté par
-// MotifRefusChapitres) : fichiers des dossiers de type, journaux, rapports
-// et exports si AvecDonnees (dossier par défaut seulement), fichiers d'essai
-// d'écriture, repère, puis le dossier s'il est vide (jamais s'il est un
-// lien). Supprimes : fichiers et dossiers supprimés ; Restes : éléments
-// gardés.
+// MotifRefusChapitres) : fichiers des dossiers de type, livres importés,
+// journaux, rapports et exports si AvecDonnees (« Tout supprimer » ; données
+// dans le dossier par défaut seulement), fichiers d'essai d'écriture, repère
+// (gardé si des livres importés restent, pour qu'un « Tout supprimer »
+// ultérieur puisse encore les retirer), puis le dossier s'il est vide
+// (jamais s'il est un lien). Supprimes : fichiers et dossiers supprimés ;
+// Restes : éléments gardés.
 procedure SupprimerChapitresDossier(const Dossier: String; const AvecDonnees: Boolean;
   var Supprimes, Restes: Integer);
 var
   Noms: TArrayOfString;
-  I: Integer;
+  I, ImportesGardes: Integer;
   Chemin: String;
   Trouve: TFindRec;
 begin
+  ImportesGardes := 0;
   RemplirDossiersChapitres(Noms);
   for I := 0 to GetArrayLength(Noms) - 1 do
-    ViderDossierType(AddBackslash(Dossier) + Noms[I], Supprimes, Restes);
+    ViderDossierType(AddBackslash(Dossier) + Noms[I], AvecDonnees, Supprimes,
+      Restes, ImportesGardes);
   if AvecDonnees and EstDossierParDefaut(Dossier) then
   begin
     RemplirDossiersDonneesApplication(Noms);
@@ -449,7 +553,10 @@ begin
   finally
     FindClose(Trouve);
   end;
-  if FileExists(AddBackslash(Dossier) + NomFichierRepere) then
+  if ImportesGardes > 0 then
+    Log('Repère gardé (' + IntToStr(ImportesGardes) + ' livre(s) importé(s)) : ' +
+      Dossier)
+  else if FileExists(AddBackslash(Dossier) + NomFichierRepere) then
     if DeleteFile(AddBackslash(Dossier) + NomFichierRepere) then
       Supprimes := Supprimes + 1;
   if not EstPointDAnalyse(Dossier) then
